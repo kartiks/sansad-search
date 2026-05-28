@@ -1,0 +1,135 @@
+# SansadSearch — Phase Plan
+
+PRD version: v1.0
+Generated: 2026-05-28
+
+---
+
+## Phase 1 — Project Foundation + Ingestion Parsers and Segmenters
+
+PRD sections: F01 (partial — parsers and segmenters only), F04 (synonyms.json data file only)
+UI sections: none
+
+Implement:
+- `/app/` folder structure matching ARCHITECTURE.md section 3 exactly
+- `app/db/schema.sql` — CREATE TABLE statements for speeches, qa_exchanges, and index_status with all indexes defined in DATA-MODELS.md sections 1.1 and 1.2
+- `app/data/synonyms.json` — complete synonym dictionary covering all groups defined in F04: legislative bodies, constitutional terminology, parliamentary procedure, abbreviations, well-known legislation; bidirectional entries
+- `app/data/names_dict.csv` — file with header row only (populated during ingestion)
+- `requirements.txt` — all Python dependencies (FastAPI, uvicorn, asyncpg, psycopg2, meilisearch-python, httpx, beautifulsoup4, PyMuPDF, pytesseract, python-dotenv)
+- `pyproject.toml` — Python project config
+- FastAPI skeleton: `app/api/main.py` (app instance, CORS config, lifespan hooks), `app/api/lib/db.py` (asyncpg pool init and teardown), `app/api/lib/meilisearch_client.py` (singleton async client using search key)
+- `app/ui/package.json`, `app/ui/vite.config.js`, `app/ui/index.html` — React + Vite SPA shell
+- `app/ingest/setup_meilisearch.py` — creates the parliamentary_records index if absent; configures searchableAttributes, filterableAttributes, sortableAttributes, rankingRules, typoTolerance, and pagination.maxTotalHits per DATA-MODELS.md section 2.3; loads synonyms.json and pushes all synonym pairs to the Meilisearch synonyms API (full replace)
+- `app/ingest/parsers/html_parser.py` — BeautifulSoup4: HTML → raw record dicts for all LS/RS proceeding types
+- `app/ingest/parsers/pdf_parser.py` — PyMuPDF: embedded text extraction; Tesseract OCR fallback for pages with no embedded text; ocr_low_confidence flag on low-confidence pages
+- `app/ingest/segmenters/speech.py` — raw text/markup → Speech unit dicts; handles all proceeding types listed in F01; language handling: English (verbatim), Hindi with translation (store translation), bilingual (concatenate English + translated portions), Hindi without translation (full_text_en: null, has_untranslated_content: true); excludes unattributed speech and presiding officer interventions per F01 rules
+- `app/ingest/segmenters/qa.py` — raw text/markup → Q+A exchange unit dicts; starred (main question + minister answer + all supplementary questions with attribution + minister responses) and unstarred (question text + written answer only)
+
+Stop when: all project directories exist; `app/db/schema.sql` executes against a local PostgreSQL instance without error and produces the correct tables and indexes; `setup_meilisearch.py` configures the Meilisearch index with all settings from DATA-MODELS.md 2.3; synonyms.json is valid JSON and contains all synonym groups from F04; parser and segmenter unit tests pass against fixture HTML and PDF samples covering all proceeding types, both record types, and all four language handling cases.
+Do not implement anything from Phase 2 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 2 — Ingestion Pipeline Complete (F01)
+
+PRD sections: F01 (complete)
+UI sections: none
+
+Implement:
+- `app/ingest/sources/ca.py` — CA volume URL enumeration; fetches all 12 volumes from sansad.in archives; rate-limited with configurable inter-request delay; robots.txt compliant
+- `app/ingest/sources/ls.py` — LS session and sitting URL enumeration; fetches all records from 2014-01-01 for all proceeding types in F01; rate-limited; robots.txt compliant; HTML preferred over PDF for same proceeding
+- `app/ingest/sources/rs.py` — RS session and sitting URL enumeration; fetches all records from 2014-01-01; rate-limited; robots.txt compliant
+- HTTP error handling: 4xx (excluding 429) → log and skip; 5xx → retry up to 3 times with exponential backoff, then log and skip; 429 → exponential backoff and retry, never skip
+- `app/ingest/canonical/names.py` — strips honorific prefixes (Shri, Smt., Dr., Prof., Adv., Kumari); resolves abbreviation and ordering variants against names_dict.csv; sets speaker_name_unresolved: true for unresolved names
+- `app/ingest/canonical/sessions.py` — canonicalizes session name strings to "[Session Type] Session [Year]" format with "(Part N)" for multi-part sessions; CA records produce session_name: null
+- `app/ingest/checkpoints/store.py` — SQLite-backed store with two tables: processed_urls (url TEXT PRIMARY KEY, processed_at TIMESTAMP) and inserted_dedup_keys (dedup_key TEXT PRIMARY KEY); used for resumability and fast duplicate detection
+- `app/ingest/indexer.py` — writes canonical records to PostgreSQL speeches and qa_exchanges tables; pushes denormalized documents to Meilisearch parliamentary_records index per DATA-MODELS.md 2.2 (omit fields not applicable to record type; exclude page_reference, ocr_low_confidence, has_untranslated_content, session_number, created_at, dedup_key from Meilisearch documents); updates index_status table on successful run completion; `--reindex-from-db` mode reads all records from PostgreSQL and pushes to Meilisearch without re-scraping
+- `app/ingest/main.py` — CLI entry point: `--source ca|ls|rs|all`; optional `--date-override` for LS/RS end date; real-time progress logging (document processed, records indexed, errors, skipped); completion summary (total records indexed per source, total errors, total skipped); reads checkpoint store to skip already-processed documents; runs canonicalization before indexing
+
+Stop when: all F01 test requirements pass — resumability (re-running against a fully indexed corpus produces zero new records and zero duplicates; interrupted + resumed run produces identical final count to a clean run); deduplication (compound dedup key correctly distinguishes two speeches by the same member in the same sitting); language handling integration (is_translated and has_untranslated_content set correctly for all four cases); canonicalization (same member appearing as "Shri Narendra Modi", "Narendra Modi", "N. Modi" produces identical speaker_name; unresolved names stored with speaker_name_unresolved: true); progress log contains real-time entries; completion summary count matches actual index count; records with missing date are skipped with one logged error each; unattributed speech never appears as a standalone indexed record.
+Do not implement anything from Phase 3 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 3 — Search API (F02, F03, F04, F06, F07)
+
+PRD sections: F02, F03, F04, F06, F07
+UI sections: none
+
+Implement:
+- `app/api/routes/search.py` — POST /api/search per DATA-MODELS.md 3.1: request validation (query too short, stop-words-only query, empty sources array, empty proceeding_types array, date_from > date_to); query truncation to 500 characters; pagination (page ≥ 1, 20 results per page); response body including total, total_display, total_pages, expansion_notice, and per-result fields
+- `app/api/services/query_expander.py` — strips stop words from query; detects and applies phrase synonyms when full phrase is present in query; applies unidirectional term synonyms for remaining terms; generates expansion_notice array of expanded term strings; delegates typo tolerance to Meilisearch (no custom spell-correction code); terms fewer than 4 characters exempt from typo tolerance via minWordSizeForTypos; reads synonyms from data/synonyms.json only
+- `app/api/services/search.py` — constructs Meilisearch filter expression from active filters: source IN [...], proceeding_type IN [...], date >= ..., date <= ..., speaker_name CONTAINS "...", session_name CONTAINS "..."; joins multiple active filters with AND; maps sort selection to Meilisearch sort parameter per DATA-MODELS.md 2.5; calls Meilisearch parliamentary_records index; formats results: proceeding_type_label from constants, date_display as DD Month YYYY, snippet extracted from highest query-term-density passage in full_text_en with matched terms wrapped in mark tags (HTML-safe; all other HTML stripped); snippet_from_supplementary: true when best-match passage is from supplementary exchange; null full_text_en produces no snippet field (frontend handles display); total_display: "10,000+" when total ≥ 10000 else comma-formatted string
+- `app/api/routes/status.py` — GET /api/status: reads most recent row from index_status table; returns populated response when row exists, never-run response when table is empty, unavailable response when table is unreadable or malformed per DATA-MODELS.md 3.2
+
+Stop when: all F02, F03, F04, F06, and F07 test requirements pass at the API level using fixture data pre-loaded into a local Meilisearch instance — including expansion weight ordering (original term > synonym > spell correction), filter AND combination, session filter implicit CA exclusion, date gap handling (1948–2015 range returns CA and LS/RS records with no gap error), CA-only proceeding type constraint, sort secondary key (sequence_within_sitting), relevance sort isolation from date order, and status panel reading from pre-computed summary only.
+Do not implement anything from Phase 4 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 4 — Frontend: Homepage, Results Page, Result Cards (F02, F05, F06, F07 UI)
+
+PRD sections: F02 (frontend), F05, F06 (frontend), F07 (frontend)
+UI sections: 02-ui-ux-spec.md sections 1 (Homepage), 2 (Results Page), Visual Identity, Interaction Patterns, Canonical Text
+
+Implement:
+- `app/ui/src/lib/constants.js` — proceeding type label map, source label map (per F05 Proceeding Type Labels)
+- `app/ui/src/lib/filterState.js` — FilterState shape definition, default values, validation helpers (empty sources, empty proceeding_types, date_from > date_to)
+- `app/ui/src/lib/expansionNotice.js` — parses expansion_notice array from API response for "Also searching for:" display
+- `app/ui/src/hooks/useSearch.js` — POST /api/search call; loading, error, and success state management
+- `app/ui/src/pages/Home.jsx` — wordmark, tagline, search bar (48px height, submit icon button), "Advanced Search" link placeholder, saved searches bookmark icon placeholder, indexing status strip pinned to page bottom reading from GET /api/status (F07); layout: centered 680px column; responsive breakpoints per UI spec section 1
+- `app/ui/src/pages/Results.jsx` — sticky header (wordmark + centered search bar + "Advanced Search" placeholder + bookmark icon), query expansion notice (conditional), results header row (result count + sort dropdown), result card list, pagination, "Index status" footer link (F07); layout: 860px centered column; responsive breakpoints per UI spec section 2; loading state (5 skeleton cards), empty state, error state with Retry button
+- `app/ui/src/components/ResultCard.jsx` — dispatches to SpeechCard or QACard by record_type
+- `app/ui/src/components/SpeechCard.jsx` — metadata row (proceeding type badge, legislative body full label, date DD Month YYYY, session if available); speaker row (SemiBold, party and constituency/state if available; "Speaker unknown" if null); subject line (truncated one line); snippet with mark-highlighted terms (background rgba(201,106,30,0.15), text #C96A1E); null full_text_en shows "This speech was delivered in Hindi. No English text is available."; is_translated indicator; "View source ↗" link (omitted if source_url null); hover state; all F05 edge cases (missing party/constituency omitted with no placeholder; speaker_name_unresolved displayed as raw name without error indicator; HTML in snippet rendered as plain text; script tags do not execute)
+- `app/ui/src/components/QACard.jsx` — metadata row; subject line (two lines); question number; questioner row ("+N others" for co-signatories: 1 questioner → no label, 4 total → "+3 others"); minister/ministry row; snippet with "From supplementary exchange — " prefix when snippet_from_supplementary: true; translation indicator; source link; all F05 edge cases
+- `app/ui/src/components/Pagination.jsx` — previous/next buttons, current page (navy background), adjacent pages; result count display (exact for ≤9,999, "10,000+" for ≥10,000, "0 results" for empty); URL encodes both query and page number (shareable/bookmarkable); direct URL to page N loads that page
+- `app/ui/src/components/SkeletonCard.jsx` — animated shimmer blocks matching card dimensions
+- `app/ui/src/components/Toast.jsx` — bottom-center, 16px from bottom, 3s auto-dismiss, Inter 13px white text on #1C3461 background, border-radius 6px; one toast at a time
+- Sort dropdown (F06): three options (Relevance default, Newest first, Oldest first); selecting re-sorts immediately; persists across query refinements; defaults to Relevance on every new search; result count does not change on sort change
+- Search bar inline validation: query empty or < 2 non-whitespace characters → "Enter at least 2 characters to search." in #C96A1E below search bar; no search executes; message dismisses on typing
+
+Stop when: all F05 and F06 acceptance criteria verified in browser; homepage status strip displays F07 data from GET /api/status; all result card types render correctly for all edge cases; pagination URL persistence works (direct URL to page 3 loads page 3); sort dropdown behaves correctly including default-on-new-search; search bar inline validation triggers and dismisses correctly; loading skeleton, empty state, and error state all display correctly.
+Do not implement anything from Phase 5 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 5 — Frontend: Advanced Search Modal and Filter Chips (F03 UI)
+
+PRD sections: F03 (frontend)
+UI sections: 02-ui-ux-spec.md sections 2 (Results Page — filter chips row), 3 (Advanced Search Modal), Interaction Patterns
+
+Implement:
+- `app/ui/src/components/AdvancedSearchModal.jsx` — modal overlay (rgba(0,0,0,0.4) background); modal panel (white, border-radius 12px, padding 24px, max-width 560px, max-height 90vh scrollable); all 5 filter dimensions: (1) Legislative Body multi-select checkboxes (CA, Lok Sabha, Rajya Sabha; all checked by default), (2) Date Range pickers (From and To, both optional, side-by-side), (3) Speaker text input with helper text, (4) Session text input with helper text, (5) Proceeding Type multi-select checkboxes (all checked by default; when only CA selected, all non-Debate options are visually disabled and non-interactive); inline validation: all bodies unchecked → "Select at least one source"; From > To → "From date must be before To date"; all types unchecked → "Select at least one proceeding type"; Apply button disabled (opacity 0.4, not clickable) while any validation is failing; Clear all resets all fields to defaults; pre-populates from active filter state when opened while filters are active; on Apply: modal closes, filters applied as chips, search re-executes; close icon (×) top-right
+- `app/ui/src/components/FilterChip.jsx` — pill shape (background #EDF0F7, text #1C3461, 13px Medium, border-radius 20px); × dismiss icon; on × click: chip removed, filter cleared, search re-runs; "Clear all" text link at end of chip row resets all filters and re-runs search
+- Wire filter chips row into Results.jsx — shown only when one or more filters are active; horizontal row 12px below sticky header; horizontally scrollable on overflow
+- Wire "Advanced Search" link in homepage below-bar row and results header to open modal
+- Wire filter state into useSearch.js: active filters included in POST /api/search body; filter state persists across query refinements (new query submitted while filters active keeps filter state); only explicit clear (chip × or Clear all or modal Clear all) resets filter state
+- Responsive: modal full-width with 16px side margins on mobile; checkboxes stack vertically on mobile
+
+Stop when: all F03 UI acceptance criteria verified in browser — filter chips appear after Apply and persist across query refinements; individual chip × and Clear all behave correctly; CA-only disabling of proceeding types works; all three inline validation messages display correctly and disable Apply; modal pre-populates from active filter state; session filter active excludes CA records from results; responsive layout correct on mobile.
+Do not implement anything from Phase 6.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 6 — Search History (F08)
+
+PRD sections: F08
+UI sections: 02-ui-ux-spec.md sections 4 (Recent Searches Dropdown), 5 (Saved Searches Panel)
+
+Implement:
+- `app/ui/src/lib/cookie.js` — cookie read, write, and delete helpers; enforces 4 KB combined size limit across ss_recent and ss_saved cookies; near-capacity handling: trim oldest ss_recent entries first; never auto-remove ss_saved entries; cookies-disabled detection (silent, no error)
+- `app/ui/src/hooks/useCookieHistory.js` — recent searches: auto-record every submitted query (query text + timestamp); max 10 entries, FIFO rotation on 11th distinct entry; duplicate query updates timestamp and position (one entry per unique query string); 30-day cookie expiry from most recent submission; stores query text and timestamp only (no filter state)
+- `app/ui/src/hooks/useSavedSearches.js` — saved searches: max 20 entries, no expiry; stores name (default = query text, editable up to 60 characters), query text, active filter state (FilterState shape), and save timestamp; same query may be saved twice as two separate entries; re-run restores query + filter state with default sort; stale/unrecognised filter values silently ignored on re-run (search executes with valid values only)
+- `app/ui/src/components/RecentSearchesDropdown.jsx` — triggers when search bar focused and empty; anchored below search bar, full search bar width; section label "Recent searches"; up to 10 items (magnifying glass icon + query text); click populates and submits search bar (with default filters, not saved filter state); "Clear history" footer link clears all recent entries; empty state "No recent searches"; dismiss on outside click or Escape
+- `app/ui/src/components/SavedSearchesPanel.jsx` — triggered by bookmark icon in header (results page) and homepage; width 320px, max-height 400px scrollable; header "Saved searches"; up to 20 items each showing name (one line, truncated) and filter summary (Inter 12px Text secondary: e.g. "Lok Sabha · 2019–2024 · Starred Question"; "No filters" if no filter state); pencil icon → inline rename input (60-char max, confirm with checkmark or cancel with ×); trash icon → delete item + "Search removed" toast; clicking item text runs search restoring query + filter state; "Save current search" full-width outline button at bottom (results page only, hidden on homepage); on save: name defaults to query text, "Search saved" toast; at 20-entry limit: button disabled (opacity 0.4), label "Saved searches full — delete one to save"; empty state "No saved searches yet."; dismiss on outside click or Escape
+- Wire RecentSearchesDropdown into search bar focus event on both homepage and results page
+- Wire SavedSearchesPanel into bookmark icon on both homepage and results header
+
+Stop when: all F08 test requirements pass in browser — FIFO rotation (10 entries, 11th removes oldest); duplicate deduplication (same query 3 times → 1 entry with latest timestamp); re-running a recent search executes with default filters regardless of original filter state; saved search filter restoration (body=RS + proceeding=Starred Question + from=2020-01-01 restores exactly); save disabled at exactly 20 entries with no 21st entry creatable by any means; same query saved twice produces two separate entries; cookies-disabled shows no error; saved search name 60 characters accepted, 61 rejected without losing the save action; stale filter value does not cause error.
+Do not implement anything beyond Phase 6.
+Tests: write and run tests for all items above before finishing.
