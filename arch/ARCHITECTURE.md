@@ -115,6 +115,11 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
     package.json
     vite.config.js
 
+  db/
+    schema.sql                   # CREATE TABLE + index statements for speeches,
+                                 # qa_exchanges, and index_status; run once against
+                                 # Railway PostgreSQL before first ingestion
+
   data/
     synonyms.json                # Synonym dictionary — sole source for Meilisearch synonyms
                                  # API and FastAPI expansion notice generation

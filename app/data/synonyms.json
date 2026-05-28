@@ -1,0 +1,58 @@
+{
+  "_comment": "Bidirectional synonym dictionary for SansadSearch. Each group is an array of equivalent terms. Meilisearch synonym API receives full-replace on every deploy via setup_meilisearch.py.",
+
+  "legislative_bodies": [
+    ["Lok Sabha", "House of the People", "Lower House"],
+    ["Rajya Sabha", "Council of States", "Upper House"],
+    ["Parliament", "both Houses"],
+    ["Constituent Assembly", "CA"]
+  ],
+
+  "constitutional_terminology": [
+    ["fundamental rights", "basic rights", "Part III rights"],
+    ["Directive Principles", "DPSP", "Directive Principles of State Policy"],
+    ["amendment", "constitutional amendment"],
+    ["Preamble", "preamble to the Constitution"]
+  ],
+
+  "parliamentary_procedure": [
+    ["starred question", "oral question"],
+    ["unstarred question", "written question"],
+    ["zero hour", "zero-hour"],
+    ["private member bill", "private member's bill"],
+    ["calling attention", "calling attention motion"],
+    ["adjournment motion", "adjournment"],
+    ["Question Hour", "question period"],
+    ["division", "vote"]
+  ],
+
+  "abbreviations": [
+    ["PM", "Prime Minister"],
+    ["CM", "Chief Minister"],
+    ["SC", "Scheduled Castes"],
+    ["ST", "Scheduled Tribes"],
+    ["SC/ST", "Scheduled Castes and Scheduled Tribes"],
+    ["OBC", "Other Backward Classes", "Other Backward Communities"],
+    ["EWS", "Economically Weaker Sections"],
+    ["GST", "Goods and Services Tax"],
+    ["CAG", "Comptroller and Auditor General"],
+    ["CBI", "Central Bureau of Investigation"],
+    ["ED", "Enforcement Directorate"],
+    ["FIR", "First Information Report"],
+    ["PIL", "Public Interest Litigation"],
+    ["Art.", "Article"],
+    ["Sec.", "Section"],
+    ["Cl.", "Clause"]
+  ],
+
+  "legislation": [
+    ["RTI", "Right to Information", "Right to Information Act"],
+    ["RTE", "Right to Education", "Right to Education Act"],
+    ["MGNREGA", "NREGA", "Mahatma Gandhi National Rural Employment Guarantee Act"],
+    ["POCSO", "Protection of Children from Sexual Offences"],
+    ["IPC", "Indian Penal Code"],
+    ["CrPC", "Code of Criminal Procedure"],
+    ["BNS", "Bharatiya Nyaya Sanhita"],
+    ["BNSS", "Bharatiya Nagarik Suraksha Sanhita"]
+  ]
+}

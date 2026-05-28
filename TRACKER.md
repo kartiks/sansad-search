@@ -15,7 +15,7 @@ PRD version at last update: v1.0
 
 | Phase | PRD version | Build | Arch Review | QA Review | Complete | Handoff notes |
 |-------|-------------|-------|-------------|-----------|----------|---------------|
-| 1 | — | not started | — | — | — | Foundation + ingestion parsers/segmenters. No external service dependencies for unit tests. |
+| 1 | v1.0 | complete | run-2 CLEAR | run-2 GAPS FOUND | — | QA run-2 gap addressed: test_case3_bilingual_exchange OR→AND (both English original and translated Hindi portions now asserted separately). 203 passed, 1 skipped. Next: /verify-qa phase-1 (run-3). |
 | 2 | — | not started | — | — | — | Ingestion pipeline complete (F01). Depends on Phase 1. |
 | 3 | — | not started | — | — | — | Search API (F02, F03, F04, F06, F07 backend). Depends on Phase 1 schema + synonyms.json. Uses fixture data for tests. |
 | 4 | — | not started | — | — | — | Frontend homepage + results + result cards (F02, F05, F06, F07 UI). Depends on Phase 3. |
