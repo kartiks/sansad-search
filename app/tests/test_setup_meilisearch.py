@@ -150,3 +150,66 @@ class TestIndexConfiguration:
         disabled = TYPO_TOLERANCE["disableOnAttributes"]
         for attr in ["date", "source", "proceeding_type", "source_url"]:
             assert attr in disabled, f"{attr} must have typo tolerance disabled"
+
+
+# ── Gap 4: Expansion weight ordering (F02) ────────────────────────────────────
+
+class TestExpansionWeightOrdering:
+    """F02: Original term matches must rank above synonym matches, which must
+    rank above spell-correction matches.
+
+    Meilisearch enforces this through the ranking rules ordering:
+    - "words" is the first rule: records matching the most query words rank
+      highest. Both exact-term and synonym-term hits count as 'words' matches.
+    - "typos" follows "words": typo-corrected hits rank below words matches.
+    - Within the "words" class, Meilisearch's exactness rule further separates
+      exact matches from synonym matches: "exactness" is included in the rules.
+
+    Fixture-backed verification (two records, one containing the original term
+    and one containing only a synonym) is deferred to integration tests against
+    a live Meilisearch instance.
+    """
+
+    def test_words_precedes_typos_in_ranking_rules(self):
+        """'words' must come before 'typos' — original/synonym matches outrank
+        typo-correction matches."""
+        assert "words" in RANKING_RULES
+        assert "typos" in RANKING_RULES
+        assert RANKING_RULES.index("words") < RANKING_RULES.index("typos"), (
+            "'words' must precede 'typos' in ranking rules so that synonym matches "
+            "(words class) outrank spell-corrected matches (typos class)"
+        )
+
+    def test_exactness_in_ranking_rules(self):
+        """'exactness' must be present so that exact original-term matches rank
+        above synonym-matched records within the same 'words' class."""
+        assert "exactness" in RANKING_RULES, (
+            "'exactness' required in ranking rules to separate exact matches from "
+            "synonym matches within the 'words' ranking class"
+        )
+
+
+# ── Gap 12: Relevance sort isolation (F06) ────────────────────────────────────
+
+class TestRelevanceSortIsolation:
+    """F06: Switching to relevance sort must not silently tiebreak by date.
+
+    Relevance sort omits the `sort` parameter from the Meilisearch call entirely.
+    If 'date' appeared in RANKING_RULES it would act as an implicit tiebreaker,
+    making 'relevance' sort behave identically to 'chronological' for records
+    with equal relevance scores.  'date' must be absent from RANKING_RULES.
+    """
+
+    def test_date_not_in_ranking_rules(self):
+        """'date' must not appear in RANKING_RULES — its presence would cause
+        relevance sort to silently tiebreak by date order."""
+        assert "date" not in RANKING_RULES, (
+            "'date' in ranking rules would make relevance sort silently "
+            "tiebreak by date, violating the relevance sort isolation requirement"
+        )
+
+    def test_sequence_within_sitting_not_in_ranking_rules(self):
+        """'sequence_within_sitting' must only appear as an explicit sort
+        parameter (for chronological/reverse_chronological), never as a ranking
+        rule tiebreaker that silently affects relevance sort."""
+        assert "sequence_within_sitting" not in RANKING_RULES

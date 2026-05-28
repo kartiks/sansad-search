@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.lib.db import init_pool, close_pool
+from api.routes import search as search_router
+from api.routes import status as status_router
 
 
 def _allowed_origins() -> list:
@@ -28,3 +30,6 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+app.include_router(search_router.router)
+app.include_router(status_router.router)

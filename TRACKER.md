@@ -1,6 +1,7 @@
 # Project Tracker
 
 PRD version at last update: v1.0
+Last updated: 2026-05-28 (Phase 3 completion reconciliation)
 
 ## Lifecycle Status
 
@@ -17,7 +18,7 @@ PRD version at last update: v1.0
 |-------|-------------|-------|-------------|-----------|----------|---------------|
 | 1 | v1.0 | complete | run-2 CLEAR | run-3 CLEAR | ✓ complete | Both reviews CLEAR on latest runs. Q+A Case 3 bilingual test now uses two separate asserts (English original + translated Hindi portions). 203 passed, 1 skipped. |
 | 2 | v1.0 | complete | run-4 CLEAR | run-2 CLEAR | ✓ complete | Both reviews CLEAR on latest runs. All 13 run-1 gaps verified RESOLVED with strong assertions. 360 passed, 1 skipped. |
-| 3 | — | not started | — | — | — | Search API (F02, F03, F04, F06, F07 backend). Depends on Phase 1 schema + synonyms.json. Uses fixture data for tests. |
+| 3 | v1.0 | complete | run-2 CLEAR | run-2 CLEAR | ✓ complete | Both reviews CLEAR on latest runs. QA run-2 verified all 12 run-1 gaps RESOLVED via mock-testable assertions + Meilisearch config invariants (rankingRules ordering, filterableAttributes membership, dictionary no-ambiguity invariant, no date in rankingRules); fixture-backed integration testing documented as deferred. 520 passed, 1 skipped. Marked ✓ complete by /resume reconciliation 2026-05-28. |
 | 4 | — | not started | — | — | — | Frontend homepage + results + result cards (F02, F05, F06, F07 UI). Depends on Phase 3. |
 | 5 | — | not started | — | — | — | Frontend Advanced Search Modal + filter chips (F03 UI). Depends on Phase 4. |
 | 6 | — | not started | — | — | — | Search history (F08). Depends on Phase 5. |
