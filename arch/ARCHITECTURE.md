@@ -66,6 +66,8 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
   ingest/
     main.py                      # CLI entry (--source ca|ls|rs|all, --date-override)
     sources/
+      _http.py                   # Shared HTTP utility: USER_AGENT, RobotsChecker,
+                                 # fetch_with_retry with 4xx/5xx/429 error handling per F01 spec
       ca.py                      # CA volume URL enumeration + fetcher
       ls.py                      # LS session/sitting URL enumeration + fetcher
       rs.py                      # RS session/sitting URL enumeration + fetcher

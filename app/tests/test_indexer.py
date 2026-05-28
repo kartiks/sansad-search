@@ -1,0 +1,669 @@
+"""Tests for ingest.indexer — dedup key construction, document building, indexing."""
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock, call
+import pytest
+
+from ingest.checkpoints.store import CheckpointStore
+from ingest.indexer import (
+    MEILI_BATCH_SIZE,
+    Indexer,
+    build_dedup_key,
+    build_meili_document,
+)
+from ingest.segmenters.speech import segment_speeches
+
+
+# ── build_dedup_key ───────────────────────────────────────────────────────────
+
+class TestBuildDedupKey:
+    def test_speech_key_format(self):
+        record = {
+            "record_type": "speech",
+            "source": "LS",
+            "date": "2023-03-15",
+            "sitting_number": 5,
+            "proceeding_type": "debate",
+            "speaker_name": "Narendra Modi",
+            "sequence_within_sitting": 3,
+        }
+        key = build_dedup_key(record)
+        assert key == "LS_2023-03-15_5_debate_narendra_modi_3"
+
+    def test_qa_key_format(self):
+        record = {
+            "record_type": "qa",
+            "source": "RS",
+            "date": "2023-03-15",
+            "sitting_number": 2,
+            "proceeding_type": "starred_question",
+            "question_number": 42,
+        }
+        key = build_dedup_key(record)
+        assert key == "RS_2023-03-15_2_starred_question_42"
+
+    def test_same_member_different_sequence_produces_different_key(self):
+        """Two speeches by the same member in the same sitting must have distinct keys."""
+        base = {
+            "record_type": "speech",
+            "source": "LS",
+            "date": "2023-03-15",
+            "sitting_number": 5,
+            "proceeding_type": "debate",
+            "speaker_name": "Narendra Modi",
+        }
+        key1 = build_dedup_key({**base, "sequence_within_sitting": 1})
+        key2 = build_dedup_key({**base, "sequence_within_sitting": 2})
+        assert key1 != key2
+
+    def test_speaker_name_normalized_in_key(self):
+        """Speaker name is normalized (lowercase, underscore) in the dedup key."""
+        record = {
+            "record_type": "speech",
+            "source": "LS",
+            "date": "2023-03-15",
+            "sitting_number": 5,
+            "proceeding_type": "debate",
+            "speaker_name": "B. R. Ambedkar",
+            "sequence_within_sitting": 1,
+        }
+        key = build_dedup_key(record)
+        # B. R. Ambedkar → "b_r_ambedkar" (special chars stripped)
+        assert "b_r_ambedkar" in key
+
+    def test_none_speaker_name_uses_unknown(self):
+        record = {
+            "record_type": "speech",
+            "source": "LS",
+            "date": "2023-03-15",
+            "sitting_number": 1,
+            "proceeding_type": "debate",
+            "speaker_name": None,
+            "sequence_within_sitting": 1,
+        }
+        key = build_dedup_key(record)
+        assert "unknown" in key
+
+    def test_default_record_type_is_speech(self):
+        """Records without record_type default to speech key format."""
+        record = {
+            "source": "CA",
+            "date": "1947-01-01",
+            "sitting_number": 1,
+            "proceeding_type": "debate",
+            "speaker_name": "Ambedkar",
+            "sequence_within_sitting": 1,
+        }
+        key = build_dedup_key(record)
+        assert "ambedkar" in key
+
+
+# ── build_meili_document ──────────────────────────────────────────────────────
+
+class TestBuildMeiliDocument:
+    def test_excluded_fields_absent(self):
+        record = {
+            "source": "LS",
+            "speaker_name": "Narendra Modi",
+            "full_text_en": "Some speech text",
+            "page_reference": 42,
+            "ocr_low_confidence": False,
+            "has_untranslated_content": False,
+            "session_number": 261,
+            "created_at": "2023-01-01T00:00:00Z",
+            "dedup_key": "some_key",
+        }
+        doc = build_meili_document(record)
+        for field in ("page_reference", "ocr_low_confidence", "has_untranslated_content",
+                      "session_number", "created_at", "dedup_key"):
+            assert field not in doc, f"{field} should be excluded from Meilisearch doc"
+
+    def test_present_fields_included(self):
+        record = {
+            "source": "LS",
+            "speaker_name": "Narendra Modi",
+            "full_text_en": "Speech text",
+            "proceeding_type": "debate",
+        }
+        doc = build_meili_document(record)
+        assert doc["source"] == "LS"
+        assert doc["speaker_name"] == "Narendra Modi"
+
+    def test_none_values_omitted(self):
+        """Fields with None values are omitted (not sent as null) per spec."""
+        record = {
+            "source": "LS",
+            "speaker_name": None,
+            "full_text_en": "Speech text",
+        }
+        doc = build_meili_document(record)
+        assert "speaker_name" not in doc
+        assert "full_text_en" in doc
+
+
+# ── Indexer ───────────────────────────────────────────────────────────────────
+
+def _make_speech_record(**overrides):
+    base = {
+        "record_type": "speech",
+        "source": "LS",
+        "proceeding_type": "debate",
+        "date": "2023-03-15",
+        "session_name": "Budget Session 2023",
+        "session_number": 261,
+        "sitting_number": 5,
+        "subject": "General Discussion",
+        "speaker_name": "Narendra Modi",
+        "speaker_party": None,
+        "speaker_constituency_or_state": None,
+        "speaker_role": "member",
+        "sequence_within_sitting": 1,
+        "full_text_en": "The government has taken major steps.",
+        "is_translated": False,
+        "has_untranslated_content": False,
+        "speaker_name_unresolved": False,
+        "source_url": "https://sansad.in/doc.html",
+        "page_reference": None,
+        "volume": None,
+        "ocr_low_confidence": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def _make_qa_record(**overrides):
+    base = {
+        "record_type": "qa",
+        "source": "LS",
+        "proceeding_type": "starred_question",
+        "date": "2023-03-15",
+        "session_name": "Budget Session 2023",
+        "session_number": 261,
+        "sitting_number": 5,
+        "question_number": 42,
+        "subject": "Road Safety",
+        "questioner_names": ["Member A"],
+        "questioner_party": None,
+        "minister_name": "Minister B",
+        "ministry": "Ministry of Roads",
+        "full_text_en": "Question and answer text.",
+        "is_translated": False,
+        "has_untranslated_content": False,
+        "source_url": "https://sansad.in/qa.html",
+        "page_reference": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def _make_mock_pg_conn(inserted=True):
+    """Mock psycopg2 connection that returns a row (indicating INSERT succeeded)."""
+    cursor = MagicMock()
+    cursor.fetchone.return_value = ("some-uuid",) if inserted else None
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    return conn
+
+
+def _make_mock_meili():
+    """Mock meilisearch.Client."""
+    meili = MagicMock()
+    index = MagicMock()
+    meili.index.return_value = index
+    return meili, index
+
+
+class TestIndexerIndexRecord:
+    def test_indexes_speech_record(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record()
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            result = indexer.index_record(record, cp)
+
+        assert result is True
+
+    def test_skips_duplicate_via_checkpoint_store(self, tmp_path):
+        """A record whose dedup key is already in the checkpoint store is skipped."""
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record()
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            # First insert
+            indexer.index_record(record, cp)
+            # Second insert of identical record
+            result = indexer.index_record(record, cp)
+
+        assert result is False
+
+    def test_skips_record_with_missing_date(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record(date=None)
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            result = indexer.index_record(record, cp)
+
+        assert result is False
+
+    def test_counts_incremented_per_source(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+
+        r1 = _make_speech_record(source="LS", sequence_within_sitting=1)
+        r2 = _make_speech_record(source="LS", sequence_within_sitting=2)
+        r3 = _make_speech_record(source="RS", sequence_within_sitting=1,
+                                 speaker_name="Other Member")
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            indexer.index_record(r1, cp)
+            indexer.index_record(r2, cp)
+            indexer.index_record(r3, cp)
+
+        assert indexer.counts["LS"] == 2
+        assert indexer.counts["RS"] == 1
+
+    def test_same_member_twice_in_same_sitting_indexed_separately(self, tmp_path):
+        """
+        Two speeches by the same member in the same sitting must produce two
+        separate records with distinct dedup keys (different sequence_within_sitting).
+        """
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+
+        r1 = _make_speech_record(sequence_within_sitting=1)
+        r2 = _make_speech_record(sequence_within_sitting=2)  # same speaker, same sitting
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            ok1 = indexer.index_record(r1, cp)
+            ok2 = indexer.index_record(r2, cp)
+
+        assert ok1 is True
+        assert ok2 is True
+        assert indexer.counts["LS"] == 2
+
+    def test_qa_record_indexed(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_qa_record()
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            result = indexer.index_record(record, cp)
+
+        assert result is True
+
+    def test_ocr_flagged_record_indexed(self, tmp_path):
+        """Records with ocr_low_confidence=True must be indexed, not silently dropped."""
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record(ocr_low_confidence=True)
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            result = indexer.index_record(record, cp)
+
+        assert result is True
+
+        # Verify the INSERT tuple carries ocr_low_confidence=True at the correct position
+        from ingest.indexer import _SPEECH_COLUMNS
+        cursor = pg.cursor()
+        insert_values = cursor.execute.call_args[0][1]
+        idx = list(_SPEECH_COLUMNS).index("ocr_low_confidence")
+        assert insert_values[idx] is True
+
+
+class TestIndexerFlush:
+    def test_flush_sends_batch_to_meilisearch(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, index_mock = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            indexer.index_record(_make_speech_record(sequence_within_sitting=1), cp)
+            indexer.index_record(_make_speech_record(sequence_within_sitting=2), cp)
+            count = indexer.flush()
+
+        assert count == 2
+        index_mock.add_documents.assert_called_once()
+        docs = index_mock.add_documents.call_args[0][0]
+        assert len(docs) == 2
+
+    def test_flush_empty_batch_returns_zero(self, tmp_path):
+        pg = _make_mock_pg_conn()
+        meili, index_mock = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        assert indexer.flush() == 0
+        index_mock.add_documents.assert_not_called()
+
+    def test_auto_flush_on_batch_size(self, tmp_path):
+        """Batch is flushed automatically when it reaches MEILI_BATCH_SIZE."""
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, index_mock = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            for i in range(MEILI_BATCH_SIZE):
+                indexer.index_record(
+                    _make_speech_record(sequence_within_sitting=i + 1,
+                                        speaker_name=f"Member {i}"),
+                    cp,
+                )
+
+        # Auto-flush should have been triggered
+        assert index_mock.add_documents.call_count >= 1
+
+
+class TestIndexerResumeability:
+    def test_rerun_produces_zero_new_records(self, tmp_path):
+        """
+        Running the indexer twice against the same corpus produces zero new
+        records on the second run.
+        """
+        # First run
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer1 = Indexer(pg, meili)
+
+        records = [
+            _make_speech_record(sequence_within_sitting=i + 1, speaker_name=f"Member {i}")
+            for i in range(5)
+        ]
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            for r in records:
+                indexer1.index_record(r, cp)
+            first_count = indexer1.counts["LS"]
+
+        # Second run (same checkpoint store)
+        pg2 = _make_mock_pg_conn(inserted=True)
+        meili2, _ = _make_mock_meili()
+        indexer2 = Indexer(pg2, meili2)
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            for r in records:
+                indexer2.index_record(r, cp)
+            second_count = indexer2.counts["LS"]
+
+        assert first_count == 5
+        assert second_count == 0  # all already checkpointed
+
+    def test_interrupted_then_resumed_matches_clean_run(self, tmp_path):
+        """
+        An interrupted run (records 0-2) followed by a resumed run over the full
+        corpus (records 0-4) must produce the same total indexed count as a single
+        clean run over the full corpus.
+        """
+        records = [
+            _make_speech_record(sequence_within_sitting=i + 1, speaker_name=f"Member {i}")
+            for i in range(5)
+        ]
+
+        # ── Interrupted run: index records 0-2 only, then "crash" ─────────────
+        pg1 = _make_mock_pg_conn(inserted=True)
+        meili1, _ = _make_mock_meili()
+        indexer1 = Indexer(pg1, meili1)
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            for r in records[:3]:
+                indexer1.index_record(r, cp)
+        interrupted_count = sum(indexer1.counts.values())
+        assert interrupted_count == 3
+
+        # ── Resumed run: reopen same store, process full corpus ────────────────
+        pg2 = _make_mock_pg_conn(inserted=True)
+        meili2, _ = _make_mock_meili()
+        indexer2 = Indexer(pg2, meili2)
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            for r in records:  # all 5
+                indexer2.index_record(r, cp)
+        resumed_count = sum(indexer2.counts.values())
+        # Records 0-2 are already checkpointed; only 3 and 4 should be new
+        assert resumed_count == 2
+
+        # ── Clean run: fresh checkpoint, index all 5 ──────────────────────────
+        pg3 = _make_mock_pg_conn(inserted=True)
+        meili3, _ = _make_mock_meili()
+        indexer3 = Indexer(pg3, meili3)
+        with CheckpointStore(tmp_path / "clean_cp.db") as cp:
+            for r in records:
+                indexer3.index_record(r, cp)
+        clean_count = sum(indexer3.counts.values())
+
+        # Total of interrupted + resumed must equal the clean run
+        assert interrupted_count + resumed_count == clean_count
+
+
+class TestIndexerUpdateStatus:
+    def test_update_index_status_inserts_row(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        indexer.counts = {"CA": 100, "LS": 500, "RS": 300}
+        indexer.date_ranges = {
+            "CA": ["1946-12-09", "1950-11-26"],
+            "LS": ["2014-06-04", "2023-03-15"],
+            "RS": ["2014-06-11", "2023-03-15"],
+        }
+        indexer.update_index_status()
+
+        cursor = pg.cursor()
+        # SQL must reference the correct table
+        sql = cursor.execute.call_args[0][0]
+        assert "INSERT INTO index_status" in sql
+
+        # Parameters tuple must carry the right counts and total
+        params = cursor.execute.call_args[0][1]
+        # params[0] is run_completed_at (datetime)
+        assert params[1] == 900, f"total_records must be 900 (100+500+300), got {params[1]}"
+        assert params[2] == 100, f"ca_count must be 100, got {params[2]}"
+        assert params[5] == 500, f"ls_count must be 500, got {params[5]}"
+        assert params[8] == 300, f"rs_count must be 300, got {params[8]}"
+
+
+class TestIndexerReindexFromDb:
+    def test_reindex_pushes_all_speeches_and_qa(self):
+        """
+        reindex_from_db reads all rows from both tables and pushes every record
+        to Meilisearch with excluded fields absent from the pushed documents.
+        """
+        speech_cols = [
+            "id", "source", "proceeding_type", "date", "session_name", "session_number",
+            "sitting_number", "subject", "speaker_name", "speaker_party",
+            "speaker_constituency_or_state", "speaker_role", "sequence_within_sitting",
+            "full_text_en", "is_translated", "has_untranslated_content",
+            "speaker_name_unresolved", "source_url", "page_reference", "volume",
+            "ocr_low_confidence", "dedup_key", "created_at",
+        ]
+        qa_cols = [
+            "id", "source", "proceeding_type", "date", "session_name", "session_number",
+            "sitting_number", "question_number", "subject", "questioner_names",
+            "questioner_party", "minister_name", "ministry",
+            "full_text_en", "is_translated", "has_untranslated_content",
+            "source_url", "page_reference", "dedup_key", "created_at",
+        ]
+
+        def _speech_row(idx):
+            return (
+                f"uuid-{idx}", "LS", "debate", "2023-03-15", None, 261, 5, None,
+                f"Member {idx}", None, None, "member", idx, "Speech text",
+                False, False, False,
+                "https://sansad.in/doc.html", None, None, False,
+                f"dedup_{idx}", "2023-01-01",
+            )
+
+        def _qa_row(idx):
+            return (
+                f"uuid-qa-{idx}", "LS", "starred_question", "2023-03-15", None, 261, 5,
+                idx, None, ["Member A"], None, "Minister", "Ministry",
+                "Q&A text", False, False,
+                "https://sansad.in/qa.html", None, f"qa_dedup_{idx}", "2023-01-01",
+            )
+
+        speech_rows = [_speech_row(1), _speech_row(2)]
+        qa_rows = [_qa_row(1), _qa_row(2)]
+
+        cursor = MagicMock()
+
+        def fake_execute(sql, *args):
+            if "speeches" in sql:
+                cursor.description = [(col, None) for col in speech_cols]
+            else:
+                cursor.description = [(col, None) for col in qa_cols]
+
+        cursor.execute.side_effect = fake_execute
+        cursor.fetchall.side_effect = [speech_rows, qa_rows]
+
+        pg = MagicMock()
+        pg.cursor.return_value = cursor
+        meili, index_mock = _make_mock_meili()
+
+        indexer = Indexer(pg, meili)
+        total = indexer.reindex_from_db()
+
+        assert total == 4, f"Expected 4 total (2 speeches + 2 QA), got {total}"
+
+        # Collect all documents pushed across all add_documents calls
+        pushed_docs: list = []
+        for call_args in index_mock.add_documents.call_args_list:
+            pushed_docs.extend(call_args[0][0])
+
+        assert len(pushed_docs) == 4
+
+        # Excluded fields must be absent from every pushed document
+        excluded = {
+            "page_reference", "ocr_low_confidence", "has_untranslated_content",
+            "session_number", "created_at", "dedup_key",
+        }
+        for doc in pushed_docs:
+            for field in excluded:
+                assert field not in doc, (
+                    f"Excluded field '{field}' must not appear in Meilisearch document"
+                )
+
+
+# ── Language handling integration ─────────────────────────────────────────────
+
+class TestLanguageHandlingIntegration:
+    def test_is_translated_false_for_english(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record(is_translated=False, full_text_en="English text")
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            indexer.index_record(record, cp)
+
+        # Check that the INSERT was called with is_translated=False
+        cursor = pg.cursor()
+        args = cursor.execute.call_args[0][1]
+        # Find the is_translated position in the tuple
+        from ingest.indexer import _SPEECH_COLUMNS
+        idx = list(_SPEECH_COLUMNS).index("is_translated")
+        assert args[idx] is False
+
+    def test_has_untranslated_content_true_for_hindi_only(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record(
+            full_text_en=None,
+            has_untranslated_content=True,
+            is_translated=False,
+        )
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            result = indexer.index_record(record, cp)
+
+        assert result is True  # Hindi-only records are still indexed
+
+    def test_is_translated_true_for_hindi_with_translation(self, tmp_path):
+        """Case 2: Hindi speech with English translation → is_translated=True in INSERT."""
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record(
+            is_translated=True,
+            full_text_en="The translated English text of the speech.",
+            has_untranslated_content=False,
+            sequence_within_sitting=2,
+        )
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            indexer.index_record(record, cp)
+
+        from ingest.indexer import _SPEECH_COLUMNS
+        cursor = pg.cursor()
+        args = cursor.execute.call_args[0][1]
+        cols = list(_SPEECH_COLUMNS)
+
+        assert args[cols.index("is_translated")] is True
+        assert args[cols.index("has_untranslated_content")] is False
+        assert args[cols.index("full_text_en")] == "The translated English text of the speech."
+
+    def test_bilingual_speech_is_translated_true_with_full_text(self, tmp_path):
+        """Case 3: Bilingual speech → is_translated=True and full_text_en carries both portions."""
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        full_text = "Original English opening statement. Translated Hindi portion follows."
+        record = _make_speech_record(
+            is_translated=True,
+            full_text_en=full_text,
+            has_untranslated_content=False,
+            sequence_within_sitting=3,
+        )
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            indexer.index_record(record, cp)
+
+        from ingest.indexer import _SPEECH_COLUMNS
+        cursor = pg.cursor()
+        args = cursor.execute.call_args[0][1]
+        cols = list(_SPEECH_COLUMNS)
+
+        assert args[cols.index("is_translated")] is True
+        assert args[cols.index("full_text_en")] == full_text, (
+            "Bilingual record must store full_text_en containing both English and translated portions"
+        )
+        assert args[cols.index("full_text_en")] is not None
+
+
+# ── Unattributed speech ───────────────────────────────────────────────────────
+
+class TestUnattributedSpeech:
+    def test_dedup_key_handles_none_speaker_name(self):
+        """build_dedup_key must not raise when speaker_name is None; uses 'unknown'."""
+        record = _make_speech_record(speaker_name=None)
+        key = build_dedup_key(record)
+        assert "unknown" in key
+
+    def test_segmenter_excludes_unattributed_speech(self):
+        """
+        The speech segmenter is the boundary that excludes unattributed speakers
+        ('SEVERAL HON. MEMBERS', 'AN HON. MEMBER', etc.).  A document containing
+        only unattributed speech must produce zero records.
+        """
+        raw_record = {
+            "raw_text": (
+                "SEVERAL HON. MEMBERS :\n"
+                "Hear, hear!\n\n"
+                "AN HON. MEMBER :\n"
+                "Here!\n"
+            ),
+            "date": "2023-03-15",
+            "source_url": "https://sansad.in/test.html",
+            "proceeding_type": "debate",
+        }
+        speeches = segment_speeches(raw_record, "LS")
+        assert len(speeches) == 0, (
+            "Unattributed speakers must be excluded by the segmenter; "
+            f"got {len(speeches)} record(s)"
+        )

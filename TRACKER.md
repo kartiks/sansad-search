@@ -15,8 +15,8 @@ PRD version at last update: v1.0
 
 | Phase | PRD version | Build | Arch Review | QA Review | Complete | Handoff notes |
 |-------|-------------|-------|-------------|-----------|----------|---------------|
-| 1 | v1.0 | complete | run-2 CLEAR | run-2 GAPS FOUND | — | QA run-2 gap addressed: test_case3_bilingual_exchange OR→AND (both English original and translated Hindi portions now asserted separately). 203 passed, 1 skipped. Next: /verify-qa phase-1 (run-3). |
-| 2 | — | not started | — | — | — | Ingestion pipeline complete (F01). Depends on Phase 1. |
+| 1 | v1.0 | complete | run-2 CLEAR | run-3 CLEAR | ✓ complete | Both reviews CLEAR on latest runs. Q+A Case 3 bilingual test now uses two separate asserts (English original + translated Hindi portions). 203 passed, 1 skipped. |
+| 2 | v1.0 | complete | run-4 CLEAR | run-2 CLEAR | ✓ complete | Both reviews CLEAR on latest runs. All 13 run-1 gaps verified RESOLVED with strong assertions. 360 passed, 1 skipped. |
 | 3 | — | not started | — | — | — | Search API (F02, F03, F04, F06, F07 backend). Depends on Phase 1 schema + synonyms.json. Uses fixture data for tests. |
 | 4 | — | not started | — | — | — | Frontend homepage + results + result cards (F02, F05, F06, F07 UI). Depends on Phase 3. |
 | 5 | — | not started | — | — | — | Frontend Advanced Search Modal + filter chips (F03 UI). Depends on Phase 4. |
