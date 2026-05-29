@@ -33,18 +33,27 @@ Counts use thousands separators (e.g., "1,234,567"). If a source has not yet bee
 
 The status panel reads from a summary record written by the ingestion pipeline (Feature 01) at the end of each run. The summary record stores: per-source record counts, per-source earliest and latest indexed dates, and the ingestion run timestamp. The panel does not query the search index directly at page load; it reads the pre-computed summary.
 
-## Placement
+## Display Surfaces
 
-- Shown on the homepage, below the search box, so users can see the scope of the index before searching
-- Accessible from the results page via a persistent footer link ("Index status") that opens the same information
+### Homepage Status Strip
+
+A condensed summary shown on the homepage, below the search box, giving users a quick overview of index scope before searching. Shows per-source record counts and the last ingestion date. Does not show per-source date coverage. Sources with zero indexed records are still shown in the strip; their count displays as "0 [Body] records".
+
+Format: `[N] Constituent Assembly records · [N] Lok Sabha records · [N] Rajya Sabha records · Last updated: [DD Month YYYY]`
+
+### Full Indexing Status Panel
+
+The detailed view of index state, accessible from the results page via a persistent footer link labelled "Index status". Displays the full format described in the Displayed Information section above, including per-source date coverage and the "0 records – not yet indexed" row format for sources with zero records.
 
 ## Acceptance Criteria
 
-- Panel displays total record count, per-source counts, per-source date coverage, and last updated date
+- The homepage strip displays per-source record counts and the last updated date
+- The full indexing status panel displays total record count, per-source counts, per-source date coverage, and last updated date
 - Counts and dates reflect the actual state of the index; they are not hardcoded
-- If a source has zero indexed records, its row shows "0 records – not yet indexed" without a date range
+- Homepage strip: a source with zero indexed records is shown as "0 [Body] records" in the strip; it is not omitted
+- Full panel: a source with zero indexed records shows "0 records – not yet indexed" without a date range
 - Last updated date reflects the most recent ingestion run completion timestamp, not the current date
-- Panel is read-only; no user interaction is required or available beyond viewing
+- Both surfaces are read-only; no user interaction is required or available beyond viewing
 
 ## Edge Cases
 

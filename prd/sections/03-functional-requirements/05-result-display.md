@@ -89,7 +89,6 @@ Displayed fields, in order:
 - Record with `speaker_name: null` (unresolved attribution): speaker name area shows "Speaker unknown"
 - Snippet contains HTML or special characters from source document: characters are escaped/sanitised before display; must not render as HTML
 - Source URL is missing or broken: "View source" link is not shown; no broken link is displayed
-- Query term appears in highlighted metadata field (e.g., speaker name) and also in snippet: both instances are highlighted independently
 
 ## Dependencies
 

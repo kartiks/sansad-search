@@ -145,6 +145,9 @@ Compound key format for each record type. Keys are stored in the `dedup_key` col
 
 Denormalized merge of `speeches` and `qa_exchanges` fields. `record_type` discriminates between the two. Fields not applicable to a record type are omitted (not sent as null) to minimize document size.
 
+**`record_type` values:** `"speech"` for speech records (from `speeches` table); `"qa"` for Q+A exchange records (from `qa_exchanges` table). Set by `indexer.py` at push time.
+
+**Speech document:**
 ```json
 {
   "id": "uuid-from-postgresql",
@@ -170,7 +173,7 @@ Denormalized merge of `speeches` and `qa_exchanges` fields. `record_type` discri
 }
 ```
 
-Q+A exchange documents include `question_number`, `questioner_names` (array), `questioner_party`, `minister_name`, `ministry` in place of speech-specific fields.
+**Q+A exchange document:** uses `"record_type": "qa"` and includes `question_number`, `questioner_names` (array), `questioner_party`, `minister_name`, `ministry` in place of speech-specific fields (`speaker_name`, `speaker_party`, `speaker_constituency_or_state`, `speaker_role`, `sequence_within_sitting`, `speaker_name_unresolved`, `volume`).
 
 Fields excluded from Meilisearch (stored in PostgreSQL only): `page_reference`, `ocr_low_confidence`, `has_untranslated_content`, `session_number`, `created_at`, `dedup_key`.
 

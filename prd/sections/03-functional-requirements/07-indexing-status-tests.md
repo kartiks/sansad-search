@@ -12,7 +12,10 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 
 ## Zero-Source Row Format
 
-- A source with zero indexed records must display "0 records – not yet indexed" with no date range; displaying an empty date range string or a placeholder date (e.g., "Jan 1970") is a bug
+Applies to the full indexing status panel (footer link), not the homepage status strip.
+
+- In the full panel, a source with zero indexed records must display "0 records – not yet indexed" with no date range; displaying an empty date range string or a placeholder date (e.g., "Jan 1970") is a bug
+- In the homepage strip, a source with zero indexed records must still appear in the strip showing "0 [Body] records"; it must not be omitted
 
 ## Count Accuracy
 

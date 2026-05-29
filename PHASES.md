@@ -1,7 +1,7 @@
 # SansadSearch — Phase Plan
 
-PRD version: v1.0
-Generated: 2026-05-28
+PRD version: v1.1
+Generated: 2026-05-29
 
 ---
 
@@ -87,11 +87,12 @@ Implement:
 - `app/ui/src/components/QACard.jsx` — metadata row; subject line (two lines); question number; questioner row ("+N others" for co-signatories: 1 questioner → no label, 4 total → "+3 others"); minister/ministry row; snippet with "From supplementary exchange — " prefix when snippet_from_supplementary: true; translation indicator; source link; all F05 edge cases
 - `app/ui/src/components/Pagination.jsx` — previous/next buttons, current page (navy background), adjacent pages; result count display (exact for ≤9,999, "10,000+" for ≥10,000, "0 results" for empty); URL encodes both query and page number (shareable/bookmarkable); direct URL to page N loads that page
 - `app/ui/src/components/SkeletonCard.jsx` — animated shimmer blocks matching card dimensions
+- `app/ui/src/pages/IndexingStatusPage.jsx` — full F07 indexing status panel: "Search Index Status" header; total records count with thousands separator; per-source table (Constituent Assembly, Lok Sabha, Rajya Sabha) each showing record count and date coverage range; a source with zero records shows "0 records – not yet indexed" with no date range; "Last updated: DD Month YYYY" or "Never" when ingestion has never run; "Status unavailable" message (replacing counts and dates) when summary record is malformed or unreadable; reads from GET /api/status only (no direct index query); accessible via the "Index status" footer link in Results.jsx
 - `app/ui/src/components/Toast.jsx` — bottom-center, 16px from bottom, 3s auto-dismiss, Inter 13px white text on #1C3461 background, border-radius 6px; one toast at a time
 - Sort dropdown (F06): three options (Relevance default, Newest first, Oldest first); selecting re-sorts immediately; persists across query refinements; defaults to Relevance on every new search; result count does not change on sort change
 - Search bar inline validation: query empty or < 2 non-whitespace characters → "Enter at least 2 characters to search." in #C96A1E below search bar; no search executes; message dismisses on typing
 
-Stop when: all F05 and F06 acceptance criteria verified in browser; homepage status strip displays F07 data from GET /api/status; all result card types render correctly for all edge cases; pagination URL persistence works (direct URL to page 3 loads page 3); sort dropdown behaves correctly including default-on-new-search; search bar inline validation triggers and dismisses correctly; loading skeleton, empty state, and error state all display correctly.
+Stop when: all F05 and F06 acceptance criteria verified in browser; homepage status strip displays F07 data from GET /api/status; full F07 indexing status panel renders correctly for all states (loaded data, fresh deployment showing "Never" and zero-record rows as "0 records – not yet indexed", status unavailable message); all result card types render correctly for all edge cases; pagination URL persistence works (direct URL to page 3 loads page 3); sort dropdown behaves correctly including default-on-new-search; search bar inline validation triggers and dismisses correctly; loading skeleton, empty state, and error state all display correctly.
 Do not implement anything from Phase 5 or later.
 Tests: write and run tests for all items above before finishing.
 

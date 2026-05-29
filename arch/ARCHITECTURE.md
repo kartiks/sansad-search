@@ -112,6 +112,10 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
         filterState.js           # Filter shape definition, defaults, validation helpers
         expansionNotice.js       # Parse expansion_notice array from API response
         constants.js             # Proceeding type labels, source labels
+      main.jsx                   # SPA entry point; mounts React root; defines BrowserRouter
+                                 # routes: / → Home, /search → Results, * → redirect /
+      index.css                  # CSS custom properties (design tokens: colours, fonts,
+                                 # shadows); global base styles (box-sizing, body, button)
     public/
     index.html
     package.json
