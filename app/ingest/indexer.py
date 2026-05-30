@@ -38,7 +38,6 @@ MEILI_BATCH_SIZE = 100
 # Fields stored in PostgreSQL only; excluded from Meilisearch documents
 _MEILI_EXCLUDED = frozenset({
     "page_reference",
-    "ocr_low_confidence",
     "has_untranslated_content",
     "session_number",
     "created_at",
@@ -52,7 +51,7 @@ _SPEECH_COLUMNS = (
     "speaker_constituency_or_state", "speaker_role", "sequence_within_sitting",
     "full_text_en", "is_translated", "has_untranslated_content",
     "speaker_name_unresolved", "source_url", "page_reference", "volume",
-    "ocr_low_confidence", "dedup_key",
+    "dedup_key",
 )
 
 # All qa_exchanges-table columns (in INSERT order)

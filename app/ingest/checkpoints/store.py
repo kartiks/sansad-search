@@ -2,9 +2,18 @@
 SQLite-backed checkpoint store for ingestion resumability and deduplication.
 
 Tables:
-  processed_urls(url TEXT PRIMARY KEY, processed_at TEXT)
-      A URL is added here only after ALL its records have been successfully
-      indexed. On resume, already-processed URLs are skipped entirely.
+  processed_documents(
+      canonical_doc_id TEXT PRIMARY KEY,
+      corpus           TEXT NOT NULL,
+      provider         TEXT,
+      fetch_url        TEXT,
+      processed_at     TEXT NOT NULL
+  )
+      Keyed on the provider-agnostic canonical document id (the DSpace handle
+      number N for LS/RS; the constitutionofindia.net day-URL for CA).
+      A document is added here only after ALL its records have been successfully
+      indexed. On resume, already-processed documents are skipped.
+      provider/fetch_url record which provider satisfied the document for audit.
 
   inserted_dedup_keys(dedup_key TEXT PRIMARY KEY)
       Tracks compound dedup keys already written to PostgreSQL for fast
@@ -12,11 +21,14 @@ Tables:
 
 Usage:
     with CheckpointStore(Path("data/ingestion_checkpoints.db")) as store:
-        if store.is_url_processed(url):
+        if store.is_document_processed(canonical_doc_id):
             continue
         # … process and index records …
         store.add_dedup_key(dedup_key)
-        store.mark_url_processed(url)
+        store.mark_document_processed(
+            canonical_doc_id, corpus="LS", provider="internet_archive",
+            fetch_url="https://archive.org/...",
+        )
 """
 from __future__ import annotations
 
@@ -27,7 +39,7 @@ from typing import Optional
 
 
 class CheckpointStore:
-    """SQLite-backed store for processed URLs and inserted dedup keys."""
+    """SQLite-backed store for processed documents and inserted dedup keys."""
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -40,9 +52,12 @@ class CheckpointStore:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS processed_urls (
-                url          TEXT PRIMARY KEY,
-                processed_at TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS processed_documents (
+                canonical_doc_id TEXT PRIMARY KEY,
+                corpus           TEXT NOT NULL,
+                provider         TEXT,
+                fetch_url        TEXT,
+                processed_at     TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS inserted_dedup_keys (
                 dedup_key TEXT PRIMARY KEY
@@ -68,29 +83,51 @@ class CheckpointStore:
             raise RuntimeError("CheckpointStore is not open — call open() first")
         return self._conn
 
-    # ── URL tracking ───────────────────────────────────────────────────────────
+    # ── Document tracking ──────────────────────────────────────────────────────
 
-    def is_url_processed(self, url: str) -> bool:
-        """Return True if *url* was fully processed and checkpointed in a prior run."""
+    def is_document_processed(self, canonical_doc_id: str) -> bool:
+        """Return True if this document was fully processed and checkpointed."""
         row = self._require_conn().execute(
-            "SELECT 1 FROM processed_urls WHERE url = ?", (url,)
+            "SELECT 1 FROM processed_documents WHERE canonical_doc_id = ?",
+            (canonical_doc_id,),
         ).fetchone()
         return row is not None
 
-    def mark_url_processed(self, url: str) -> None:
+    def mark_document_processed(
+        self,
+        canonical_doc_id: str,
+        corpus: str,
+        provider: str | None = None,
+        fetch_url: str | None = None,
+    ) -> None:
         """
-        Record *url* as fully processed.
+        Record this document as fully processed.
 
-        Call this only after ALL records from the document have been
-        successfully indexed. If indexing is interrupted mid-document,
-        do NOT call this — the document will be fully reprocessed on resume.
+        Call only after ALL records from the document have been successfully
+        indexed. If indexing is interrupted mid-document, do NOT call this —
+        the document will be fully reprocessed on resume.
         """
         conn = self._require_conn()
         conn.execute(
-            "INSERT OR REPLACE INTO processed_urls (url, processed_at) VALUES (?, ?)",
-            (url, datetime.now(timezone.utc).isoformat()),
+            """
+            INSERT OR REPLACE INTO processed_documents
+                (canonical_doc_id, corpus, provider, fetch_url, processed_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                canonical_doc_id,
+                corpus,
+                provider,
+                fetch_url,
+                datetime.now(timezone.utc).isoformat(),
+            ),
         )
         conn.commit()
+
+    def processed_document_count(self) -> int:
+        return self._require_conn().execute(
+            "SELECT COUNT(*) FROM processed_documents"
+        ).fetchone()[0]
 
     # ── Dedup key tracking ─────────────────────────────────────────────────────
 
@@ -109,13 +146,6 @@ class CheckpointStore:
             (key,),
         )
         conn.commit()
-
-    # ── Counters (useful for tests and progress reporting) ─────────────────────
-
-    def processed_url_count(self) -> int:
-        return self._require_conn().execute(
-            "SELECT COUNT(*) FROM processed_urls"
-        ).fetchone()[0]
 
     def dedup_key_count(self) -> int:
         return self._require_conn().execute(

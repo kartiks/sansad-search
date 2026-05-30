@@ -24,7 +24,6 @@ def _raw_record(text: str, **kwargs) -> dict:
         "source_url": "http://example.com",
         "page_reference": None,
         "volume": None,
-        "ocr_low_confidence": False,
         "raw_text": text,
     }
     base.update(kwargs)
@@ -246,12 +245,6 @@ class TestSegmentSpeeches:
         record = _raw_record(text)
         result = segment_speeches(record, "LS")
         assert result[0]["speaker_name_unresolved"] is True
-
-    def test_ocr_low_confidence_propagated(self):
-        text = "SHRI OCR MEMBER :\nOCR extracted text.\n"
-        record = _raw_record(text, ocr_low_confidence=True)
-        result = segment_speeches(record, "LS")
-        assert result[0]["ocr_low_confidence"] is True
 
     def test_speaker_role_member_for_regular_member(self):
         text = "SHRI NARENDRA MODI :\nSpeech by a regular member.\n"

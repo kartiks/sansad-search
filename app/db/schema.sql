@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS speeches (
     source_url                  TEXT,
     page_reference              INTEGER,
     volume                      INTEGER,
-    ocr_low_confidence          BOOLEAN     NOT NULL DEFAULT FALSE,
     dedup_key                   VARCHAR(500) UNIQUE NOT NULL,
     created_at                  TIMESTAMPTZ DEFAULT NOW()
 );

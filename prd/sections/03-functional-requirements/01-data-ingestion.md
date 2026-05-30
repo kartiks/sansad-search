@@ -2,7 +2,7 @@
 
 ## Description
 
-The ingestion pipeline fetches, parses, segments, and indexes parliamentary records from three sources: Constituent Assembly debates (sansad.in archives), Lok Sabha records (sansad.in), and Rajya Sabha records (rajyasabha.gov.in). In v1 it is a one-time bulk operation. It must be resumable: an interrupted run continues from the last successful document checkpoint without reprocessing already-indexed records or creating duplicates.
+The ingestion pipeline fetches, parses, segments, and indexes parliamentary records from three sources: Constituent Assembly debates, Lok Sabha records, and Rajya Sabha records. In v1 it is a one-time bulk operation. It must be resumable: an interrupted run continues from the last successful document checkpoint without reprocessing already-indexed records or creating duplicates.
 
 ## User Flows
 
@@ -26,9 +26,9 @@ The ingestion pipeline fetches, parses, segments, and indexes parliamentary reco
 
 | Source | Content | Date scope | Format | Base URL |
 |--------|---------|------------|--------|----------|
-| Constituent Assembly | Plenary debates | All 12 volumes, 1946–1950 | PDF (some scanned) | sansad.in (Lok Sabha archives) |
-| Lok Sabha | Debates and questions | 2014-01-01 to present | HTML and PDF | sansad.in |
-| Rajya Sabha | Debates and questions | 2014-01-01 to present | HTML and PDF | rajyasabha.gov.in |
+| Constituent Assembly | Plenary debates | All 12 volumes, 1946–1950 | HTML | constitutionofindia.net |
+| Lok Sabha | Debates and questions | 2014-01-01 to present | Pre-OCR plain text (_djvu.txt); PDF | eparlib.sansad.in (primary); Internet Archive _djvu.txt pre-OCR text (fallback) |
+| Rajya Sabha | Debates and questions | 2014-01-01 to present | HTML and PDF | sansad.in/rs HTML (primary); Internet Archive; rsdebate.nic.in DSpace (fallback) |
 
 ## Proceeding Types Indexed
 
@@ -66,7 +66,7 @@ The ingestion pipeline fetches, parses, segments, and indexes parliamentary reco
 | `is_translated` | true if `full_text_en` contains or includes official English translation of Hindi portions |
 | `has_untranslated_content` | true if any portion of the speech could not be indexed due to absent translation |
 | `speaker_name_unresolved` | true if `speaker_name` could not be matched to a canonical form in the names dictionary |
-| `source_url` | URL of the original HTML page or PDF |
+| `source_url` | URL of the original HTML page or PDF; for LS records fetched from Internet Archive, always set to the corresponding eparlib.sansad.in document URL; for RS records fetched from Internet Archive, always set to the corresponding rsdebate.nic.in document URL (derived from the DSpace handle) |
 | `page_reference` | Page number in source PDF; null for HTML sources |
 | `sequence_within_sitting` | Integer position of this speech within the sitting's proceedings, derived from document order (1-based) |
 | `volume` | CA volume number (1–12); null for LS/RS |
@@ -90,7 +90,7 @@ The ingestion pipeline fetches, parses, segments, and indexes parliamentary reco
 | `full_text_en` | Full text of the complete exchange: main question + answer + all supplementaries with attribution; English only, translated as needed |
 | `is_translated` | true if any portion was translated from Hindi |
 | `has_untranslated_content` | true if any portion could not be indexed due to absent translation |
-| `source_url` | URL of the original document |
+| `source_url` | URL of the original document; for LS records fetched from Internet Archive, always set to the corresponding eparlib.sansad.in document URL; for RS records fetched from Internet Archive, always set to the corresponding rsdebate.nic.in document URL (derived from the DSpace handle) |
 | `page_reference` | Page number in source PDF; null for HTML sources |
 
 ### Q+A exchange unit (unstarred question)
@@ -155,7 +155,6 @@ When the same proceeding is available as both HTML and PDF from the source site,
 
 ## Edge Cases
 
-- Scanned CA PDFs: text extracted via OCR; records with OCR confidence below threshold are flagged (`ocr_low_confidence: true`) but still indexed
 - Speeches entirely in Hindi with no available translation: indexed with metadata only; `full_text_en: null`
 - Missing speaker attribution in source record: index with `speaker_name: null`; do not skip the record
 - Missing date: log as an error and skip the record (date is required for filtering)
@@ -163,6 +162,7 @@ When the same proceeding is available as both HTML and PDF from the source site,
 - HTTP 5xx errors: retry up to 3 times with exponential backoff; log and skip if all retries fail
 - HTTP 429 (rate limited): back off with exponential delay and retry; do not skip
 - Malformed or unparseable HTML/PDF: log parsing error with document URL; skip
+- RS record fetched from Internet Archive with no derivable DSpace handle: set `source_url` to null; log a warning; do not use the archive.org URL
 - Records outside the date scope appearing within an in-scope document: skip those records; continue processing in-scope records in the same document
 
 ## Dependencies
@@ -175,4 +175,3 @@ None. This is the foundational feature.
 - **Storage:** full-text corpus of 12+ years of parliamentary proceedings is substantial → flag in NFR for architecture sizing
 - **Processing time:** bulk ingestion is a long-running operation expected to take hours; exact time budget not specified for v1 but progress logging is required → flag in NFR
 - **Resumability:** ingestion must checkpoint per source document and support safe re-runs → flag in NFR as a reliability requirement
-- **OCR dependency:** scanned CA PDFs require OCR processing capability → flag in NFR

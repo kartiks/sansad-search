@@ -1,7 +1,7 @@
 # Data Models — SansadSearch
 
-**PRD version:** v1.0
-**Generated:** 2026-05-28
+**PRD version:** v1.2
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.)
 
 ---
 
@@ -30,10 +30,9 @@ Primary canonical store for all speech-type records (debates, zero hour, calling
 | `is_translated` | BOOLEAN | NOT NULL DEFAULT FALSE | True if any portion is official English translation of Hindi |
 | `has_untranslated_content` | BOOLEAN | NOT NULL DEFAULT FALSE | True if Hindi portions could not be indexed |
 | `speaker_name_unresolved` | BOOLEAN | NOT NULL DEFAULT FALSE | True if speaker_name could not be matched to names_dict |
-| `source_url` | TEXT | NULL | URL of original HTML page or PDF |
-| `page_reference` | INTEGER | NULL | Page number in source PDF; NULL for HTML |
+| `source_url` | TEXT | NULL | Canonical citation URL: constitutionofindia.net day page (CA), `eparlib_document_url` (LS/RS via Internet Archive), or DSpace item URL (LS/RS direct). **Never an archive.org URL** (ARCHITECTURE.md Non-Negotiable #9) |
+| `page_reference` | INTEGER | NULL | Page number in source PDF; NULL for HTML and for IA pre-OCR text records |
 | `volume` | INTEGER | NULL | CA volume number (1–12); NULL for LS/RS |
-| `ocr_low_confidence` | BOOLEAN | NOT NULL DEFAULT FALSE | True if text was OCR-extracted with low confidence |
 | `dedup_key` | VARCHAR(500) | UNIQUE NOT NULL | Compound deduplication key (see Deduplication section) |
 | `created_at` | TIMESTAMPTZ | DEFAULT NOW() | Ingestion timestamp |
 
@@ -73,8 +72,8 @@ Primary canonical store for starred and unstarred question records.
 | `full_text_en` | TEXT | NULL | Full exchange text (main Q + answer + supplementaries for starred; Q + written answer for unstarred) |
 | `is_translated` | BOOLEAN | NOT NULL DEFAULT FALSE | True if any portion is translated from Hindi |
 | `has_untranslated_content` | BOOLEAN | NOT NULL DEFAULT FALSE | True if any portion could not be indexed |
-| `source_url` | TEXT | NULL | URL of original document |
-| `page_reference` | INTEGER | NULL | Page number in source PDF; NULL for HTML |
+| `source_url` | TEXT | NULL | Canonical citation URL: `eparlib_document_url` (via Internet Archive) or DSpace item URL (direct); sansad.in/rs page URL for recent RS HTML. **Never an archive.org URL** (ARCHITECTURE.md Non-Negotiable #9) |
+| `page_reference` | INTEGER | NULL | Page number in source PDF; NULL for HTML and for IA pre-OCR text records |
 | `dedup_key` | VARCHAR(500) | UNIQUE NOT NULL | Compound deduplication key |
 | `created_at` | TIMESTAMPTZ | DEFAULT NOW() | Ingestion timestamp |
 
@@ -133,6 +132,8 @@ Compound key format for each record type. Keys are stored in the `dedup_key` col
 
 `speaker_name_normalized`: lowercase, spaces replaced with `_`, special characters stripped. Applied before canonicalization to ensure consistency even when canonical name lookup fails.
 
+**Two dedup layers.** The `dedup_key` above is the **record-level** guard (one row per unique speech / Q+A exchange), enforced by the PostgreSQL `UNIQUE` constraint and the SQLite `inserted_dedup_keys` mirror. It is distinct from **document-level** identity (`canonical_doc_id`, see §4.3), which prevents the same source document — available from more than one provider (e.g. Internet Archive `eparlib.nic.in.{N}` and DSpace `123456789/{N}`) — from being fetched and parsed twice. Document-level identity is a fetch-time optimisation in the checkpoint store; record-level `dedup_key` is the authoritative guarantee that no duplicate record is written.
+
 ---
 
 ## 2. Meilisearch Index
@@ -175,7 +176,7 @@ Denormalized merge of `speeches` and `qa_exchanges` fields. `record_type` discri
 
 **Q+A exchange document:** uses `"record_type": "qa"` and includes `question_number`, `questioner_names` (array), `questioner_party`, `minister_name`, `ministry` in place of speech-specific fields (`speaker_name`, `speaker_party`, `speaker_constituency_or_state`, `speaker_role`, `sequence_within_sitting`, `speaker_name_unresolved`, `volume`).
 
-Fields excluded from Meilisearch (stored in PostgreSQL only): `page_reference`, `ocr_low_confidence`, `has_untranslated_content`, `session_number`, `created_at`, `dedup_key`.
+Fields excluded from Meilisearch (stored in PostgreSQL only): `page_reference`, `has_untranslated_content`, `session_number`, `created_at`, `dedup_key`.
 
 ### 2.3 Index Configuration
 
@@ -350,6 +351,8 @@ Field rules:
 
 No request parameters.
 
+Single endpoint serving both F07 surfaces (per PRD v1.1). The **homepage status strip** (condensed) renders per-source `count` and `last_updated` only. The **full indexing status panel** (`IndexingStatusPage.jsx`, reached via the Results page footer link) renders `total_records`, per-source `count`, per-source `date_from`/`date_to`, and `last_updated`. No additional fields or endpoint are required to support the full panel — it consumes the same response below.
+
 **Response body (200 OK — index populated):**
 ```json
 {
@@ -419,8 +422,12 @@ Meilisearch Cloud Growth plan (supports up to 2M documents) is required.
 **File:** `data/ingestion_checkpoints.db` (`.gitignore`d)
 
 **Tables:**
-- `processed_urls (url TEXT PRIMARY KEY, processed_at TIMESTAMP)` — tracks source document URLs fully processed in a prior run
-- `inserted_dedup_keys (dedup_key TEXT PRIMARY KEY)` — tracks dedup keys already written to PostgreSQL; prevents duplicate inserts on resume
+- `processed_documents (canonical_doc_id TEXT PRIMARY KEY, corpus TEXT, provider TEXT, fetch_url TEXT, processed_at TIMESTAMP)` — tracks source documents fully processed in a prior run, keyed on the **canonical document id** (provider-agnostic):
+  - **LS/RS:** the DSpace handle number `N` (so Internet Archive `eparlib.nic.in.{N}` and DSpace `123456789/{N}` collapse to one entry).
+  - **CA:** the per-day page URL on constitutionofindia.net (single provider; the day URL is its own canonical id).
+
+  Prevents both resume-reprocessing of a completed document and cross-provider double-fetch of the same document. `provider`/`fetch_url` record which provider satisfied the document (debugging/audit).
+- `inserted_dedup_keys (dedup_key TEXT PRIMARY KEY)` — tracks record-level dedup keys already written to PostgreSQL; prevents duplicate inserts on resume. Unchanged; mirrors the PostgreSQL `dedup_key` UNIQUE constraint for fast local lookup.
 
 **Purpose:** Fast local lookups during ingestion for resumability and deduplication. Eliminated after a clean full run completes; can be deleted and rebuilt from scratch if a full re-run is needed.
 
@@ -429,8 +436,8 @@ Meilisearch Cloud Growth plan (supports up to 2M documents) is required.
 **Purpose:** F08 recent searches and saved searches.
 
 Two separate cookies:
-- `ss_recent`: JSON array of `{ query: string, timestamp: ISO8601 }`, max 10 entries, 30-day expiry
-- `ss_saved`: JSON array of `{ name: string, query: string, filters: FilterState, saved_at: ISO8601 }`, max 20 entries, no expiry
+- `ss_recent`: JSON array of `{ query: string, timestamp: number }`, max 10 entries, 30-day expiry
+- `ss_saved`: JSON array of `{ id: string, name: string, query: string, filters: FilterState, timestamp: number }`, max 20 entries, no expiry
 
 `FilterState` shape:
 ```json

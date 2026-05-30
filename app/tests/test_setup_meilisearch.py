@@ -132,15 +132,14 @@ class TestIndexConfiguration:
     def test_typo_tolerance_enabled(self):
         assert TYPO_TOLERANCE["enabled"] is True
 
-    def test_typo_tolerance_one_typo_threshold_is_4(self):
+    def test_typo_tolerance_one_typo_threshold(self):
         """
-        Test spec: "A query term of exactly 4 characters must be eligible for
-        spell correction." Setting oneTypo=4 means words of length ≥4 get
-        one-typo tolerance; words of 1–3 chars (fewer than 4) are exempt.
+        DATA-MODELS.md §2.3: oneTypo must be 5. Words of length ≥5 get
+        one-typo tolerance; shorter words are exempt from spell correction.
+        Corrected in Phase 7 to match DATA-MODELS.md exactly.
         """
-        assert TYPO_TOLERANCE["minWordSizeForTypos"]["oneTypo"] == 4, (
-            "oneTypo must be 4 so that 4-char terms are eligible for spell correction; "
-            "values > 4 would also exempt 4-char terms, violating the test spec."
+        assert TYPO_TOLERANCE["minWordSizeForTypos"]["oneTypo"] == 5, (
+            "oneTypo must be 5 per DATA-MODELS.md §2.3 typoTolerance spec"
         )
 
     def test_typo_tolerance_two_typos_threshold(self):
@@ -213,3 +212,51 @@ class TestRelevanceSortIsolation:
         parameter (for chronological/reverse_chronological), never as a ranking
         rule tiebreaker that silently affects relevance sort."""
         assert "sequence_within_sitting" not in RANKING_RULES
+
+
+# ── Phase 7: DATA-MODELS.md §2.3 exact constant verification ──────────────────
+
+class TestDataModelsExactConstants:
+    """Phase 7 spec: verify all constants match DATA-MODELS.md §2.3 exactly."""
+
+    def test_ranking_rules_no_typo_typo_variant(self):
+        """DATA-MODELS.md §2.3 specifies 'typos' not 'typo'. Corrected in Phase 7."""
+        assert "typos" in RANKING_RULES, "'typos' must be in RANKING_RULES"
+        assert "typo" not in RANKING_RULES or RANKING_RULES.count("typos") == 1, (
+            "RANKING_RULES must use 'typos' (not 'typo') per DATA-MODELS.md §2.3"
+        )
+
+    def test_ranking_rules_exact_match_data_models(self):
+        expected = ["words", "typos", "proximity", "attribute", "sort", "exactness"]
+        assert RANKING_RULES == expected, (
+            f"RANKING_RULES must exactly match DATA-MODELS.md §2.3. "
+            f"Expected {expected}, got {RANKING_RULES}"
+        )
+
+    def test_one_typo_threshold_matches_data_models(self):
+        """DATA-MODELS.md §2.3: oneTypo=5. Corrected in Phase 7 from incorrect value of 4."""
+        assert TYPO_TOLERANCE["minWordSizeForTypos"]["oneTypo"] == 5, (
+            "oneTypo must be 5 per DATA-MODELS.md §2.3"
+        )
+
+    def test_searchable_attributes_exact_match_data_models(self):
+        expected = [
+            "speaker_name", "minister_name", "ministry",
+            "questioner_names", "subject", "full_text_en",
+        ]
+        assert SEARCHABLE_ATTRIBUTES == expected
+
+    def test_filterable_attributes_exact_match_data_models(self):
+        expected = [
+            "source", "proceeding_type", "date", "speaker_name", "session_name",
+            "minister_name", "record_type",
+        ]
+        assert sorted(FILTERABLE_ATTRIBUTES) == sorted(expected), (
+            "filterableAttributes must exactly match DATA-MODELS.md §2.3"
+        )
+
+    def test_sortable_attributes_exact_match_data_models(self):
+        assert sorted(SORTABLE_ATTRIBUTES) == sorted(["date", "sequence_within_sitting"])
+
+    def test_pagination_max_total_hits_data_models(self):
+        assert PAGINATION == {"maxTotalHits": 10000}

@@ -108,16 +108,25 @@ class TestBuildMeiliDocument:
             "speaker_name": "Narendra Modi",
             "full_text_en": "Some speech text",
             "page_reference": 42,
-            "ocr_low_confidence": False,
             "has_untranslated_content": False,
             "session_number": 261,
             "created_at": "2023-01-01T00:00:00Z",
             "dedup_key": "some_key",
         }
         doc = build_meili_document(record)
-        for field in ("page_reference", "ocr_low_confidence", "has_untranslated_content",
+        for field in ("page_reference", "has_untranslated_content",
                       "session_number", "created_at", "dedup_key"):
             assert field not in doc, f"{field} should be excluded from Meilisearch doc"
+
+    def test_ocr_low_confidence_absent_from_schema(self):
+        """ocr_low_confidence is dropped from speeches table in Phase 7."""
+        from ingest.indexer import _SPEECH_COLUMNS, _MEILI_EXCLUDED
+        assert "ocr_low_confidence" not in _SPEECH_COLUMNS, (
+            "ocr_low_confidence must be absent from _SPEECH_COLUMNS after Phase 7 schema drop"
+        )
+        assert "ocr_low_confidence" not in _MEILI_EXCLUDED, (
+            "ocr_low_confidence must be absent from _MEILI_EXCLUDED after Phase 7 schema drop"
+        )
 
     def test_present_fields_included(self):
         record = {
@@ -166,7 +175,6 @@ def _make_speech_record(**overrides):
         "source_url": "https://sansad.in/doc.html",
         "page_reference": None,
         "volume": None,
-        "ocr_low_confidence": False,
     }
     base.update(overrides)
     return base
@@ -301,24 +309,6 @@ class TestIndexerIndexRecord:
 
         assert result is True
 
-    def test_ocr_flagged_record_indexed(self, tmp_path):
-        """Records with ocr_low_confidence=True must be indexed, not silently dropped."""
-        pg = _make_mock_pg_conn(inserted=True)
-        meili, _ = _make_mock_meili()
-        indexer = Indexer(pg, meili)
-        record = _make_speech_record(ocr_low_confidence=True)
-
-        with CheckpointStore(tmp_path / "cp.db") as cp:
-            result = indexer.index_record(record, cp)
-
-        assert result is True
-
-        # Verify the INSERT tuple carries ocr_low_confidence=True at the correct position
-        from ingest.indexer import _SPEECH_COLUMNS
-        cursor = pg.cursor()
-        insert_values = cursor.execute.call_args[0][1]
-        idx = list(_SPEECH_COLUMNS).index("ocr_low_confidence")
-        assert insert_values[idx] is True
 
 
 class TestIndexerFlush:
@@ -480,7 +470,7 @@ class TestIndexerReindexFromDb:
             "speaker_constituency_or_state", "speaker_role", "sequence_within_sitting",
             "full_text_en", "is_translated", "has_untranslated_content",
             "speaker_name_unresolved", "source_url", "page_reference", "volume",
-            "ocr_low_confidence", "dedup_key", "created_at",
+            "dedup_key", "created_at",
         ]
         qa_cols = [
             "id", "source", "proceeding_type", "date", "session_name", "session_number",
@@ -495,7 +485,7 @@ class TestIndexerReindexFromDb:
                 f"uuid-{idx}", "LS", "debate", "2023-03-15", None, 261, 5, None,
                 f"Member {idx}", None, None, "member", idx, "Speech text",
                 False, False, False,
-                "https://sansad.in/doc.html", None, None, False,
+                "https://sansad.in/doc.html", None, None,
                 f"dedup_{idx}", "2023-01-01",
             )
 
@@ -539,7 +529,7 @@ class TestIndexerReindexFromDb:
 
         # Excluded fields must be absent from every pushed document
         excluded = {
-            "page_reference", "ocr_low_confidence", "has_untranslated_content",
+            "page_reference", "has_untranslated_content",
             "session_number", "created_at", "dedup_key",
         }
         for doc in pushed_docs:

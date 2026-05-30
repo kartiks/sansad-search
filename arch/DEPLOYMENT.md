@@ -1,7 +1,7 @@
 # Deployment — SansadSearch
 
-**PRD version:** v1.0
-**Generated:** 2026-05-28
+**PRD version:** v1.2
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency)
 
 ---
 
@@ -41,8 +41,14 @@
 | `DATABASE_URL` | Required | PostgreSQL connection string (Railway connection string with SSL) |
 | `MEILISEARCH_URL` | Required | Meilisearch Cloud instance URL |
 | `MEILISEARCH_MASTER_KEY` | Required | Meilisearch master API key; used only during ingestion and Meilisearch setup; never deployed to the API |
-| `INGESTION_RATE_LIMIT_DELAY_MS` | Optional | Inter-request delay in ms for government site fetching; default 2000 |
-| `TESSERACT_CMD` | Optional | Path to Tesseract binary if not on PATH; used by pytesseract |
+| `INGESTION_RATE_LIMIT_DELAY_MS` | Optional | Inter-request delay in ms for source fetching; default 2000 |
+| `COI_BASE_URL` | Optional | constitutionofindia.net base (CA provider); default in code. Override only if the host changes |
+| `IA_BASE_URL` | Optional | Internet Archive base (`https://archive.org`); LS/RS preferred bulk path; default in code |
+| `EPARLIB_BASE_URL` | Optional | eparlib.sansad.in base (LS DSpace fallback); default in code. Item IDs preserved from the legacy `eparlib.nic.in` host |
+| `RSDEBATE_BASE_URL` | Optional | rsdebate.nic.in base (RS DSpace fallback); default in code |
+| `SANSAD_RS_BASE_URL` | Optional | sansad.in base for the `/rs/debates/officials` RS HTML front end; default in code |
+
+Per-source base URLs are **overrides, not document URLs** — document URLs are always discovered at runtime from listing/browse pages (ARCHITECTURE.md §5 "Listing-page-driven discovery"). These env vars exist only to re-point a provider if a host migrates.
 
 `MEILISEARCH_MASTER_KEY` must never be set as an environment variable on the Railway API service. The search-only `MEILISEARCH_SEARCH_KEY` is used at runtime.
 
@@ -134,8 +140,9 @@ This reads all records from `speeches` and `qa_exchanges` in PostgreSQL and push
 | Railway PostgreSQL | API (status endpoint), Ingestion | Must be provisioned before first deploy and before first ingestion run |
 | Meilisearch Cloud instance | API (all search), Ingestion | Must be set up and configured (`setup_meilisearch.py` run) before first ingestion |
 | Vercel project | Frontend | Connected to the repo; `VITE_API_URL` env var set |
-| Tesseract binary | Ingestion only (CA scanned PDFs) | Must be installed on operator's machine; `apt install tesseract-ocr` on Linux, `brew install tesseract` on macOS |
-| PyMuPDF system deps | Ingestion only | Installed via `pip install PyMuPDF`; no additional system deps required on most platforms |
+| Internet Archive (archive.org) | Ingestion (preferred LS/RS bulk path) | Remote; no provisioning. Pre-OCR `_djvu.txt` + metadata JSON over HTTP. For IA-missing items the pipeline falls back to embedded-text extraction from the DSpace PDF (no OCR) |
+| Source sites (constitutionofindia.net, eparlib.sansad.in, rsdebate.nic.in, sansad.in/rs) | Ingestion (per-corpus providers) | Remote; no provisioning. Rate-limited, robots.txt-compliant HTTP reads |
+| PyMuPDF system deps | Ingestion only (direct DSpace PDF fallback; embedded-text extraction, no OCR) | Installed via `pip install PyMuPDF`; no additional system deps required on most platforms |
 
 ---
 
@@ -146,7 +153,6 @@ This reads all records from `speeches` and `qa_exchanges` in PostgreSQL and push
 - Python 3.12+
 - Node.js 20+
 - PostgreSQL 16 (local instance, or use the Railway connection string directly)
-- Tesseract 5 (`brew install tesseract` on macOS)
 - A Meilisearch instance — either a local Meilisearch binary or a Meilisearch Cloud dev instance
 
 ### 5.2 Python environment

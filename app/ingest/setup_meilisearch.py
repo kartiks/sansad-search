@@ -40,7 +40,7 @@ RANKING_RULES = ["words", "typos", "proximity", "attribute", "sort", "exactness"
 
 TYPO_TOLERANCE = {
     "enabled": True,
-    "minWordSizeForTypos": {"oneTypo": 4, "twoTypos": 9},
+    "minWordSizeForTypos": {"oneTypo": 5, "twoTypos": 9},
     "disableOnAttributes": ["date", "source", "proceeding_type", "source_url"],
 }
 

@@ -59,10 +59,21 @@ def test_schema_has_all_required_speeches_columns():
         "id", "source", "proceeding_type", "date", "session_name",
         "speaker_name", "full_text_en", "is_translated",
         "has_untranslated_content", "speaker_name_unresolved",
-        "dedup_key", "ocr_low_confidence", "sequence_within_sitting",
+        "dedup_key", "sequence_within_sitting",
     ]
     for col in required:
         assert col in content, f"Missing column: {col}"
+
+
+def test_schema_speeches_no_ocr_low_confidence():
+    """ocr_low_confidence was dropped from speeches in Phase 7 schema update."""
+    content = SCHEMA_PATH.read_text()
+    # Restrict check to the speeches table block only
+    speeches_block = content.split("CREATE TABLE IF NOT EXISTS qa_exchanges")[0]
+    assert "ocr_low_confidence" not in speeches_block, (
+        "ocr_low_confidence must not appear in the speeches table definition "
+        "(dropped in Phase 7 — OCR removed pipeline-wide)"
+    )
 
 
 def test_schema_has_all_required_qa_columns():

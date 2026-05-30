@@ -22,15 +22,12 @@ The full-text corpus (CA full record + 12 years of LS/RS debates and questions) 
 ## Rate Limiting and Compliance
 
 **INF-RL1: Government website rate limiting**
-The ingestion pipeline must comply with robots.txt on sansad.in and rajyasabha.gov.in. Minimum inter-request delay must be specified at architecture stage. HTTP 429 responses must trigger exponential backoff and retry, not a skip.
+The ingestion pipeline must comply with robots.txt on constitutionofindia.net, eparlib.sansad.in, sansad.in, rsdebate.nic.in, and the Internet Archive. Minimum inter-request delay must be specified at architecture stage. HTTP 429 responses must trigger exponential backoff and retry, not a skip.
 
 ## Processing
 
 **INF-P1: Bulk ingestion duration**
 Bulk ingestion is a long-running operation. No maximum time constraint is specified for v1, but real-time progress logging is required. The operation must not require human supervision to complete.
-
-**INF-P2: OCR capability**
-Some Constituent Assembly volumes are scanned PDFs requiring OCR. The ingestion pipeline must include an OCR component. OCR accuracy is best-effort for scanned documents; low-confidence records must be flagged, not dropped.
 
 ## Scalability
 

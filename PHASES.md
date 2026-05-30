@@ -1,7 +1,12 @@
 # SansadSearch — Phase Plan
 
+<<<<<<< HEAD
 PRD version: v1.1
 Generated: 2026-05-29
+=======
+PRD version: v1.3
+Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes)
+>>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
 ---
 
@@ -133,4 +138,62 @@ Implement:
 
 Stop when: all F08 test requirements pass in browser — FIFO rotation (10 entries, 11th removes oldest); duplicate deduplication (same query 3 times → 1 entry with latest timestamp); re-running a recent search executes with default filters regardless of original filter state; saved search filter restoration (body=RS + proceeding=Starred Question + from=2020-01-01 restores exactly); save disabled at exactly 20 entries with no 21st entry creatable by any means; same query saved twice produces two separate entries; cookies-disabled shows no error; saved search name 60 characters accepted, 61 rejected without losing the save action; stale filter value does not cause error.
 Do not implement anything beyond Phase 6.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 7 — Ingestion Rebuild: Schema + Shared Infrastructure
+
+PRD sections: F01 (schema change — ocr_low_confidence drop; shared pipeline primitives)
+UI sections: none
+
+Implement:
+- `app/db/schema.sql` — remove `ocr_low_confidence` column from `speeches` table
+- `requirements.txt` — remove `pytesseract`; confirm no remaining OCR dependencies
+- `app/ingest/sources/_http.py` — shared HTTP utility: USER_AGENT constant, RobotsChecker, `fetch_with_retry` with 4xx (log + skip), 5xx (retry ×3 exponential then log + skip), 429 (exponential backoff + retry, never skip)
+- `app/ingest/sources/_discovery.py` — shared discovery helpers: HTML listing crawl, DSpace browse-by-date pagination, IA `advancedsearch.php` enumeration
+- `app/ingest/sources/_provider.py` — Provider contract: `discover() → [DocumentRef]`; `fetch(DocumentRef) → bytes|text`; DocumentRef dataclass carrying corpus, provider, format (html|pdf|ia_text), fetch_url, canonical_doc_id, citation_url, discovered metadata
+- `app/ingest/parsers/ia_text_parser.py` — IA `_djvu.txt` OCR text + IA metadata JSON → raw record dicts; maps `eparlib_*` custom fields; no local OCR
+- `app/ingest/parsers/pdf_parser.py` — updated: embedded-text extraction only; no OCR fallback; text-less PDFs logged and skipped
+- `app/ingest/checkpoints/store.py` — redesigned: `processed_documents(canonical_doc_id TEXT PRIMARY KEY, corpus TEXT, provider TEXT, fetch_url TEXT, processed_at TIMESTAMP)` + `inserted_dedup_keys(dedup_key TEXT PRIMARY KEY)`; replaces old `processed_urls` table
+- `app/ingest/indexer.py` — updated: remove `ocr_low_confidence` from Meilisearch document push; accept DocumentRef input shape; no other behavioral changes
+- `app/ingest/setup_meilisearch.py` — verify all index configuration constants match DATA-MODELS.md §2.3 exactly (searchableAttributes, filterableAttributes, sortableAttributes, rankingRules, typoTolerance, pagination.maxTotalHits); correct any discrepancies found
+
+Stop when: `schema.sql` produces speeches table without `ocr_low_confidence` column; checkpoint store creates `processed_documents` and `inserted_dedup_keys` tables correctly; `_http.py` tests cover all three retry cases with mocked httpx; `ia_text_parser.py` tests parse fixture `_djvu.txt` + metadata JSON into correct raw record dicts; `pdf_parser.py` tests confirm text-less PDFs are skipped (no OCR path triggered); `indexer.py` tests confirm `ocr_low_confidence` absent from pushed documents; `setup_meilisearch.py` constants verified against DATA-MODELS.md §2.3 with a unit test asserting no deviation.
+Do not implement anything from Phase 8 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 8 — CA + LS Corpus Providers
+
+PRD sections: F01 (CA corpus; LS corpus)
+UI sections: none
+
+Implement:
+- `app/ingest/sources/providers/coi_html.py` — constitutionofindia.net CA provider: volume index → per-volume → per-day URL discovery (runtime listing crawl, not hardcoded); HTML main-content fetch; returns DocumentRef with format=html, corpus=CA; covers 167 sittings across 12 volumes (9 Dec 1946 – 24 Jan 1950)
+- `app/ingest/sources/providers/internet_archive.py` — archive.org IA provider: `advancedsearch.php` enumerate `eparlib.nic.in.{N}` identifiers; metadata JSON fetch; `_djvu.txt` download; maps `eparlib_*` custom fields (`eparlib_document_url`, `eparlib_date`, `eparlib_lok_sabha_number`, `eparlib_session_number`); `citation_url` set to `eparlib_document_url`; `canonical_doc_id` = handle number N; format = ia_text
+- `app/ingest/sources/providers/eparlib_dspace.py` — eparlib.sansad.in LS fallback: DSpace browse `?type=dateissued` pagination; item-page bitstream URL resolution (never constructs filenames); collection handle `/7`; returns DocumentRef with format=pdf; invoked only for items with `canonical_doc_id` absent from checkpoint store
+- `app/ingest/sources/ca.py` — updated: CA corpus orchestrator using provider chain `[coi_html]`; document-level dedup on `canonical_doc_id`; passes DocumentRef to parsers → segmenters → indexer
+- `app/ingest/sources/ls.py` — updated: LS corpus orchestrator using provider chain `[internet_archive, eparlib_dspace]`; date filter >= 2014-01-01; document-level dedup on `canonical_doc_id`; first provider yielding parseable content wins
+
+Stop when: `coi_html.py` tests discover all 12 volumes from fixture HTML and produce correct DocumentRef list; `internet_archive.py` tests enumerate fixture IA search results, fetch fixture metadata JSON, and return DocumentRef with `citation_url` = `eparlib_document_url` (never archive.org); `eparlib_dspace.py` tests resolve bitstream URL from fixture item page (never from a constructed filename); `ca.py` integration test runs provider chain against mocked HTTP and produces correctly segmented CA speech records with no `ocr_low_confidence` field; `ls.py` integration test: IA path produces ia_text records, DSpace fallback invoked only for items absent from IA, re-run against fully-processed fixture corpus produces zero new records.
+Do not implement anything from Phase 9 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 9 — RS Corpus Providers + PRD v1.3 Canonical Citation Rules
+
+PRD sections: F01 (RS corpus; RS source_url canonical-citation rule; RS-via-IA no-handle edge case)
+UI sections: none
+
+Implement:
+- `app/ingest/sources/providers/sansad_rs_html.py` — sansad.in/rs RS provider: HTML listing crawl `/rs/debates/officials`; per-sitting HTML fetch and parse; returns DocumentRef with format=html, corpus=RS; date filter >= 2014-01-01
+- `app/ingest/sources/providers/rsdebate_dspace.py` — rsdebate.nic.in RS fallback: DSpace browse `?type=dateissued` pagination; item-page bitstream URL resolution (never constructs filenames); returns DocumentRef with format=pdf
+- `app/ingest/sources/providers/internet_archive.py` — extended for RS: when corpus=RS, `citation_url` set to rsdebate.nic.in item URL derived from handle N extracted from IA identifier `eparlib.nic.in.{N}`; if handle not derivable, `citation_url` = null and warning logged (PRD v1.3 edge case: RS-via-IA with no DSpace handle)
+- `app/ingest/sources/rs.py` — updated: RS corpus orchestrator using provider chain `[sansad_rs_html, internet_archive, rsdebate_dspace]`; date filter >= 2014-01-01; document-level dedup on `canonical_doc_id`; first provider yielding parseable content wins
+
+Stop when: `sansad_rs_html.py` tests crawl fixture HTML listing and produce correct DocumentRef list for RS sittings; `rsdebate_dspace.py` tests resolve bitstream URL from fixture DSpace item page (no constructed filenames); `internet_archive.py` RS tests: (a) `citation_url` = rsdebate.nic.in URL when handle derivable from IA identifier; (b) `citation_url` = null + warning logged when identifier contains no derivable handle (PRD v1.3 edge case); `rs.py` integration test: sansad.in/rs HTML path preferred for recent sittings, IA fallback for older items, DSpace fallback for IA-missing items, no archive.org URL in any `citation_url`, checkpoint skip works on re-run.
+Do not implement anything beyond Phase 9.
 Tests: write and run tests for all items above before finishing.

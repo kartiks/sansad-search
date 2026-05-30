@@ -8,9 +8,9 @@ SansadSearch is a web-based full-text search application over Indian parliamenta
 
 | Source | Coverage | Base URL |
 |--------|----------|----------|
-| Constituent Assembly debates | All 12 volumes, 1946–1950 | sansad.in (Lok Sabha archives) |
-| Lok Sabha debates and questions | 2014–2026 (16th–18th Lok Sabha) | sansad.in |
-| Rajya Sabha debates and questions | 2014–2026 | rajyasabha.gov.in |
+| Constituent Assembly debates | All 12 volumes, 1946–1950 | constitutionofindia.net |
+| Lok Sabha debates and questions | 2014–2026 (16th–18th Lok Sabha) | eparlib.sansad.in (primary); Internet Archive (fallback) |
+| Rajya Sabha debates and questions | 2014–2026 | sansad.in/rs (primary); Internet Archive; rsdebate.nic.in (fallback) |
 
 ## Indexed Record Types
 

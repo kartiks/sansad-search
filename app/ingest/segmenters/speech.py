@@ -227,7 +227,6 @@ def segment_speeches(
             "source_url": raw_record.get("source_url"),
             "page_reference": raw_record.get("page_reference"),
             "volume": raw_record.get("volume"),
-            "ocr_low_confidence": raw_record.get("ocr_low_confidence", False),
         }
         speeches.append(speech)
         sequence += 1

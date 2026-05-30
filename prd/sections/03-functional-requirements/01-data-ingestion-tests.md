@@ -36,11 +36,6 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 - The strings "SEVERAL HON. MEMBERS", "AN HON. MEMBER", "SOME HON. MEMBERS" must never appear as a `speaker_name` value in any indexed record
 - Speeches by the Speaker (LS) and Chairman/Vice-Chairman (RS) made in their presiding capacity must not appear as standalone indexed records; `speaker_role: presiding_officer` records must not be present as searchable units
 
-## OCR-Flagged Records
-
-- Records flagged with `ocr_low_confidence: true` must appear in the search index; they must not be silently dropped
-- `ocr_low_confidence` must be false for records sourced from digital (non-scanned) PDFs and HTML
-
 ## Zero Hour Attribution
 
 - Zero hour speeches must carry the individual member's name in `speaker_name`; the string "ZERO HOUR" must not appear as a `speaker_name` value

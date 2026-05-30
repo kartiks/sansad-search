@@ -1,9 +1,30 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+<<<<<<< HEAD
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 
 import Home from '../pages/Home.jsx'
 import { makeStatusResponse } from './fixtures.js'
+=======
+
+vi.mock('../lib/cookie.js', () => ({
+  areCookiesEnabled: vi.fn().mockReturnValue(true),
+  readCookie: vi.fn().mockReturnValue(null),
+  writeCookie: vi.fn(),
+  deleteCookie: vi.fn(),
+  trimRecentToFit: vi.fn((entries) => entries),
+  RECENT_COOKIE: 'ss_recent',
+  SAVED_COOKIE: 'ss_saved',
+  MAX_COMBINED_BYTES: 4096,
+}))
+
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
+
+import Home from '../pages/Home.jsx'
+import { makeStatusResponse } from './fixtures.js'
+import * as cookieModule from '../lib/cookie.js'
+>>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
 function renderHome(initialEntries = ['/']) {
   const navigateSpy = { current: null }
@@ -32,8 +53,24 @@ function useSearchString() {
   return window.location.search
 }
 
+<<<<<<< HEAD
 beforeEach(() => {
   global.fetch = vi.fn()
+=======
+function NavStateCapture() {
+  const location = useLocation()
+  return (
+    <div data-testid="nav-state">{JSON.stringify(location.state)}</div>
+  )
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  global.fetch = vi.fn()
+  cookieModule.areCookiesEnabled.mockReturnValue(true)
+  cookieModule.readCookie.mockReturnValue(null)
+  cookieModule.trimRecentToFit.mockImplementation((entries) => entries)
+>>>>>>> 286b750 (Checkpointing Phase 7 build.)
 })
 
 afterEach(() => {
@@ -304,7 +341,11 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
     })
   })
 
+<<<<<<< HEAD
   it('clicking Advanced Search opens the modal', () => {
+=======
+  it('clicking Advanced Search opens the modal', async () => {
+>>>>>>> 286b750 (Checkpointing Phase 7 build.)
     render(
       <MemoryRouter>
         <Home />
@@ -312,30 +353,122 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
     )
     expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
     fireEvent.click(screen.getByTestId('home-advanced-search-link'))
+<<<<<<< HEAD
     expect(screen.getByTestId('advanced-search-modal')).toBeInTheDocument()
   })
 
   it('modal close button closes the modal', () => {
+=======
+    expect(await screen.findByTestId('advanced-search-modal')).toBeInTheDocument()
+  })
+
+  it('modal close button closes the modal', async () => {
+>>>>>>> 286b750 (Checkpointing Phase 7 build.)
     render(
       <MemoryRouter>
         <Home />
       </MemoryRouter>
     )
     fireEvent.click(screen.getByTestId('home-advanced-search-link'))
+<<<<<<< HEAD
     expect(screen.getByTestId('advanced-search-modal')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('modal-close'))
     expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
   })
 
   it('applying filters in modal stores them (modal closes)', () => {
+=======
+    await screen.findByTestId('advanced-search-modal')
+    fireEvent.click(screen.getByTestId('modal-close'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
+    })
+  })
+
+  it('applying filters in modal stores them (modal closes)', async () => {
+>>>>>>> 286b750 (Checkpointing Phase 7 build.)
     render(
       <MemoryRouter>
         <Home />
       </MemoryRouter>
     )
     fireEvent.click(screen.getByTestId('home-advanced-search-link'))
+<<<<<<< HEAD
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
     expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
+=======
+    await screen.findByTestId('source-checkbox-CA')
+    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    fireEvent.click(screen.getByTestId('modal-apply'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
+    })
+  })
+
+  it('applied filters are carried into the subsequent search navigation', async () => {
+    render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/search" element={<NavStateCapture />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    // Open modal, uncheck CA so only LS + RS remain, then Apply.
+    fireEvent.click(screen.getByTestId('home-advanced-search-link'))
+    await screen.findByTestId('source-checkbox-CA')
+    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    fireEvent.click(screen.getByTestId('modal-apply'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
+    })
+
+    // Submit a valid query; navigation must carry the applied filter state.
+    fireEvent.change(screen.getByTestId('home-search-input'), {
+      target: { value: 'fundamental rights' },
+    })
+    fireEvent.click(screen.getByTestId('home-search-submit'))
+
+    const captured = await screen.findByTestId('nav-state')
+    const navState = JSON.parse(captured.textContent || 'null')
+    expect(navState).not.toBeNull()
+    expect(navState.filters).toBeDefined()
+    expect([...navState.filters.sources].sort()).toEqual(['LS', 'RS'])
+    expect(navState.filters.sources).not.toContain('CA')
+  })
+})
+
+describe('Home — F08 Search History wiring', () => {
+  it('submitting a valid query auto-records it to recent history with 30-day cookie expiry', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'unavailable' }),
+    })
+    render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/search" element={<div data-testid="results-page" />} />
+        </Routes>
+      </MemoryRouter>
+    )
+    fireEvent.change(screen.getByTestId('home-search-input'), {
+      target: { value: 'fundamental rights' },
+    })
+    fireEvent.click(screen.getByTestId('home-search-submit'))
+    // recordSearch is wired into onSubmit; writeCookie must be called for ss_recent
+    // with the submitted query and the 30-day expiry option (F08 cookie lifetime contract)
+    await waitFor(() => {
+      expect(cookieModule.writeCookie).toHaveBeenCalledWith(
+        'ss_recent',
+        expect.arrayContaining([
+          expect.objectContaining({ query: 'fundamental rights' }),
+        ]),
+        { expires: 30 }
+      )
+    })
+>>>>>>> 286b750 (Checkpointing Phase 7 build.)
   })
 })
