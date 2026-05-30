@@ -1,0 +1,39 @@
+
+> sansadsearch-ui@1.0.0 test
+> vitest --run
+
+
+ RUN  v1.6.1 /Users/kartiksingh/Documents/SansadSearch/app/ui
+
+ ✓ src/__tests__/filterState.test.js  (19 tests) 6ms
+stderr | src/__tests__/IndexingStatusPage.test.jsx > IndexingStatusPage — loaded data > renders the "Search Index Status" header
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ ✓ src/__tests__/Pagination.test.jsx  (18 tests) 75ms
+stderr | src/__tests__/Results.test.jsx > Results — loading and rendering > shows 5 skeleton cards while loading
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+stderr | src/__tests__/Home.test.jsx > Home — layout > renders wordmark, tagline, and search bar
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ ✓ src/__tests__/QACard.test.jsx  (20 tests) 57ms
+ ✓ src/__tests__/SpeechCard.test.jsx  (18 tests) 76ms
+ ✓ src/__tests__/Home.test.jsx  (13 tests) 104ms
+ ✓ src/__tests__/IndexingStatusPage.test.jsx  (11 tests) 142ms
+ ✓ src/__tests__/Results.test.jsx  (24 tests) 393ms
+ ✓ src/__tests__/constants.test.js  (10 tests) 6ms
+ ✓ src/__tests__/useSearch.test.js  (8 tests) 15ms
+ ✓ src/__tests__/sanitizeSnippet.test.js  (6 tests) 9ms
+ ✓ src/__tests__/expansionNotice.test.js  (6 tests) 2ms
+ ✓ src/__tests__/Toast.test.jsx  (5 tests) 41ms
+ ✓ src/__tests__/ResultCard.test.jsx  (3 tests) 20ms
+ ✓ src/__tests__/SkeletonCard.test.jsx  (2 tests) 13ms
+
+ Test Files  14 passed (14)
+      Tests  163 passed (163)
+   Start at  11:24:38
+   Duration  1.62s (transform 342ms, setup 581ms, collect 1.56s, tests 959ms, environment 4.38s, prepare 969ms)
+

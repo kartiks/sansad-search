@@ -1,0 +1,43 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.9.6, pytest-8.2.0, pluggy-1.6.0
+rootdir: /Users/kartiksingh/Documents/SansadSearch/app
+configfile: pyproject.toml
+plugins: anyio-4.12.1, asyncio-0.23.6
+asyncio: mode=auto
+collected 521 items
+
+tests/api/test_query_expander.py ....................................    [  6%]
+tests/api/test_search_route.py ......................................... [ 14%]
+...........                                                              [ 16%]
+tests/api/test_search_service.py ....................................... [ 24%]
+..............                                                           [ 27%]
+tests/api/test_status_route.py ...............                           [ 29%]
+tests/canonical/test_names.py ...............................            [ 35%]
+tests/canonical/test_sessions.py ...................                     [ 39%]
+tests/parsers/test_html_parser.py ..............................         [ 45%]
+tests/parsers/test_pdf_parser.py ...................                     [ 48%]
+tests/segmenters/test_qa_segmenter.py .....................              [ 52%]
+tests/segmenters/test_speech_segmenter.py .............................. [ 58%]
+...........                                                              [ 60%]
+tests/sources/test_ca.py .........                                       [ 62%]
+tests/sources/test_http.py .............                                 [ 65%]
+tests/sources/test_ls_rs.py ..................                           [ 68%]
+tests/test_checkpoint_store.py ..............                            [ 71%]
+tests/test_indexer.py .............................                      [ 76%]
+tests/test_ingest_main.py ........................                       [ 81%]
+tests/test_schema.py ..........s                                         [ 83%]
+tests/test_setup_meilisearch.py .......................                  [ 87%]
+tests/test_synonyms.py ................................................. [ 97%]
+..............                                                           [100%]
+
+=============================== warnings summary ===============================
+../../../Library/Python/3.9/lib/python/site-packages/starlette/formparsers.py:12
+  /Users/kartiksingh/Library/Python/3.9/lib/python/site-packages/starlette/formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+../../../Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35
+  /Users/kartiksingh/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================= 520 passed, 1 skipped, 2 warnings in 17.73s ==================
