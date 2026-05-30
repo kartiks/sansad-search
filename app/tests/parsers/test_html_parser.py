@@ -84,7 +84,7 @@ class TestParseHtml:
 
     def test_invalid_source_raises(self):
         with pytest.raises(ValueError, match="Invalid source"):
-            parse_html("<html></html>", "CA")
+            parse_html("<html></html>", "XX")
 
     def test_extracts_date_from_title(self):
         html = _load("debate_ls.html")
@@ -147,3 +147,21 @@ class TestParseHtml:
         assert isinstance(result, dict)
         assert result["source"] == "LS"
         assert result["date"] is None
+
+    def test_ca_source_accepted_no_error(self):
+        """parse_html must accept source='CA' without raising ValueError."""
+        html = _load("coi_day.html")
+        result = parse_html(html, "CA")
+        assert result["source"] == "CA"
+
+    def test_ca_session_name_is_none(self):
+        """CA records must have session_name=None per PRD spec."""
+        html = _load("coi_day.html")
+        result = parse_html(html, "CA")
+        assert result["session_name"] is None
+
+    def test_ca_session_number_is_none(self):
+        """CA records must have session_number=None per PRD spec."""
+        html = _load("coi_day.html")
+        result = parse_html(html, "CA")
+        assert result["session_number"] is None

@@ -9,7 +9,6 @@ Three helpers cover the three discovery patterns used across all corpora:
 from __future__ import annotations
 
 import logging
-import re
 from typing import Callable
 from urllib.parse import urljoin, urlparse
 
@@ -19,28 +18,6 @@ from bs4 import BeautifulSoup
 from ingest.sources._http import fetch_with_retry
 
 logger = logging.getLogger(__name__)
-
-# Matches ISO dates (YYYY-MM-DD) at the start of a cell's text content
-_DATE_CELL_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
-
-
-def _extract_row_date(tag) -> str | None:
-    """Return the ISO date from the table row that contains *tag*, or None.
-
-    DSpace browse rows follow:  <td><a href="/handle/...">Title</a></td>
-                                <td>YYYY-MM-DD</td>
-    Walks up to the parent <tr> and scans sibling <td> cells for an ISO date.
-    Returns None (fail-safe: caller should include the item) if no date found.
-    """
-    row = tag.find_parent("tr")
-    if row is None:
-        return None
-    for cell in row.find_all("td"):
-        text = cell.get_text(strip=True)
-        m = _DATE_CELL_RE.match(text)
-        if m:
-            return m.group(1)
-    return None
 
 
 async def crawl_html_listing(
@@ -128,24 +105,15 @@ async def paginate_dspace_browse(
         parsed = urlparse(browse_base_url)
         base = f"{parsed.scheme}://{parsed.netloc}"
 
-        # found_on_page tracks ALL items for the pagination-stop criterion;
-        # accepted_on_page is the date-filtered subset added to results.
         found_on_page: list[str] = []
-        accepted_on_page: list[str] = []
         for tag in soup.find_all("a", href=True):
             href = tag["href"]
             if "/handle/" in href:
                 absolute = urljoin(base, href)
                 if absolute not in item_urls and absolute not in found_on_page:
                     found_on_page.append(absolute)
-                    if date_from is not None:
-                        row_date = _extract_row_date(tag)
-                        # Fail-safe: include when date is absent or unparseable.
-                        if row_date is not None and row_date < date_from:
-                            continue  # pre-scope item; count for pagination but skip
-                    accepted_on_page.append(absolute)
 
-        item_urls.extend(accepted_on_page)
+        item_urls.extend(found_on_page)
 
         if len(found_on_page) < rpp:
             break

@@ -1,9 +1,11 @@
 """
-Lok Sabha source: discovers and fetches LS parliamentary records from 2014-01-01.
+Lok Sabha ingestion.
 
-URL discovery: fetches the LS business index page and extracts document links.
-HTML format is preferred over PDF when both are available for the same sitting.
-Only records dated 2014-01-01 or later are in scope.
+Provides two components:
+  - LSSource  — legacy Phase 1-2 fetcher (HTML/PDF from sansad.in index page).
+                Kept for backward compatibility; superseded by LSOrchestrator.
+  - LSOrchestrator — Phase 8+ orchestrator using the multi-provider chain
+                     [InternetArchiveProvider, EparlibDspaceProvider].
 """
 from __future__ import annotations
 
@@ -16,11 +18,22 @@ from typing import AsyncGenerator, Optional, Union
 import httpx
 from bs4 import BeautifulSoup
 
+from ingest.canonical.names import canonicalize_name
+from ingest.canonical.sessions import canonicalize_session
+from ingest.checkpoints.store import CheckpointStore
+from ingest.indexer import Indexer
+from ingest.parsers.ia_text_parser import parse_ia_text
+from ingest.parsers.pdf_parser import parse_pdf
+from ingest.segmenters.qa import segment_qa
+from ingest.segmenters.speech import segment_speeches
 from ingest.sources._http import (
     DEFAULT_RATE_DELAY,
     RobotsChecker,
     fetch_with_retry,
 )
+from ingest.sources._provider import Provider
+from ingest.sources.providers.eparlib_dspace import EparlibDspaceProvider
+from ingest.sources.providers.internet_archive import InternetArchiveProvider
 
 logger = logging.getLogger(__name__)
 
@@ -174,3 +187,145 @@ class LSSource:
 
             if self.rate_delay > 0:
                 await asyncio.sleep(self.rate_delay)
+
+
+# ── Phase 8+ Orchestrator ─────────────────────────────────────────────────────
+
+
+class LSOrchestrator:
+    """
+    LS corpus orchestrator — provider chain: [InternetArchiveProvider, EparlibDspaceProvider].
+
+    Iterates providers in order. For each provider:
+      - discover() → list[DocumentRef]
+      - For each DocumentRef: checkpoint check → fetch → parse → segment → index
+
+    Document-level dedup via canonical_doc_id (= DSpace handle number N) shared
+    across both providers ensures each document is fetched and parsed once even
+    when it appears in both IA and DSpace.
+    """
+
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        checkpoint: CheckpointStore,
+        indexer: Indexer,
+        names_dict: dict[str, str] | None = None,
+        rate_delay: float = DEFAULT_RATE_DELAY,
+        providers: Optional[list[Provider]] = None,
+    ) -> None:
+        self._client = client
+        self._checkpoint = checkpoint
+        self._indexer = indexer
+        self._names_dict = names_dict or {}
+        self._rate_delay = rate_delay
+        self._providers: list[Provider] = providers or [
+            InternetArchiveProvider(client, corpus="LS", rate_delay=rate_delay),
+            EparlibDspaceProvider(client, rate_delay=rate_delay),
+        ]
+
+    async def run(self) -> dict[str, int]:
+        """
+        Run LS ingestion across the provider chain.
+
+        Returns stats: indexed, skipped, errors.
+        """
+        stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
+
+        for provider in self._providers:
+            doc_refs = await provider.discover()
+            logger.info(
+                "ls_orchestrator: provider=%s discovered %d documents",
+                provider.__class__.__name__,
+                len(doc_refs),
+            )
+
+            for doc_ref in doc_refs:
+                if self._checkpoint.is_document_processed(doc_ref.canonical_doc_id):
+                    logger.debug(
+                        "ls_orchestrator: already processed doc_id=%s; skipping",
+                        doc_ref.canonical_doc_id,
+                    )
+                    stats["skipped"] += 1
+                    continue
+
+                content = await provider.fetch(doc_ref)
+                if content is None:
+                    logger.warning(
+                        "ls_orchestrator: fetch failed for %s; skipping",
+                        doc_ref.canonical_doc_id,
+                    )
+                    stats["errors"] += 1
+                    continue
+
+                raw_record = self._parse(content, doc_ref)
+                if raw_record is None:
+                    stats["errors"] += 1
+                    continue
+
+                records = self._segment(raw_record)
+                for record in records:
+                    if record.get("record_type") == "speech":
+                        canon_name, unresolved = canonicalize_name(
+                            record.get("speaker_name"), self._names_dict
+                        )
+                        record["speaker_name"] = canon_name
+                        record["speaker_name_unresolved"] = unresolved
+                    record["session_name"] = canonicalize_session(
+                        record.get("session_name"), source="LS"
+                    )
+
+                    if self._indexer.index_record(record, self._checkpoint):
+                        stats["indexed"] += 1
+
+                self._checkpoint.mark_document_processed(
+                    doc_ref.canonical_doc_id,
+                    corpus="LS",
+                    provider=doc_ref.provider,
+                    fetch_url=doc_ref.fetch_url,
+                )
+
+        logger.info(
+            "ls_orchestrator: done — indexed=%d skipped=%d errors=%d",
+            stats["indexed"],
+            stats["skipped"],
+            stats["errors"],
+        )
+        return stats
+
+    def _parse(self, content: str | bytes, doc_ref) -> dict | None:
+        """Dispatch to the correct parser based on doc_ref.format."""
+        try:
+            if doc_ref.format == "ia_text":
+                return parse_ia_text(content, doc_ref.metadata, source="LS")
+            if doc_ref.format == "pdf":
+                return parse_pdf(
+                    content,
+                    source="LS",
+                    source_url=doc_ref.citation_url,
+                )
+            logger.warning(
+                "ls_orchestrator: unrecognised format %r for %s; skipping",
+                doc_ref.format,
+                doc_ref.canonical_doc_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "ls_orchestrator: parse error for %s: %s; skipping",
+                doc_ref.canonical_doc_id,
+                exc,
+            )
+        return None
+
+    def _segment(self, raw_record: dict) -> list[dict]:
+        """Segment a raw record into speech + Q+A units."""
+        pt = raw_record.get("proceeding_type")
+        if pt in ("starred_question", "unstarred_question"):
+            records = segment_qa(raw_record, source="LS", proceeding_type=pt)
+            for r in records:
+                r["record_type"] = "qa"
+        else:
+            records = segment_speeches(raw_record, source="LS")
+            for r in records:
+                r["record_type"] = "speech"
+        return records

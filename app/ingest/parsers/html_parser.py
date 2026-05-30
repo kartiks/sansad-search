@@ -135,8 +135,8 @@ def parse_html(
     Returns:
         A raw record dict. The segmenters consume raw_text and raw_html.
     """
-    if source not in ("LS", "RS"):
-        raise ValueError(f"Invalid source: {source!r}. Must be 'LS' or 'RS'.")
+    if source not in ("CA", "LS", "RS"):
+        raise ValueError(f"Invalid source: {source!r}. Must be 'CA', 'LS', or 'RS'.")
 
     soup = BeautifulSoup(html, "lxml")
 
@@ -202,6 +202,11 @@ def parse_html(
     lines = main.get_text(separator="\n").splitlines()
     raw_text = "\n".join(re.sub(r"[ \t]+", " ", ln).strip() for ln in lines)
     raw_html = str(main)
+
+    # CA records have no session names or session numbers per the PRD spec.
+    if source == "CA":
+        session_name = None
+        session_number = None
 
     return {
         "source": source,
