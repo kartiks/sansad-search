@@ -26,8 +26,9 @@ from ingest.sources._provider import DocumentRef, Provider
 logger = logging.getLogger(__name__)
 
 COI_BASE = "https://www.constitutionofindia.net"
-COI_INDEX_URL = f"{COI_BASE}/historical-constitution/debates"
-
+#COI_INDEX_URL = f"{COI_BASE}/historical-constitution/debates"
+COI_INDEX_URL = f"{COI_BASE}/constitution-assembly-debates/"
+COI_DAY_URL_PREFIX = f"{COI_BASE}/debates/"
 
 def _default_volume_filter(url: str) -> bool:
     """Return True for volume-level pages on constitutionofindia.net."""
@@ -40,11 +41,13 @@ def _default_day_filter(url: str) -> bool:
         return False
     # A day URL has more path depth than a volume URL.
     # Volume URLs end with /volume-N/ or /volume-N; day URLs have an extra segment.
-    path = url.replace(COI_BASE, "").strip("/")
+    # path = url.replace(COI_BASE, "").strip("/")
+    path = url.replace(COI_DAY_URL_PREFIX, "").strip("/")
     parts = [p for p in path.split("/") if p]
     # Must be at least 3 levels deep (e.g. historical-constitution/debates/volume-1/1946-12-09)
     # and the last segment must not be a volume indicator
-    return len(parts) >= 3 and "volume" not in parts[-1].lower()
+    #return len(parts) >= 3 and "volume" not in parts[-1].lower()
+    return len(parts) == 1 and "volume" not in parts[-1].lower()
 
 
 class CoidHtmlProvider(Provider):
