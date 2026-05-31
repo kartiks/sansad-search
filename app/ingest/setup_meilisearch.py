@@ -36,7 +36,7 @@ FILTERABLE_ATTRIBUTES = [
 
 SORTABLE_ATTRIBUTES = ["date", "sequence_within_sitting"]
 
-RANKING_RULES = ["words", "typos", "proximity", "attribute", "sort", "exactness"]
+RANKING_RULES = ["words", "typo", "proximity", "attribute", "sort", "exactness"]
 
 TYPO_TOLERANCE = {
     "enabled": True,
