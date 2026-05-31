@@ -1,7 +1,7 @@
 # Deployment — SansadSearch
 
-**PRD version:** v1.2
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency)
+**PRD version:** v1.3
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure)
 
 ---
 

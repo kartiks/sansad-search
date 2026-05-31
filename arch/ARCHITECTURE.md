@@ -1,7 +1,7 @@
 # Architecture — SansadSearch
 
-**PRD version:** v1.2
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only)
+**PRD version:** v1.3
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified)
 
 ---
 
@@ -85,7 +85,11 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
                                  # → per-volume → per-day discovery; HTML main-content fetch
         internet_archive.py      # archive.org (LS/RS, preferred bulk): advancedsearch enumerate
                                  # eparlib.nic.in.{N}; metadata JSON; _djvu.txt download; maps
-                                 # eparlib_* custom fields; citation_url = eparlib_document_url
+                                 # eparlib_* custom fields. Dual-corpus: single provider serves
+                                 # both LS and RS via a `corpus` constructor param; citation_url
+                                 # dispatches on corpus = eparlib_document_url (LS) |
+                                 # rsdebate.nic.in URL (RS, derived from handle N) |
+                                 # null (RS no-derivable-handle edge case, PRD v1.3)
         eparlib_dspace.py        # eparlib.sansad.in (LS, handle /7; IA-missing fallback):
                                  # DSpace browse + item-page bitstream URL resolution
                                  # (never constructs filenames)
@@ -144,12 +148,8 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
         expansionNotice.js       # Parse expansion_notice array from API response
         constants.js             # Proceeding type labels, source labels
       main.jsx                   # SPA entry point; mounts React root; defines BrowserRouter
-<<<<<<< HEAD
-                                 # routes: / → Home, /search → Results, * → redirect /
-=======
                                  # routes: / → Home, /search → Results,
                                  # /index-status → IndexingStatusPage, * → redirect /
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
       index.css                  # CSS custom properties (design tokens: colours, fonts,
                                  # shadows); global base styles (box-sizing, body, button)
     public/
@@ -216,7 +216,11 @@ No custom scoring functions are implemented. This approximation is acceptable fo
 
 **Cross-source document identity.** The DSpace handle number `N` is the canonical document identity for LS/RS. The Internet Archive identifier `eparlib.nic.in.{N}` maps to DSpace handle `123456789/{N}` — `N` is the cross-provider join key. The checkpoint store dedupes at the **document level** on this canonical id so a document available from more than one provider is fetched and parsed once; the record-level `dedup_key` (DATA-MODELS §1.4) remains the final guard against duplicate records.
 
-**Internet Archive pre-OCR text path.** LS/RS bulk ingestion prefers the IA mirror, which serves `{identifier}_djvu.txt` (OCR already extracted by IA) plus a metadata JSON carrying `eparlib_*` fields (`eparlib_title`, `eparlib_date`, `eparlib_lok_sabha_number`, `eparlib_session_number`, `eparlib_document_url`). `ia_text_parser.py` consumes the text and maps the metadata. The pipeline runs no OCR of its own. `source_url` is set to the canonical `eparlib_document_url`, never the archive.org URL (Non-Negotiable #9). Direct DSpace PDF (embedded-text extraction via PyMuPDF, no OCR) is the fallback for items absent from the mirror; a fallback PDF with no text layer is logged and skipped.
+**Internet Archive pre-OCR text path.** LS/RS bulk ingestion prefers the IA mirror, which serves `{identifier}_djvu.txt` (OCR already extracted by IA) plus a metadata JSON carrying `eparlib_*` fields (`eparlib_title`, `eparlib_date`, `eparlib_lok_sabha_number`, `eparlib_session_number`, `eparlib_document_url`). `ia_text_parser.py` consumes the text and maps the metadata. The pipeline runs no OCR of its own. A **single `InternetArchiveProvider` serves both corpora** (dual-corpus, selected by a `corpus` constructor parameter); citation derivation dispatches on the corpus:
+- **LS:** `source_url` is set to the canonical `eparlib_document_url`.
+- **RS:** `source_url` is set to the `rsdebate.nic.in` item URL derived from the DSpace handle `N` (the IA identifier `eparlib.nic.in.{N}` ↔ handle `123456789/{N}`); when no handle is derivable from the IA record, `source_url` is null, a warning is logged, and the item is still ingested (PRD v1.3 no-handle edge case).
+
+In neither case is the archive.org mirror URL ever used as `source_url` (Non-Negotiable #9). Direct DSpace PDF (embedded-text extraction via PyMuPDF, no OCR) is the fallback for items absent from the mirror; a fallback PDF with no text layer is logged and skipped.
 
 **DSpace bitstream resolution.** DSpace PDF URLs (eparlib.sansad.in, rsdebate.nic.in) are always resolved by reading the real bitstream URL from the item page/metadata. Bitstream filenames are **never constructed** — the convention is inconsistent across years (e.g. `lsd_08_09_04-12-1987.pdf`, `lsd_10_V_01_12_1992.pdf`, `lsd_08_1_30-01-1985.pdf`).
 
@@ -265,4 +269,4 @@ Decisions that must not be changed without explicit user approval. Changes to an
 
 8. **React SPA — no SSR.** The frontend is a static Vite build served from Vercel. No server-side rendering.
 
-9. **IA-sourced records cite the canonical record, not the mirror.** For LS/RS records ingested via the Internet Archive, `source_url` is set to `eparlib_document_url` (the official parliamentary-library URL), never the archive.org URL. The mirror is a fetch path, not a citation.
+9. **IA-sourced records cite the canonical record, not the mirror.** For LS records ingested via the Internet Archive, `source_url` is set to `eparlib_document_url` (the official parliamentary-library URL). For RS records ingested via the Internet Archive, `source_url` is set to the `rsdebate.nic.in` item URL derived from the DSpace handle `N`; when no handle is derivable, `source_url` is null (PRD v1.3 no-handle edge case). The archive.org mirror URL is never cited in either case — the mirror is a fetch path, not a citation.

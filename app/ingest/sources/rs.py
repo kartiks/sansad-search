@@ -1,7 +1,13 @@
 """
-Rajya Sabha source: discovers and fetches RS parliamentary records from 2014-01-01.
+Rajya Sabha ingestion.
 
-Mirror of ls.py but for rajyasabha.gov.in.
+Provides two components:
+  - RSSource  — legacy Phase 1-2 fetcher (HTML/PDF from rajyasabha.gov.in index
+                page). Kept for backward compatibility; superseded by
+                RSOrchestrator.
+  - RSOrchestrator — Phase 9 orchestrator using the multi-provider chain
+                     [SansadRsHtmlProvider, InternetArchiveProvider(RS),
+                     RsdebateDspaceProvider].
 """
 from __future__ import annotations
 
@@ -14,11 +20,24 @@ from typing import AsyncGenerator, Optional, Union
 import httpx
 from bs4 import BeautifulSoup
 
+from ingest.canonical.names import canonicalize_name
+from ingest.canonical.sessions import canonicalize_session
+from ingest.checkpoints.store import CheckpointStore
+from ingest.indexer import Indexer
+from ingest.parsers.html_parser import parse_html
+from ingest.parsers.ia_text_parser import parse_ia_text
+from ingest.parsers.pdf_parser import parse_pdf
+from ingest.segmenters.qa import segment_qa
+from ingest.segmenters.speech import segment_speeches
 from ingest.sources._http import (
     DEFAULT_RATE_DELAY,
     RobotsChecker,
     fetch_with_retry,
 )
+from ingest.sources._provider import DocumentRef, Provider
+from ingest.sources.providers.internet_archive import InternetArchiveProvider
+from ingest.sources.providers.rsdebate_dspace import RsdebateDspaceProvider
+from ingest.sources.providers.sansad_rs_html import SansadRsHtmlProvider
 
 logger = logging.getLogger(__name__)
 
@@ -162,3 +181,176 @@ class RSSource:
 
             if self.rate_delay > 0:
                 await asyncio.sleep(self.rate_delay)
+
+
+# ── Phase 9 Orchestrator ──────────────────────────────────────────────────────
+
+
+class RSOrchestrator:
+    """
+    RS corpus orchestrator — provider chain:
+    [SansadRsHtmlProvider, InternetArchiveProvider(RS), RsdebateDspaceProvider].
+
+    Iterates providers in order. For each provider:
+      - discover() → list[DocumentRef]
+      - For each DocumentRef: checkpoint check → fetch → parse → segment → index
+
+    Document-level dedup via canonical_doc_id (= DSpace handle number N for IA
+    and rsdebate; sitting page URL for sansad.in/rs) ensures each document is
+    fetched and parsed once. Because the recent sansad.in/rs sittings and the
+    older IA/DSpace items use different id schemes, any true cross-source overlap
+    is caught by the record-level dedup_key in the indexer.
+
+    Canonical RS citation rule (PRD v1.3): source_url on every indexed record is
+    set to doc_ref.citation_url. For RS-via-IA this is the rsdebate.nic.in URL
+    derived from the DSpace handle (never archive.org — Non-Negotiable #9), or
+    None when no handle is derivable (the v1.3 no-handle edge case). This single
+    assignment overrides whatever source_url the parser produced.
+    """
+
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        checkpoint: CheckpointStore,
+        indexer: Indexer,
+        names_dict: dict[str, str] | None = None,
+        rate_delay: float = DEFAULT_RATE_DELAY,
+        providers: Optional[list[Provider]] = None,
+    ) -> None:
+        self._client = client
+        self._checkpoint = checkpoint
+        self._indexer = indexer
+        self._names_dict = names_dict or {}
+        self._rate_delay = rate_delay
+        self._providers: list[Provider] = providers or [
+            SansadRsHtmlProvider(client, rate_delay=rate_delay),
+            InternetArchiveProvider(client, corpus="RS", rate_delay=rate_delay),
+            RsdebateDspaceProvider(client, rate_delay=rate_delay),
+        ]
+
+    async def run(self) -> dict[str, int]:
+        """
+        Run RS ingestion across the provider chain.
+
+        Returns stats: indexed, skipped, errors.
+        """
+        stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
+
+        for provider in self._providers:
+            doc_refs = await provider.discover()
+            logger.info(
+                "rs_orchestrator: provider=%s discovered %d documents",
+                provider.__class__.__name__,
+                len(doc_refs),
+            )
+
+            for doc_ref in doc_refs:
+                if self._checkpoint.is_document_processed(doc_ref.canonical_doc_id):
+                    logger.debug(
+                        "rs_orchestrator: already processed doc_id=%s; skipping",
+                        doc_ref.canonical_doc_id,
+                    )
+                    stats["skipped"] += 1
+                    continue
+
+                content = await provider.fetch(doc_ref)
+                if content is None:
+                    logger.warning(
+                        "rs_orchestrator: fetch failed for %s; skipping",
+                        doc_ref.canonical_doc_id,
+                    )
+                    stats["errors"] += 1
+                    continue
+
+                raw_record = self._parse(content, doc_ref)
+                if raw_record is None:
+                    stats["errors"] += 1
+                    continue
+
+                records = self._segment(raw_record)
+                for record in records:
+                    if record.get("record_type") == "speech":
+                        canon_name, unresolved = canonicalize_name(
+                            record.get("speaker_name"), self._names_dict
+                        )
+                        record["speaker_name"] = canon_name
+                        record["speaker_name_unresolved"] = unresolved
+                    record["session_name"] = canonicalize_session(
+                        record.get("session_name"), source="RS"
+                    )
+
+                    if self._indexer.index_record(record, self._checkpoint):
+                        stats["indexed"] += 1
+
+                self._checkpoint.mark_document_processed(
+                    doc_ref.canonical_doc_id,
+                    corpus="RS",
+                    provider=doc_ref.provider,
+                    fetch_url=doc_ref.fetch_url,
+                )
+
+        logger.info(
+            "rs_orchestrator: done — indexed=%d skipped=%d errors=%d",
+            stats["indexed"],
+            stats["skipped"],
+            stats["errors"],
+        )
+        return stats
+
+    def _parse(self, content: str | bytes, doc_ref: DocumentRef) -> dict | None:
+        """Dispatch to the correct parser based on doc_ref.format.
+
+        After parsing, source_url is overridden with doc_ref.citation_url to
+        enforce the RS canonical-citation rule (PRD v1.3) uniformly across all
+        providers: rsdebate.nic.in for IA, the sansad.in/rs page URL for HTML,
+        the rsdebate item URL for direct DSpace, or None when no handle is
+        derivable. The archive.org mirror URL is never cited (Non-Negotiable #9).
+        """
+        raw_record: dict | None = None
+        try:
+            if doc_ref.format == "html":
+                raw_record = parse_html(
+                    content,
+                    source="RS",
+                    source_url=doc_ref.citation_url,
+                )
+            elif doc_ref.format == "ia_text":
+                raw_record = parse_ia_text(content, doc_ref.metadata, source="RS")
+            elif doc_ref.format == "pdf":
+                raw_record = parse_pdf(
+                    content,
+                    source="RS",
+                    source_url=doc_ref.citation_url,
+                )
+            else:
+                logger.warning(
+                    "rs_orchestrator: unrecognised format %r for %s; skipping",
+                    doc_ref.format,
+                    doc_ref.canonical_doc_id,
+                )
+                return None
+        except Exception as exc:
+            logger.error(
+                "rs_orchestrator: parse error for %s: %s; skipping",
+                doc_ref.canonical_doc_id,
+                exc,
+            )
+            return None
+
+        if raw_record is not None:
+            # Enforce the RS canonical-citation rule (PRD v1.3) — authoritative.
+            raw_record["source_url"] = doc_ref.citation_url
+        return raw_record
+
+    def _segment(self, raw_record: dict) -> list[dict]:
+        """Segment a raw record into speech + Q+A units."""
+        pt = raw_record.get("proceeding_type")
+        if pt in ("starred_question", "unstarred_question"):
+            records = segment_qa(raw_record, source="RS", proceeding_type=pt)
+            for r in records:
+                r["record_type"] = "qa"
+        else:
+            records = segment_speeches(raw_record, source="RS")
+            for r in records:
+                r["record_type"] = "speech"
+        return records

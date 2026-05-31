@@ -35,6 +35,12 @@ _IDENTIFIER_RE = re.compile(r"eparlib\.nic\.in\.(\d+)$", re.IGNORECASE)
 _IA_METADATA_BASE = "https://archive.org/metadata"
 _IA_DJVU_PATTERN = "https://archive.org/download/{id}/{id}_djvu.txt"
 
+# rsdebate.nic.in is the canonical RS citation host (DSpace). The handle number N
+# extracted from the IA identifier is the same DSpace handle used on rsdebate.
+# Non-Negotiable #9: this URL is cited instead of the archive.org mirror.
+RSDEBATE_BASE = "https://rsdebate.nic.in"
+RSDEBATE_ITEM_PATTERN = f"{RSDEBATE_BASE}/handle/123456789/{{handle}}"
+
 # Fields to request from IA advancedsearch (used to build the initial identifier list)
 _IA_SEARCH_FIELDS = ["identifier"]
 
@@ -109,11 +115,20 @@ class InternetArchiveProvider(Provider):
 
             handle_n = _extract_handle_number(str(identifier))
             if handle_n is None:
+                if self._corpus == "LS":
+                    logger.warning(
+                        "IA identifier %r does not match eparlib.nic.in.{N}; skipping",
+                        identifier,
+                    )
+                    continue
+                # RS: retain the item but no DSpace handle is derivable, so no
+                # canonical rsdebate.nic.in citation can be built (PRD v1.3 edge
+                # case). citation_url=None; the archive.org URL is never used.
                 logger.warning(
-                    "IA identifier %r does not match eparlib.nic.in.{N}; skipping",
+                    "RS IA identifier %r has no derivable DSpace handle; "
+                    "citation_url set to null (PRD v1.3 edge case)",
                     identifier,
                 )
-                continue
 
             meta = await self._fetch_ia_metadata(str(identifier))
             if meta is None:
@@ -121,6 +136,10 @@ class InternetArchiveProvider(Provider):
 
             citation_url = self._build_citation_url(meta, handle_n)
             djvu_url = _IA_DJVU_PATTERN.format(id=identifier)
+            # When no DSpace handle is derivable (RS edge case), fall back to the
+            # IA identifier as the checkpoint/dedup key so the item is still
+            # tracked for resumability.
+            canonical_id = handle_n if handle_n is not None else str(identifier)
 
             doc_refs.append(
                 DocumentRef(
@@ -128,7 +147,7 @@ class InternetArchiveProvider(Provider):
                     provider="internet_archive",
                     format="ia_text",
                     fetch_url=djvu_url,
-                    canonical_doc_id=handle_n,
+                    canonical_doc_id=canonical_id,
                     citation_url=citation_url,
                     metadata={
                         "identifier": str(identifier),
@@ -147,17 +166,23 @@ class InternetArchiveProvider(Provider):
         )
         return doc_refs
 
-    def _build_citation_url(self, meta: dict[str, Any], handle_n: str) -> str | None:
+    def _build_citation_url(
+        self, meta: dict[str, Any], handle_n: str | None
+    ) -> str | None:
         """
         Return the canonical citation URL. Never returns an archive.org URL.
 
         LS: eparlib_document_url from metadata.
-        RS: override in subclass or Phase 9 extension.
+        RS: rsdebate.nic.in item URL derived from the DSpace handle number N
+            (PRD v1.3). When N is not derivable, returns None — the archive.org
+            mirror URL is never substituted (Non-Negotiable #9).
         """
         if self._corpus == "LS":
             return _get_meta(meta, "eparlib_document_url")
-        # RS extension implemented in Phase 9
-        return None
+        # RS (PRD v1.3): canonical citation is rsdebate.nic.in, derived from handle N.
+        if handle_n is None:
+            return None
+        return RSDEBATE_ITEM_PATTERN.format(handle=handle_n)
 
     async def _fetch_ia_metadata(self, identifier: str) -> dict[str, Any] | None:
         """Fetch IA metadata JSON for one identifier. Returns the metadata sub-dict."""

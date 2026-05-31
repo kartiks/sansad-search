@@ -10,6 +10,8 @@ import pytest
 from ingest.sources._provider import DocumentRef
 from ingest.sources.providers.internet_archive import (
     InternetArchiveProvider,
+    RSDEBATE_BASE,
+    RSDEBATE_ITEM_PATTERN,
     _IA_DJVU_PATTERN,
     _extract_handle_number,
     _get_meta,
@@ -285,6 +287,94 @@ class TestInternetArchiveProviderDiscover:
 
         assert len(doc_refs) == 1
         assert doc_refs[0].canonical_doc_id == "99"
+
+
+# ── InternetArchiveProvider.discover() — RS corpus (Phase 9, PRD v1.3) ───────
+
+class TestInternetArchiveProviderDiscoverRS:
+    async def test_rs_citation_url_is_rsdebate_derived_from_handle(self):
+        """For RS, citation_url = rsdebate.nic.in URL derived from handle N (never archive.org)."""
+        search_resp_1 = _ia_search_response(["eparlib.nic.in.55501"])
+        # RS items have no eparlib_document_url; the URL is derived from handle N.
+        meta_resp = MagicMock(status_code=200)
+        meta_resp.json.return_value = {
+            "metadata": {
+                "identifier": "eparlib.nic.in.55501",
+                "eparlib_date": "2020-02-12",
+                "title": "Rajya Sabha Debates",
+            }
+        }
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [search_resp_1, meta_resp]
+
+        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
+            provider = InternetArchiveProvider(client, corpus="RS", rate_delay=0.0)
+            doc_refs = await provider.discover()
+
+        assert len(doc_refs) == 1
+        ref = doc_refs[0]
+        assert ref.corpus == "RS"
+        assert ref.citation_url == RSDEBATE_ITEM_PATTERN.format(handle="55501")
+        assert ref.citation_url == "https://rsdebate.nic.in/handle/123456789/55501"
+        assert RSDEBATE_BASE in ref.citation_url
+        assert "archive.org" not in ref.citation_url
+        assert ref.canonical_doc_id == "55501"
+
+    async def test_rs_no_derivable_handle_yields_null_citation_and_warns(self, caplog):
+        """PRD v1.3 edge case: RS IA item with no derivable handle → citation_url=None + warning, never archive.org."""
+        # Identifier does not match eparlib.nic.in.{N}, so no DSpace handle is derivable.
+        search_resp_1 = _ia_search_response(["rs_misc_item_no_handle"])
+        meta_resp = MagicMock(status_code=200)
+        meta_resp.json.return_value = {
+            "metadata": {
+                "identifier": "rs_misc_item_no_handle",
+                "eparlib_date": "2019-07-22",
+                "title": "Rajya Sabha Debates (untagged)",
+            }
+        }
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [search_resp_1, meta_resp]
+
+        import logging
+
+        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
+            with caplog.at_level(logging.WARNING):
+                provider = InternetArchiveProvider(client, corpus="RS", rate_delay=0.0)
+                doc_refs = await provider.discover()
+
+        # RS does NOT skip the item (unlike LS) — it is retained with no citation.
+        assert len(doc_refs) == 1
+        ref = doc_refs[0]
+        assert ref.citation_url is None
+        assert "no derivable DSpace handle" in caplog.text
+        # The item is still tracked via the IA identifier as canonical id.
+        assert ref.canonical_doc_id == "rs_misc_item_no_handle"
+
+    async def test_rs_unmatched_identifier_retained_ls_skipped(self):
+        """An identifier with no handle is retained for RS but skipped for LS — divergent behavior."""
+        search_resp = _ia_search_response(["weird_identifier_42"])
+        meta_resp = MagicMock(status_code=200)
+        meta_resp.json.return_value = {
+            "metadata": {"identifier": "weird_identifier_42", "title": "X"}
+        }
+
+        # RS run: retained
+        client_rs = AsyncMock(spec=httpx.AsyncClient)
+        client_rs.get.side_effect = [search_resp, meta_resp]
+        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
+            rs_refs = await InternetArchiveProvider(client_rs, corpus="RS", rate_delay=0.0).discover()
+
+        # LS run: skipped (metadata never fetched because identifier is skipped first)
+        search_resp_ls = _ia_search_response(["weird_identifier_42"])
+        client_ls = AsyncMock(spec=httpx.AsyncClient)
+        client_ls.get.side_effect = [search_resp_ls]
+        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
+            ls_refs = await InternetArchiveProvider(client_ls, corpus="LS", rate_delay=0.0).discover()
+
+        assert len(rs_refs) == 1
+        assert len(ls_refs) == 0
 
 
 # ── InternetArchiveProvider.fetch() ──────────────────────────────────────────

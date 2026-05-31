@@ -1,7 +1,7 @@
 # Data Models — SansadSearch
 
-**PRD version:** v1.2
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.)
+**PRD version:** v1.3
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable)
 
 ---
 
@@ -30,7 +30,7 @@ Primary canonical store for all speech-type records (debates, zero hour, calling
 | `is_translated` | BOOLEAN | NOT NULL DEFAULT FALSE | True if any portion is official English translation of Hindi |
 | `has_untranslated_content` | BOOLEAN | NOT NULL DEFAULT FALSE | True if Hindi portions could not be indexed |
 | `speaker_name_unresolved` | BOOLEAN | NOT NULL DEFAULT FALSE | True if speaker_name could not be matched to names_dict |
-| `source_url` | TEXT | NULL | Canonical citation URL: constitutionofindia.net day page (CA), `eparlib_document_url` (LS/RS via Internet Archive), or DSpace item URL (LS/RS direct). **Never an archive.org URL** (ARCHITECTURE.md Non-Negotiable #9) |
+| `source_url` | TEXT | NULL | Canonical citation URL: constitutionofindia.net day page (CA); `eparlib_document_url` for **LS** via Internet Archive; `rsdebate.nic.in` item URL derived from DSpace handle N for **RS** via Internet Archive (null when no handle is derivable — PRD v1.3 no-handle edge case); or DSpace item URL (LS/RS direct). **Never an archive.org URL** (ARCHITECTURE.md Non-Negotiable #9) |
 | `page_reference` | INTEGER | NULL | Page number in source PDF; NULL for HTML and for IA pre-OCR text records |
 | `volume` | INTEGER | NULL | CA volume number (1–12); NULL for LS/RS |
 | `dedup_key` | VARCHAR(500) | UNIQUE NOT NULL | Compound deduplication key (see Deduplication section) |
@@ -72,7 +72,7 @@ Primary canonical store for starred and unstarred question records.
 | `full_text_en` | TEXT | NULL | Full exchange text (main Q + answer + supplementaries for starred; Q + written answer for unstarred) |
 | `is_translated` | BOOLEAN | NOT NULL DEFAULT FALSE | True if any portion is translated from Hindi |
 | `has_untranslated_content` | BOOLEAN | NOT NULL DEFAULT FALSE | True if any portion could not be indexed |
-| `source_url` | TEXT | NULL | Canonical citation URL: `eparlib_document_url` (via Internet Archive) or DSpace item URL (direct); sansad.in/rs page URL for recent RS HTML. **Never an archive.org URL** (ARCHITECTURE.md Non-Negotiable #9) |
+| `source_url` | TEXT | NULL | Canonical citation URL: `eparlib_document_url` for **LS** via Internet Archive; `rsdebate.nic.in` item URL derived from DSpace handle N for **RS** via Internet Archive (null when no handle is derivable — PRD v1.3 no-handle edge case); DSpace item URL (LS/RS direct); sansad.in/rs page URL for recent RS HTML. **Never an archive.org URL** (ARCHITECTURE.md Non-Negotiable #9) |
 | `page_reference` | INTEGER | NULL | Page number in source PDF; NULL for HTML and for IA pre-OCR text records |
 | `dedup_key` | VARCHAR(500) | UNIQUE NOT NULL | Compound deduplication key |
 | `created_at` | TIMESTAMPTZ | DEFAULT NOW() | Ingestion timestamp |
