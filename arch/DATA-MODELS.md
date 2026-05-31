@@ -198,11 +198,11 @@ Fields excluded from Meilisearch (stored in PostgreSQL only): `page_reference`, 
 
 **rankingRules** (default order; no custom overrides):
 ```json
-["words", "typos", "proximity", "attribute", "sort", "exactness"]
+["words", "typo", "proximity", "attribute", "sort", "exactness"]
 ```
 
 `words` — records matching more original query terms rank higher.
-`typos` — fewer typo corrections needed = higher rank (handles spell-correction weight).
+`typo` — fewer typo corrections needed = higher rank (handles spell-correction weight).
 `attribute` — matches in earlier searchableAttributes (speaker, minister, subject) rank above full_text matches.
 `exactness` — exact-token matches rank above synonym-expanded matches.
 

@@ -213,15 +213,21 @@ class LSOrchestrator:
         names_dict: dict[str, str] | None = None,
         rate_delay: float = DEFAULT_RATE_DELAY,
         providers: Optional[list[Provider]] = None,
+        date_from: Optional[str] = None,
     ) -> None:
         self._client = client
         self._checkpoint = checkpoint
         self._indexer = indexer
         self._names_dict = names_dict or {}
         self._rate_delay = rate_delay
+        self._date_from = date_from
+        # date_from (ISO YYYY-MM-DD) overrides the providers' built-in scope.
+        # When None, each default provider keeps its own 2014-01-01 PRD-scope
+        # default. Injected providers are used as-is.
+        _df = {"date_from": date_from} if date_from is not None else {}
         self._providers: list[Provider] = providers or [
-            InternetArchiveProvider(client, corpus="LS", rate_delay=rate_delay),
-            EparlibDspaceProvider(client, rate_delay=rate_delay),
+            InternetArchiveProvider(client, corpus="LS", rate_delay=rate_delay, **_df),
+            EparlibDspaceProvider(client, rate_delay=rate_delay, **_df),
         ]
 
     async def run(self) -> dict[str, int]:
