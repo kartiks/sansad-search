@@ -1,7 +1,7 @@
 # Deployment — SansadSearch
 
 **PRD version:** v1.3
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure)
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks)
 
 ---
 
@@ -216,3 +216,60 @@ python -m ingest.setup_meilisearch
 # Run ingestion (CA only for development)
 python -m ingest.main --source ca
 ```
+
+---
+
+## 6. Operations
+
+### 6.1 Full clean reindex
+
+Use when PostgreSQL data is stale, corrupt, or incomplete — wipes all state and re-ingests from source.
+
+**Step 1 — Clear the ingestion checkpoint store**
+
+```bash
+rm app/data/ingestion_checkpoints.db
+```
+
+This SQLite file is local to the operator's machine. Deleting it forces the pipeline to treat every document as unseen.
+
+**Step 2 — Truncate PostgreSQL tables**
+
+```bash
+psql $DATABASE_URL -c "TRUNCATE TABLE speeches, qa_exchanges, index_status RESTART IDENTITY CASCADE;"
+```
+
+All three tables must be truncated together. `RESTART IDENTITY` resets primary-key sequences. `CASCADE` handles any foreign-key constraints.
+
+**Step 3 — Delete all documents from the Meilisearch index**
+
+```bash
+curl -X DELETE "$MEILISEARCH_URL/indexes/parliamentary_records/documents" \
+  -H "Authorization: Bearer $MEILISEARCH_MASTER_KEY"
+```
+
+This issues a Meilisearch task. The index itself (settings, synonyms, ranking rules) is preserved — only documents are deleted. Wait for the task to complete before starting ingestion; poll `$MEILISEARCH_URL/tasks/{taskUid}` or check the Meilisearch Cloud dashboard.
+
+**Step 4 — Run full ingestion**
+
+```bash
+cd app
+python -m ingest.main --source all
+```
+
+Ingests all corpora (CA, LS, RS) from source. Progress is logged to stdout; a fresh `ingestion_checkpoints.db` is created automatically. The run is resumable: if interrupted, re-run the same command to continue from the last checkpoint.
+
+---
+
+### 6.2 Meilisearch-only reindex
+
+Use when PostgreSQL data is intact but the Meilisearch index is stale, corrupt, or has been deleted (e.g. after a plan migration, index setting change, or accidental deletion). Does not re-scrape any source websites.
+
+```bash
+cd app
+python -m ingest.indexer --reindex-from-db
+```
+
+Reads all records from `speeches` and `qa_exchanges` in PostgreSQL and pushes them to Meilisearch in batches. Does not modify the checkpoint store or PostgreSQL data. See §3.6 for full details.
+
+If the Meilisearch index settings need to be re-applied first (e.g. after deleting the index entirely), run `python -m ingest.setup_meilisearch` before the reindex (§3.4).

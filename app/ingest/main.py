@@ -172,6 +172,9 @@ async def _async_main(args: argparse.Namespace) -> int:
                 for key in stats:
                     stats[key] += source_stats.get(key, 0)
 
+    # Flush any remaining buffered Meilisearch documents
+    indexer.flush()
+
     # Update index_status table
     try:
         indexer.update_index_status()

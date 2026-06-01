@@ -170,6 +170,25 @@ class CAOrchestrator:
                 stats["errors"] += 1
                 continue
 
+            if raw_record.get("date") is None:
+                # URL format: https://www.constitutionofindia.net/debates/YYYY-MM-DD
+                url_date = doc_ref.fetch_url.rstrip("/").rsplit("/", 1)[-1]
+                try:
+                    from datetime import date as _date
+                    _date.fromisoformat(url_date)  # validate format
+                    raw_record["date"] = url_date
+                    logger.debug(
+                        "ca_orchestrator: extracted date %s from URL for %s",
+                        url_date,
+                        doc_ref.canonical_doc_id,
+                    )
+                except ValueError:
+                    logger.warning(
+                        "ca_orchestrator: could not extract date from URL %s for %s",
+                        doc_ref.fetch_url,
+                        doc_ref.canonical_doc_id,
+                    )
+
             speeches = segment_speeches(raw_record, source="CA")
 
             for speech in speeches:
