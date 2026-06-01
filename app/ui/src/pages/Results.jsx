@@ -2,11 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useSearch } from '../hooks/useSearch.js'
-<<<<<<< HEAD
-=======
 import { useCookieHistory } from '../hooks/useCookieHistory.js'
 import { useSavedSearches, sanitizeStoredFilters } from '../hooks/useSavedSearches.js'
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 import {
   ALL_SOURCES,
   ALL_PROCEEDING_TYPES,
@@ -31,12 +28,9 @@ import Pagination, { formatResultCount } from '../components/Pagination.jsx'
 import SkeletonCard from '../components/SkeletonCard.jsx'
 import FilterChip from '../components/FilterChip.jsx'
 import AdvancedSearchModal from '../components/AdvancedSearchModal.jsx'
-<<<<<<< HEAD
-=======
 import RecentSearchesDropdown from '../components/RecentSearchesDropdown.jsx'
 import SavedSearchesPanel from '../components/SavedSearchesPanel.jsx'
 import Toast from '../components/Toast.jsx'
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
 const VALID_SORTS = new Set(['relevance', 'chronological', 'reverse_chronological'])
 
@@ -108,12 +102,9 @@ export default function Results() {
 
   const [inputValue, setInputValue] = useState(urlQuery)
   const [validation, setValidation] = useState('')
-<<<<<<< HEAD
-=======
   const [dropdownVisible, setDropdownVisible] = useState(false)
   const [savedPanelOpen, setSavedPanelOpen] = useState(false)
   const [toast, setToast] = useState('')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
   const [filters, setFilters] = useState(() => {
     const stateFilters = location.state?.filters
@@ -123,12 +114,9 @@ export default function Results() {
 
   const [modalOpen, setModalOpen] = useState(false)
 
-<<<<<<< HEAD
-=======
   const { entries: recentEntries, cookiesEnabled, recordSearch, deleteEntry: deleteRecent, clearAll: clearRecent } = useCookieHistory()
   const { entries: savedEntries, atLimit, saveSearch, deleteEntry: deleteSaved, renameEntry } = useSavedSearches()
 
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   useEffect(() => {
     setInputValue(urlQuery)
     setValidation('')
@@ -157,33 +145,23 @@ export default function Results() {
       return
     }
     setValidation('')
-<<<<<<< HEAD
-=======
     setDropdownVisible(false)
     recordSearch(cleaned.trim())
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     const next = new URLSearchParams()
     next.set('q', cleaned.trim())
     next.set('page', '1')
     if (urlSort && urlSort !== 'relevance') next.set('sort', urlSort)
     setParams(next)
-<<<<<<< HEAD
-    // Filter state is preserved across query refinements (not reset here)
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   }
 
   const onInputChange = (e) => {
     setInputValue(e.target.value)
     if (validation) setValidation('')
-<<<<<<< HEAD
-=======
     if (e.target.value.length > 0) setDropdownVisible(false)
   }
 
   const onInputFocus = () => {
     if (cookiesEnabled && inputValue.length === 0) setDropdownVisible(true)
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   }
 
   const onSortChange = (e) => {
@@ -215,10 +193,6 @@ export default function Results() {
   const onModalApply = (newFilters) => {
     setFilters(newFilters)
     setModalOpen(false)
-<<<<<<< HEAD
-    // Reset to page 1 when filters change
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     const next = new URLSearchParams(params)
     next.set('q', urlQuery)
     next.set('page', '1')
@@ -244,10 +218,6 @@ export default function Results() {
           return prev
       }
     })
-<<<<<<< HEAD
-    // Reset to page 1 when a filter is removed
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     const next = new URLSearchParams(params)
     next.set('q', urlQuery)
     next.set('page', '1')
@@ -266,8 +236,6 @@ export default function Results() {
     setParams(next)
   }
 
-<<<<<<< HEAD
-=======
   const handleRecentSelect = (query) => {
     setDropdownVisible(false)
     setInputValue(query)
@@ -295,7 +263,6 @@ export default function Results() {
     saveSearch({ query: urlQuery, filters, name: urlQuery })
   }
 
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   const activeChips = useMemo(() => buildActiveChips(filters), [filters])
 
   return (
@@ -312,47 +279,6 @@ export default function Results() {
             aria-label="Site search"
             className="results-header-search"
           >
-<<<<<<< HEAD
-            <div className="search-bar compact">
-              <input
-                type="text"
-                className="search-bar-input"
-                placeholder={SEARCH_PLACEHOLDER}
-                aria-label="Search parliamentary records"
-                value={inputValue}
-                onChange={onInputChange}
-                maxLength={MAX_QUERY_LEN}
-                data-testid="results-search-input"
-              />
-              <button
-                type="submit"
-                className="search-submit"
-                aria-label="Submit search"
-                data-testid="results-search-submit"
-              >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <circle
-                    cx="9"
-                    cy="9"
-                    r="6"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  />
-                  <path
-                    d="M14 14L18 18"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </button>
-=======
             <div className="search-bar-wrap">
               <div className="search-bar compact">
                 <input
@@ -403,7 +329,6 @@ export default function Results() {
                 onClearAll={() => { clearRecent(); setDropdownVisible(false) }}
                 onDismiss={() => setDropdownVisible(false)}
               />
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
             </div>
             {validation && (
               <p
@@ -425,30 +350,6 @@ export default function Results() {
             >
               Advanced Search
             </button>
-<<<<<<< HEAD
-            <button
-              type="button"
-              className="bookmark-btn"
-              aria-label="Saved searches"
-              title="Saved searches"
-              data-testid="results-bookmark-btn"
-            >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 20 20"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M5 3h10v14l-5-3-5 3V3z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-=======
             <div className="bookmark-wrap">
               <button
                 type="button"
@@ -486,7 +387,6 @@ export default function Results() {
                 onDismiss={() => setSavedPanelOpen(false)}
               />
             </div>
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
           </div>
         </div>
       </header>
@@ -614,11 +514,8 @@ export default function Results() {
         onApply={onModalApply}
         onClose={() => setModalOpen(false)}
       />
-<<<<<<< HEAD
-=======
 
       <Toast message={toast} onDismiss={() => setToast('')} />
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     </div>
   )
 }

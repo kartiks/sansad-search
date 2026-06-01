@@ -32,6 +32,17 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 - A starred question with exactly 1 questioner must not show the "+N others" label
 - A starred question with 3 co-signatories (4 total including primary) must show "+3 others" next to the primary questioner's name
 
+## Language Badge
+
+- A record with `lang_original: hi` must display the "Hindi original" badge; no other badge or label relating to language must appear on that card
+- A record with `lang_original: mixed` must display the "Mixed language" badge
+- A record with `lang_original: en` must display no language badge; the badge element must be absent from the DOM, not merely hidden
+
+## Time of Day Display
+
+- A record with `time_of_day: "14:35"` must display "14:35" near the date field; the value must not be reformatted (e.g. not "2:35 PM")
+- A record with `time_of_day: null` must not render any time-of-day element — no placeholder, no empty field, no "—"
+
 ## Speaker Name Unresolved Display
 
 - A record with `speaker_name_unresolved: true` must display the raw name stored in `speaker_name` without any error indicator or blank; the display must be identical in format to a resolved name

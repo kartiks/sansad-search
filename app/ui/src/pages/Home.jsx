@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-import { useEffect, useState } from 'react'
-=======
 import { useEffect, useRef, useState } from 'react'
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 import { useNavigate } from 'react-router-dom'
 import {
   SEARCH_PLACEHOLDER,
@@ -14,16 +10,12 @@ import {
 } from '../lib/constants.js'
 import { defaultFilterState, isDefaultFilterState } from '../lib/filterState.js'
 import { formatCount, formatLongDate } from '../lib/statusFormat.js'
-<<<<<<< HEAD
-import AdvancedSearchModal from '../components/AdvancedSearchModal.jsx'
-=======
 import { useCookieHistory } from '../hooks/useCookieHistory.js'
 import { useSavedSearches, sanitizeStoredFilters } from '../hooks/useSavedSearches.js'
 import AdvancedSearchModal from '../components/AdvancedSearchModal.jsx'
 import RecentSearchesDropdown from '../components/RecentSearchesDropdown.jsx'
 import SavedSearchesPanel from '../components/SavedSearchesPanel.jsx'
 import Toast from '../components/Toast.jsx'
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
 function formatStatusStrip(status) {
   if (!status || status.status !== 'ok') {
@@ -70,8 +62,6 @@ export default function Home() {
   const [validation, setValidation] = useState('')
   const [filters, setFilters] = useState(defaultFilterState())
   const [modalOpen, setModalOpen] = useState(false)
-<<<<<<< HEAD
-=======
   const [dropdownVisible, setDropdownVisible] = useState(false)
   const [savedPanelOpen, setSavedPanelOpen] = useState(false)
   const [toast, setToast] = useState('')
@@ -89,7 +79,6 @@ export default function Home() {
     const navState = navFilters && !isDefaultFilterState(navFilters) ? { filters: navFilters } : undefined
     navigate(`/search?${searchParams.toString()}`, { state: navState })
   }
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
   const onSubmit = (e) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault()
@@ -100,24 +89,14 @@ export default function Home() {
       return
     }
     setValidation('')
-<<<<<<< HEAD
-    const searchParams = new URLSearchParams()
-    searchParams.set('q', cleaned.trim())
-    searchParams.set('page', '1')
-    const navState = !isDefaultFilterState(filters) ? { filters } : undefined
-    navigate(`/search?${searchParams.toString()}`, { state: navState })
-=======
     setDropdownVisible(false)
     recordSearch(cleaned.trim())
     submitSearch(cleaned.trim(), filters)
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   }
 
   const onChange = (e) => {
     setValue(e.target.value)
     if (validation) setValidation('')
-<<<<<<< HEAD
-=======
     if (e.target.value.length > 0) setDropdownVisible(false)
   }
 
@@ -137,7 +116,6 @@ export default function Home() {
     const sanitized = sanitizeStoredFilters(entry.filters)
     recordSearch(entry.query)
     submitSearch(entry.query, sanitized)
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   }
 
   return (
@@ -148,47 +126,6 @@ export default function Home() {
           <p className="tagline">{TAGLINE}</p>
 
           <form onSubmit={onSubmit} role="search" aria-label="Site search">
-<<<<<<< HEAD
-            <div className="search-bar">
-              <input
-                type="text"
-                className="search-bar-input"
-                placeholder={SEARCH_PLACEHOLDER}
-                aria-label="Search parliamentary records"
-                value={value}
-                onChange={onChange}
-                maxLength={MAX_QUERY_LEN}
-                data-testid="home-search-input"
-              />
-              <button
-                type="submit"
-                className="search-submit"
-                aria-label="Submit search"
-                data-testid="home-search-submit"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <circle
-                    cx="9"
-                    cy="9"
-                    r="6"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  />
-                  <path
-                    d="M14 14L18 18"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </button>
-=======
             <div className="search-bar-wrap" ref={searchBarRef}>
               <div className="search-bar">
                 <input
@@ -239,7 +176,6 @@ export default function Home() {
                 onClearAll={() => { clearRecent(); setDropdownVisible(false) }}
                 onDismiss={() => setDropdownVisible(false)}
               />
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
             </div>
             {validation && (
               <p
@@ -261,30 +197,6 @@ export default function Home() {
             >
               Advanced Search
             </button>
-<<<<<<< HEAD
-            <button
-              type="button"
-              className="bookmark-btn"
-              aria-label="Saved searches"
-              title="Saved searches"
-              data-testid="home-bookmark-btn"
-            >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 20 20"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M5 3h10v14l-5-3-5 3V3z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-=======
             <div className="bookmark-wrap" ref={bookmarkBtnRef}>
               <button
                 type="button"
@@ -322,7 +234,6 @@ export default function Home() {
                 onDismiss={() => setSavedPanelOpen(false)}
               />
             </div>
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
           </div>
         </div>
       </main>
@@ -337,11 +248,8 @@ export default function Home() {
         }}
         onClose={() => setModalOpen(false)}
       />
-<<<<<<< HEAD
-=======
 
       <Toast message={toast} onDismiss={() => setToast('')} />
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     </div>
   )
 }

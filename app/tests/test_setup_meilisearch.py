@@ -16,6 +16,7 @@ from ingest.setup_meilisearch import (
     TYPO_TOLERANCE,
     PAGINATION,
     INDEX_NAME,
+    EXPERIMENTAL_FEATURES,
 )
 
 SYNONYMS_PATH = Path(__file__).parent.parent / "data" / "synonyms.json"
@@ -260,3 +261,15 @@ class TestDataModelsExactConstants:
 
     def test_pagination_max_total_hits_data_models(self):
         assert PAGINATION == {"maxTotalHits": 10000}
+
+
+# ── Experimental features ─────────────────────────────────────────────────────
+
+class TestExperimentalFeatures:
+    def test_contains_filter_enabled(self):
+        """containsFilter must be True — required for speaker_name/session_name
+        CONTAINS filter expressions in the search service."""
+        assert EXPERIMENTAL_FEATURES.get("containsFilter") is True
+
+    def test_experimental_features_is_dict(self):
+        assert isinstance(EXPERIMENTAL_FEATURES, dict)

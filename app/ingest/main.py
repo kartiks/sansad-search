@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
-import meilisearch
+import meilisearch_python_sdk as meilisearch
 import psycopg2
 
 from ingest.canonical.names import load_names_dict

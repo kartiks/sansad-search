@@ -6,8 +6,12 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+import logging
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel, field_validator
 
 from api.lib.meilisearch_client import get_client
@@ -191,7 +195,8 @@ async def search(
             meili_client=meili_client,
             expansion_notice=expansion_notice,
         )
-    except Exception:
+    except Exception as exc:
+        logger.exception("Search failed: %s", exc)
         return JSONResponse(
             status_code=503,
             content={

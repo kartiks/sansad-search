@@ -5,6 +5,9 @@
 **PERF-1: Search response time**
 Search results must be returned within 2 seconds at p95, measured from query submission to full result list rendered in the browser, across the full indexed corpus. This target applies with query expansion active (synonyms + spell corrections). Architecture must account for the additional scoring computation introduced by query expansion.
 
+**PERF-2: Detail page response time**
+The detail page must complete full page load — including the record fetch and the adjacent-neighbour fetch — within 500ms at p95.
+
 ## Reliability
 
 **INF-R1: Ingestion resumability**

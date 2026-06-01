@@ -204,9 +204,12 @@ def parse_html(
     raw_html = str(main)
 
     # CA records have no session names or session numbers per the PRD spec.
+    # Also extract structured speech pairs from the constitutionofindia.net DOM.
+    ca_speech_pairs: list[tuple[str, str]] | None = None
     if source == "CA":
         session_name = None
         session_number = None
+        ca_speech_pairs = _extract_coi_speech_pairs(soup)
 
     return {
         "source": source,
@@ -219,4 +222,54 @@ def parse_html(
         "source_url": source_url,
         "raw_text": raw_text,
         "raw_html": raw_html,
+        "ca_speech_pairs": ca_speech_pairs,
     }
+
+
+def _extract_coi_speech_pairs(soup: "BeautifulSoup") -> list[tuple[str, str]]:
+    """
+    Extract (speaker, text) pairs from constitutionofindia.net debate pages.
+
+    The site renders each speech as a CSS grid row:
+      div.lg:grid.lg:grid-cols-12
+        div.lg:col-span-3  → ref number (span.bg-[#F8FFA3]) + speaker name (span.font-medium)
+        div.lg:col-span-9  → speech prose text
+
+    Returns a list of (speaker_name, speech_text) tuples in document order.
+    """
+    speech_rows = soup.find_all(
+        "div",
+        class_=lambda c: c and "lg:grid-cols-12" in c and "lg:grid" in c,
+    )
+    pairs: list[tuple[str, str]] = []
+    for row in speech_rows:
+        info_div = row.find("div", class_=lambda c: c and "lg:col-span-3" in c)
+        content_div = row.find("div", class_=lambda c: c and "lg:col-span-9" in c)
+        if not info_div or not content_div:
+            continue
+
+        # Only process rows that have a reference number (yellow span)
+        ref_span = info_div.find("span", class_=lambda c: c and "bg-[#F8FFA3]" in c)
+        if not ref_span:
+            continue
+
+        # Speaker name: the direct <span> child of info_div (not inside the ref wrapper div)
+        speaker = None
+        for child in info_div.children:
+            if getattr(child, "name", None) == "span":
+                name = child.get_text(strip=True)
+                if name:
+                    speaker = name
+                    break
+
+        if not speaker:
+            continue
+
+        text_lines = content_div.get_text(separator="\n").splitlines()
+        text = "\n".join(re.sub(r"[ \t]+", " ", ln).strip() for ln in text_lines).strip()
+        if not text:
+            continue
+
+        pairs.append((speaker, text))
+
+    return pairs

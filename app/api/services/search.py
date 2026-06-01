@@ -333,32 +333,23 @@ async def execute_search(
     filter_expr = build_filter_expression(filters)
     sort_params = build_sort_params(sort)
 
-    opt_params: Dict[str, Any] = {
+    index = meili_client.index(MEILI_INDEX_NAME)
+    search_kwargs: Dict[str, Any] = {
+        "hits_per_page": PER_PAGE,
         "page": page,
-        "hitsPerPage": PER_PAGE,
     }
     if filter_expr:
-        opt_params["filter"] = filter_expr
+        search_kwargs["filter"] = filter_expr
     if sort_params:
-        opt_params["sort"] = sort_params
+        search_kwargs["sort"] = sort_params
 
-    index = meili_client.index(MEILI_INDEX_NAME)
-    raw = await index.search(query, opt_params)
+    raw = await index.search(query, **search_kwargs)
 
-    # Meilisearch Python client may return a dict or an object with attributes.
-    # Support both.
-    if isinstance(raw, dict):
-        hits = raw.get("hits", [])
-        total = raw.get("totalHits", 0)
-        total_pages = raw.get("totalPages", 1)
-        current_page = raw.get("page", page)
-        per_page = raw.get("hitsPerPage", PER_PAGE)
-    else:
-        hits = getattr(raw, "hits", [])
-        total = getattr(raw, "total_hits", getattr(raw, "totalHits", 0))
-        total_pages = getattr(raw, "total_pages", getattr(raw, "totalPages", 1))
-        current_page = getattr(raw, "page", page)
-        per_page = getattr(raw, "hits_per_page", getattr(raw, "hitsPerPage", PER_PAGE))
+    hits = raw.hits or []
+    total = raw.total_hits or 0
+    total_pages = raw.total_pages or 1
+    current_page = raw.page or page
+    per_page = raw.hits_per_page or PER_PAGE
 
     query_terms = _tokenize_query(query)
     results = [format_result(hit, query_terms) for hit in hits]

@@ -16,10 +16,11 @@ Displayed fields, in order:
 | Legislative body | `source` | Displayed as "Constituent Assembly", "Lok Sabha", or "Rajya Sabha" |
 | Proceeding type | `proceeding_type` | Human-readable label (see label map below) |
 | Date | `date` | Formatted as DD Month YYYY |
+| Time of day | `time_of_day` | Shown as HH:MM near the date field when not null; omitted silently when null |
 | Session | `session_name` | Shown if available; omitted for CA records |
 | Subject / agenda item | `subject` | The debate title or agenda item this speech belongs to |
 | Text snippet | derived from `full_text_en` | 2–3 sentences of context around the highest-relevance match; query terms highlighted |
-| Translation indicator | `is_translated` | If true, a "Translated from Hindi" label is shown near the snippet |
+| Language badge | `lang_original` | `hi`→"Hindi original"; `mixed`→"Mixed language"; `en`→no badge shown |
 | Source link | `source_url` | "View source" link; opens in a new tab |
 
 ## Result Card: Q+A Exchange Record
@@ -33,12 +34,13 @@ Displayed fields, in order:
 | Proceeding type | `proceeding_type` | "Starred Question" or "Unstarred Question" or other Q+A type label |
 | Legislative body | `source` | "Lok Sabha" or "Rajya Sabha" |
 | Date | `date` | Formatted as DD Month YYYY |
+| Time of day | `time_of_day` | Shown as HH:MM near the date field when not null; omitted silently when null |
 | Session | `session_name` | Shown if available |
 | Questioner | `questioner_names` (primary) | First named questioner; additional questioners shown as "+N others" if co-signatories present |
 | Questioner party | `questioner_party` | Shown if available |
 | Minister and ministry | `minister_name`, `ministry` | "Answered by [Minister Name], [Ministry]" |
 | Text snippet | derived from `full_text_en` | 2–3 sentences of context around the highest-relevance match; query terms highlighted |
-| Translation indicator | `is_translated` | Shown if true |
+| Language badge | `lang_original` | `hi`→"Hindi original"; `mixed`→"Mixed language"; `en`→no badge shown |
 | Source link | `source_url` | "View source" link; opens in a new tab |
 
 ## Proceeding Type Labels
@@ -78,7 +80,8 @@ Displayed fields, in order:
 - "View source" opens the original document in a new browser tab
 - Snippet highlights all matched query terms (original terms and expanded matches)
 - Records with `full_text_en: null` display the untranslated-speech message in place of a snippet; they do not display an empty or blank snippet area
-- Translated records show the "Translated from Hindi" label
+- Records with `lang_original: hi` show the "Hindi original" badge; records with `lang_original: mixed` show the "Mixed language" badge; records with `lang_original: en` show no badge
+- Records with `time_of_day` not null display the time as HH:MM near the date; records with `time_of_day: null` display no time field and no placeholder
 - Result count is shown at the top of the result list
 - Paginated result sets: navigating to a specific page via URL (direct link or bookmarked URL) loads the correct page of results
 - `speaker_name_unresolved: true` records display the raw name as stored; no error or blank in the speaker name field

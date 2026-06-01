@@ -51,6 +51,7 @@ The ingestion pipeline fetches, parses, segments, and indexes parliamentary reco
 
 | Field | Description |
 |-------|-------------|
+| `id` | Stable UUID assigned at ingest; preserved across re-runs via ON CONFLICT DO NOTHING on the deduplication key |
 | `source` | CA \| LS \| RS |
 | `proceeding_type` | debate \| zero_hour \| short_duration_discussion \| calling_attention \| adjournment_motion \| private_member_bill |
 | `date` | Date of sitting (YYYY-MM-DD) |
@@ -63,6 +64,9 @@ The ingestion pipeline fetches, parses, segments, and indexes parliamentary reco
 | `speaker_constituency_or_state` | Constituency (LS), state (RS), or null (CA) |
 | `speaker_role` | member \| minister \| presiding_officer |
 | `full_text_en` | Full English text of the speech; see Language Handling below |
+| `lang_original` | Language of the original speech before translation: `en` (English), `hi` (Hindi), or `mixed` (genuinely bilingual — alternates between Hindi and English in both directions; predominantly Hindi speeches with only translation fragments are classified `hi`); derived from Language Handling cases: case 1→`en`; cases 2 and 4→`hi`; case 3→`mixed` if genuinely alternating, `hi` if predominantly Hindi with translation fragments |
+| `time_of_day` | Time the speech began, as HH:MM (24-hour); extracted from HTML sources only; null for Internet Archive pre-OCR text and PDF sources |
+| `word_count` | Integer word count of `full_text_en` computed at ingest; null if `full_text_en` is null |
 | `is_translated` | true if `full_text_en` contains or includes official English translation of Hindi portions |
 | `has_untranslated_content` | true if any portion of the speech could not be indexed due to absent translation |
 | `speaker_name_unresolved` | true if `speaker_name` could not be matched to a canonical form in the names dictionary |
@@ -75,6 +79,7 @@ The ingestion pipeline fetches, parses, segments, and indexes parliamentary reco
 
 | Field | Description |
 |-------|-------------|
+| `id` | Stable UUID assigned at ingest; preserved across re-runs via ON CONFLICT DO NOTHING on the deduplication key |
 | `source` | LS \| RS |
 | `proceeding_type` | starred_question |
 | `date` | Date of sitting |
@@ -88,10 +93,14 @@ The ingestion pipeline fetches, parses, segments, and indexes parliamentary reco
 | `minister_name` | Minister answering |
 | `ministry` | Ministry responsible |
 | `full_text_en` | Full text of the complete exchange: main question + answer + all supplementaries with attribution; English only, translated as needed |
+| `lang_original` | Language of the original exchange before translation: `en`, `hi`, or `mixed`; same derivation rules as speech units |
+| `time_of_day` | Time the question was called, as HH:MM (24-hour); extracted from HTML sources only; null for Internet Archive pre-OCR text and PDF sources |
+| `word_count` | Integer word count of `full_text_en` computed at ingest; null if `full_text_en` is null |
 | `is_translated` | true if any portion was translated from Hindi |
 | `has_untranslated_content` | true if any portion could not be indexed due to absent translation |
 | `source_url` | URL of the original document; for LS records fetched from Internet Archive, always set to the corresponding eparlib.sansad.in document URL; for RS records fetched from Internet Archive, always set to the corresponding rsdebate.nic.in document URL (derived from the DSpace handle) |
 | `page_reference` | Page number in source PDF; null for HTML sources |
+| `sequence_within_sitting` | Integer position of this Q+A exchange within the sitting's proceedings, derived from document order (1-based); shared sequence space with speech units within the same sitting |
 
 ### Q+A exchange unit (unstarred question)
 
@@ -110,6 +119,24 @@ Official parliamentary records include English translations of speeches delivere
 4. **Hindi speech with no translation available:** `full_text_en: null`; `has_untranslated_content: true`; record is still indexed (metadata remains searchable)
 
 Translations in official records are typically marked inline as "[Translation]" or equivalent notation.
+
+## CA Field-Level Parsing Rules
+
+These rules apply to Constituent Assembly records only.
+
+### Date field
+
+The URL slug is the authoritative date source for CA records. URL format: `DD-MMM-YYYY` (e.g. `09-dec-1946`). The parser must parse this slug directly and set `date` to ISO format `YYYY-MM-DD`. HTML-based date extraction (title, h1, metadata divs) must be skipped entirely for CA records — even when `parse_html` returns a date value, it must be discarded. The current ca.py uses the URL as a fallback only when `parse_html` returns `date=None`; this rule supersedes that: for CA, the URL date is always applied.
+
+### Subject field
+
+Each CA speech record's `subject` must be set to the nearest preceding standalone bold section header in the sitting page body.
+
+**Section header definition:** A standalone bold topic label (e.g. "Government of India (Amendment) Bill", "New Article 67-A") appearing between speech entries in the debate body. Speaker names also appear bold or strong in source HTML, but inside speech grid rows — these must not be treated as section headers.
+
+**Assignment rule:** Walk the parsed DOM in document order. When a standalone bold section header is encountered, set it as the current topic. Assign that topic to all subsequent speech records until the next section header is encountered.
+
+**Fallback:** If no section header precedes the first speech of the sitting, the subject for those speeches falls back to the first item in the page's table of contents. The TOC is a `<ul>` above the debate body containing `<li><a href="#ID">Topic</a></li>` items. The implementation must verify at build time whether those anchor IDs correspond to `id=` attributes on body elements and use that mapping if available.
 
 ## Records Not Indexed as Standalone Units
 
@@ -147,7 +174,10 @@ When the same proceeding is available as both HTML and PDF from the source site,
 
 - All 12 volumes of CA debates are ingested; speeches indexed per individual member contribution
 - All LS and RS records dated 2014-01-01 or later are ingested across all proceeding types listed above
-- Every indexed record has: source, proceeding_type, date, subject, full_text_en (or null with has_untranslated_content flag), source_url
+- Every indexed record has: id, source, proceeding_type, date, subject, full_text_en (or null with has_untranslated_content flag), source_url, lang_original
+- `id` is a stable UUID that does not change across re-runs for the same record
+- `word_count` is present and non-null for all records where `full_text_en` is not null; null where `full_text_en` is null
+- `time_of_day` is present (HH:MM) for HTML-sourced records where the sitting page includes time; null for all IA pre-OCR and PDF-sourced records
 - Starred Q+A records include the complete exchange: main question + answer + all supplementary questions and responses
 - Re-running ingestion on a fully indexed corpus produces zero new records and zero duplicate records
 - Progress log is written in real time; a completion summary is printed at the end

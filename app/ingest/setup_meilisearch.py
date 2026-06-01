@@ -11,7 +11,8 @@ import os
 import sys
 from pathlib import Path
 
-import meilisearch
+import httpx
+import meilisearch_python_sdk as meilisearch
 
 INDEX_NAME = "parliamentary_records"
 
@@ -36,7 +37,7 @@ FILTERABLE_ATTRIBUTES = [
 
 SORTABLE_ATTRIBUTES = ["date", "sequence_within_sitting"]
 
-RANKING_RULES = ["words", "typo", "proximity", "attribute", "sort", "exactness"]
+RANKING_RULES = ["words", "typos", "proximity", "attribute", "sort", "exactness"]
 
 TYPO_TOLERANCE = {
     "enabled": True,
@@ -45,6 +46,11 @@ TYPO_TOLERANCE = {
 }
 
 PAGINATION = {"maxTotalHits": 10000}
+
+# Meilisearch experimental features required by this application.
+# containsFilter enables the CONTAINS filter operator used for speaker_name and
+# session_name substring matching in the search service.
+EXPERIMENTAL_FEATURES = {"containsFilter": True}
 
 
 def _load_synonyms(synonyms_path: Path) -> list[dict]:
@@ -103,6 +109,13 @@ def main() -> None:
     })
     client.wait_for_task(task.task_uid)
     print("Index settings applied.")
+
+    # Enable experimental features (instance-level, not index-level).
+    # PATCH /experimental-features is not exposed by the SDK; use httpx directly.
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    resp = httpx.patch(f"{url}/experimental-features", json=EXPERIMENTAL_FEATURES, headers=headers)
+    resp.raise_for_status()
+    print("Experimental features enabled:", list(EXPERIMENTAL_FEATURES.keys()))
 
     # Load and push synonyms (full replace)
     synonyms_path = Path(__file__).parent.parent / "data" / "synonyms.json"

@@ -171,18 +171,40 @@ class CAOrchestrator:
                 continue
 
             if raw_record.get("date") is None:
-                # URL format: https://www.constitutionofindia.net/debates/YYYY-MM-DD
-                url_date = doc_ref.fetch_url.rstrip("/").rsplit("/", 1)[-1]
-                try:
-                    from datetime import date as _date
-                    _date.fromisoformat(url_date)  # validate format
-                    raw_record["date"] = url_date
-                    logger.debug(
-                        "ca_orchestrator: extracted date %s from URL for %s",
-                        url_date,
-                        doc_ref.canonical_doc_id,
-                    )
-                except ValueError:
+                # URL format: https://www.constitutionofindia.net/debates/DD-MMM-YYYY/
+                # e.g. "09-dec-1946", "27-aug-1947"
+                import re as _re
+                from datetime import date as _date
+                _MONTH_ABBR = {
+                    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+                    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+                }
+                url_seg = doc_ref.fetch_url.rstrip("/").rsplit("/", 1)[-1]
+                m = _re.match(r"^(\d{1,2})-([a-z]{3})-(\d{4})$", url_seg, _re.IGNORECASE)
+                if m:
+                    mon = _MONTH_ABBR.get(m.group(2).lower())
+                    if mon:
+                        try:
+                            parsed = _date(int(m.group(3)), mon, int(m.group(1)))
+                            raw_record["date"] = parsed.isoformat()
+                            logger.debug(
+                                "ca_orchestrator: extracted date %s from URL for %s",
+                                raw_record["date"],
+                                doc_ref.canonical_doc_id,
+                            )
+                        except ValueError:
+                            logger.warning(
+                                "ca_orchestrator: invalid date in URL %s for %s",
+                                doc_ref.fetch_url,
+                                doc_ref.canonical_doc_id,
+                            )
+                    else:
+                        logger.warning(
+                            "ca_orchestrator: unrecognised month in URL %s for %s",
+                            doc_ref.fetch_url,
+                            doc_ref.canonical_doc_id,
+                        )
+                else:
                     logger.warning(
                         "ca_orchestrator: could not extract date from URL %s for %s",
                         doc_ref.fetch_url,

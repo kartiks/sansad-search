@@ -190,6 +190,14 @@ def segment_speeches(
         List of speech dicts ready for canonicalization + indexing.
         May be empty if no attributable speeches are found.
     """
+    # CA pages use a structured DOM (ref + speaker span + prose div) rather than
+    # the ALL-CAPS attribution-line format used by LS/RS. html_parser extracts the
+    # pairs; we just need to run language detection and build the speech dicts.
+    if source == "CA":
+        ca_pairs: list[tuple[str, str]] | None = raw_record.get("ca_speech_pairs")
+        if ca_pairs is not None:
+            return _segment_ca_speeches(raw_record, ca_pairs)
+
     raw_text: str = raw_record.get("raw_text", "")
     speech_pairs = _split_into_speeches(raw_text)
 
@@ -224,6 +232,51 @@ def segment_speeches(
             "is_translated": is_translated,
             "has_untranslated_content": has_untranslated,
             "speaker_name_unresolved": True,       # set to False after canonicalization
+            "source_url": raw_record.get("source_url"),
+            "page_reference": raw_record.get("page_reference"),
+            "volume": raw_record.get("volume"),
+        }
+        speeches.append(speech)
+        sequence += 1
+
+    return speeches
+
+
+def _segment_ca_speeches(
+    raw_record: dict[str, Any],
+    ca_pairs: list[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """
+    Build speech dicts for CA records using pre-extracted (speaker, text) pairs.
+
+    Skips presiding officer interventions; runs language detection on each body.
+    """
+    speeches: list[dict[str, Any]] = []
+    sequence = 1
+
+    for speaker_raw, body in ca_pairs:
+        if _is_presiding_officer(speaker_raw):
+            continue
+
+        full_text_en, is_translated, has_untranslated = _detect_language_handling(body)
+
+        speech: dict[str, Any] = {
+            "source": raw_record.get("source", "CA"),
+            "proceeding_type": raw_record.get("proceeding_type", "debate"),
+            "date": raw_record.get("date"),
+            "session_name": None,
+            "session_number": None,
+            "sitting_number": raw_record.get("sitting_number"),
+            "subject": raw_record.get("subject"),
+            "speaker_name": speaker_raw,
+            "speaker_party": None,
+            "speaker_constituency_or_state": None,
+            "speaker_role": _speaker_role(speaker_raw),
+            "sequence_within_sitting": sequence,
+            "full_text_en": full_text_en,
+            "is_translated": is_translated,
+            "has_untranslated_content": has_untranslated,
+            "speaker_name_unresolved": True,
             "source_url": raw_record.get("source_url"),
             "page_reference": raw_record.get("page_reference"),
             "volume": raw_record.get("volume"),

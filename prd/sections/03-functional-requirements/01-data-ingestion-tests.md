@@ -56,6 +56,17 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 
 - A source document with no parseable date must produce zero indexed records from that document and one logged error entry; it must not cause ingestion to halt for subsequent documents
 
+## CA Date Parsing
+
+- A CA record whose URL slug parses to a different date than what `parse_html` would return must store the URL-derived date, not the HTML-derived date; the HTML date must never appear in the indexed record
+- A CA record must never have a null `date` caused by HTML parse failure when the URL slug is present and parseable; URL slug parse failure is the only condition under which a CA record's date may be missing (in which case the record is skipped per the missing-date edge case)
+
+## CA Subject Assignment
+
+- Two speech records from the same sitting that fall under the same bold section header must have identical `subject` values
+- A speech record that follows a new section header in document order must not retain the `subject` value from the previous section header
+- The first speech record in a sitting where no bold section header precedes it must have `subject` set to the text of the first item in the sitting page's TOC `<ul>`; it must not be null, empty, or set to a section header from later in the page
+
 ## Progress Log Integrity
 
 - The completion summary record count must match the actual number of records retrievable from the search index after ingestion completes
