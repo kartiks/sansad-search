@@ -23,16 +23,26 @@ from api.lib.meilisearch_client import get_client
 def make_mock_pool(
     fetchrow_result: Any = None,
     fetchrow_side_effect: Any = None,
+    fetch_result: Any = None,
+    fetch_side_effect: Any = None,
 ) -> MagicMock:
     """
     Build a mock asyncpg pool whose acquire() context manager returns a
-    connection with a configurable fetchrow().
+    connection with configurable fetchrow() and fetch() methods.
     """
     mock_conn = AsyncMock()
+
     if fetchrow_side_effect is not None:
         mock_conn.fetchrow = AsyncMock(side_effect=fetchrow_side_effect)
     else:
         mock_conn.fetchrow = AsyncMock(return_value=fetchrow_result)
+
+    if fetch_side_effect is not None:
+        mock_conn.fetch = AsyncMock(side_effect=fetch_side_effect)
+    elif fetch_result is not None:
+        mock_conn.fetch = AsyncMock(return_value=fetch_result)
+    else:
+        mock_conn.fetch = AsyncMock(return_value=[])
 
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=mock_conn)

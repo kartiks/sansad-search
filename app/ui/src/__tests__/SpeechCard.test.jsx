@@ -157,3 +157,48 @@ describe('SpeechCard — F05 edge cases', () => {
     expect(screen.queryByText('Budget Session 2023')).toBeNull()
   })
 })
+
+describe('SpeechCard — F05 v2.0: lang_original badge', () => {
+  it('renders "Hindi original" badge for lang_original=hi', () => {
+    render(<SpeechCard result={makeSpeechResult({ lang_original: 'hi' })} />)
+    expect(screen.getByTestId('lang-badge')).toHaveTextContent('Hindi original')
+  })
+
+  it('renders "Mixed language" badge for lang_original=mixed', () => {
+    render(<SpeechCard result={makeSpeechResult({ lang_original: 'mixed' })} />)
+    expect(screen.getByTestId('lang-badge')).toHaveTextContent('Mixed language')
+  })
+
+  it('renders no badge for lang_original=en — element absent from DOM', () => {
+    render(<SpeechCard result={makeSpeechResult({ lang_original: 'en' })} />)
+    expect(screen.queryByTestId('lang-badge')).toBeNull()
+  })
+
+  it('renders no badge when lang_original is null', () => {
+    render(<SpeechCard result={makeSpeechResult({ lang_original: null })} />)
+    expect(screen.queryByTestId('lang-badge')).toBeNull()
+  })
+
+  it('hi badge renders no "Mixed language" text on the card', () => {
+    render(<SpeechCard result={makeSpeechResult({ lang_original: 'hi' })} />)
+    expect(screen.queryByText('Mixed language')).toBeNull()
+  })
+})
+
+describe('SpeechCard — F05 v2.0: time_of_day', () => {
+  it('renders time_of_day verbatim when present', () => {
+    render(<SpeechCard result={makeSpeechResult({ time_of_day: '14:35' })} />)
+    expect(screen.getByTestId('time-of-day')).toHaveTextContent('14:35')
+  })
+
+  it('does not reformat the time (no 12h conversion)', () => {
+    render(<SpeechCard result={makeSpeechResult({ time_of_day: '14:35' })} />)
+    expect(screen.queryByText(/2:35 PM/i)).toBeNull()
+    expect(screen.getByTestId('time-of-day').textContent).toBe('14:35')
+  })
+
+  it('renders no time element when time_of_day is null — element absent from DOM', () => {
+    render(<SpeechCard result={makeSpeechResult({ time_of_day: null })} />)
+    expect(screen.queryByTestId('time-of-day')).toBeNull()
+  })
+})

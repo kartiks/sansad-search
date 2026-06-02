@@ -6,6 +6,24 @@ import {
 } from '../lib/constants.js'
 import { sanitizeSnippet } from '../lib/sanitizeSnippet.js'
 
+function LangBadge({ lang_original }) {
+  if (lang_original === 'hi') {
+    return (
+      <span className="lang-badge lang-badge--hindi" data-testid="lang-badge">
+        Hindi original
+      </span>
+    )
+  }
+  if (lang_original === 'mixed') {
+    return (
+      <span className="lang-badge lang-badge--mixed" data-testid="lang-badge">
+        Mixed language
+      </span>
+    )
+  }
+  return null
+}
+
 function MetadataRow({ result }) {
   const ptypeLabel = getProceedingTypeLabel(result.proceeding_type)
   const bodyLabel = getSourceLabel(result.source)
@@ -25,6 +43,11 @@ function MetadataRow({ result }) {
         <>
           <span className="metadata-sep">·</span>
           <span>{dateLabel}</span>
+          {result.time_of_day != null && (
+            <span className="time-of-day" data-testid="time-of-day">
+              {result.time_of_day}
+            </span>
+          )}
         </>
       )}
       {sessionLabel && (
@@ -125,12 +148,15 @@ export default function QACard({ result }) {
         </div>
       )}
 
+      <LangBadge lang_original={result.lang_original} />
+
       {sourceUrl && (
         <a
           className="view-source"
           href={sourceUrl}
           target="_blank"
           rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
         >
           View source ↗
         </a>

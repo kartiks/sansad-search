@@ -1,6 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-<<<<<<< HEAD
-=======
 
 vi.mock('../lib/cookie.js', () => ({
   areCookiesEnabled: vi.fn().mockReturnValue(true),
@@ -13,7 +11,6 @@ vi.mock('../lib/cookie.js', () => ({
   MAX_COMBINED_BYTES: 4096,
 }))
 
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 
@@ -23,11 +20,8 @@ import {
   makeSpeechResult,
   makeQAResult,
 } from './fixtures.js'
-<<<<<<< HEAD
-=======
 import * as cookieModule from '../lib/cookie.js'
 import { ALL_PROCEEDING_TYPES } from '../lib/constants.js'
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
 function LocationCapture() {
   const loc = useLocation()
@@ -50,15 +44,11 @@ function renderResults(initial = '/search?q=rights&page=1') {
 }
 
 beforeEach(() => {
-<<<<<<< HEAD
-  global.fetch = vi.fn()
-=======
   vi.clearAllMocks()
   global.fetch = vi.fn()
   cookieModule.areCookiesEnabled.mockReturnValue(true)
   cookieModule.readCookie.mockReturnValue(null)
   cookieModule.trimRecentToFit.mockImplementation((entries) => entries)
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 })
 
 afterEach(() => {
@@ -469,8 +459,6 @@ describe('Results — Q+A dispatch', () => {
   })
 })
 
-<<<<<<< HEAD
-=======
 describe('Results — index status footer', () => {
   it('renders an "Index status" link', async () => {
     global.fetch.mockResolvedValue({
@@ -491,7 +479,6 @@ describe('Results — index status footer', () => {
   })
 })
 
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 describe('Results — filter chips and modal (F03 UI)', () => {
   beforeEach(() => {
     global.fetch.mockResolvedValue({
@@ -522,28 +509,18 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     renderResults()
     await screen.findByTestId('results-list')
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-<<<<<<< HEAD
-    expect(screen.getByTestId('advanced-search-modal')).toBeInTheDocument()
-=======
     expect(await screen.findByTestId('advanced-search-modal')).toBeInTheDocument()
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   })
 
   it('modal close button closes the modal', async () => {
     renderResults()
     await screen.findByTestId('results-list')
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-<<<<<<< HEAD
-    expect(screen.getByTestId('advanced-search-modal')).toBeInTheDocument()
-    fireEvent.click(screen.getByTestId('modal-close'))
-    expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
-=======
     await screen.findByTestId('advanced-search-modal')
     fireEvent.click(screen.getByTestId('modal-close'))
     await waitFor(() => {
       expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
     })
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   })
 
   it('applying a body filter via modal shows a filter chip', async () => {
@@ -551,11 +528,7 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-<<<<<<< HEAD
-    // Uncheck CA — leaving LS and RS
-=======
     await screen.findByTestId('source-checkbox-CA')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
@@ -573,10 +546,7 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-<<<<<<< HEAD
-=======
     await screen.findByTestId('source-checkbox-CA')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
@@ -589,21 +559,12 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     })
   })
 
-<<<<<<< HEAD
-  it('chip × removes the filter and re-fetches without it', async () => {
-    renderResults()
-    await screen.findByTestId('results-list')
-
-    // Apply a source filter
-    fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-=======
   it('chip x removes the filter and re-fetches without it', async () => {
     renderResults()
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
     await screen.findByTestId('source-checkbox-CA')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
@@ -611,10 +572,6 @@ describe('Results — filter chips and modal (F03 UI)', () => {
       expect(screen.getByTestId('filter-chips-row')).toBeInTheDocument()
     })
 
-<<<<<<< HEAD
-    // Remove via chip ×
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     const removeBtn = screen.getByTestId('filter-chip-remove')
     fireEvent.click(removeBtn)
 
@@ -622,10 +579,6 @@ describe('Results — filter chips and modal (F03 UI)', () => {
       expect(screen.queryByTestId('filter-chips-row')).toBeNull()
     })
 
-<<<<<<< HEAD
-    // Last request should have no sources filter
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     const calls = global.fetch.mock.calls
     const lastBody = JSON.parse(calls[calls.length - 1][1].body)
     expect(lastBody.filters?.sources).toBeUndefined()
@@ -636,10 +589,7 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-<<<<<<< HEAD
-=======
     await screen.findByTestId('source-checkbox-CA')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
@@ -658,13 +608,8 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     renderResults()
     await screen.findByTestId('results-list')
 
-<<<<<<< HEAD
-    // Apply RS-only filter
-    fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-=======
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
     await screen.findByTestId('source-checkbox-CA')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('source-checkbox-LS'))
     fireEvent.click(screen.getByTestId('modal-apply'))
@@ -673,26 +618,14 @@ describe('Results — filter chips and modal (F03 UI)', () => {
       expect(screen.getByTestId('filter-chips-row')).toBeInTheDocument()
     })
 
-<<<<<<< HEAD
-    // Refine the query
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     const input = screen.getByTestId('results-search-input')
     fireEvent.change(input, { target: { value: 'new query' } })
     fireEvent.click(screen.getByTestId('results-search-submit'))
 
-<<<<<<< HEAD
-    // Chips row should still be visible
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     await waitFor(() => {
       expect(screen.getByTestId('filter-chips-row')).toBeInTheDocument()
     })
 
-<<<<<<< HEAD
-    // Last request should still carry the filter
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     await waitFor(() => {
       const calls = global.fetch.mock.calls
       const lastBody = JSON.parse(calls[calls.length - 1][1].body)
@@ -700,37 +633,22 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     })
   })
 
-<<<<<<< HEAD
-  it('zero-selection validation: all bodies unchecked shows validation, no search', async () => {
-=======
   it('zero-selection validation: all bodies unchecked shows validation, no new search', async () => {
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     renderResults()
     await screen.findByTestId('results-list')
 
     const fetchCallsBefore = global.fetch.mock.calls.length
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-<<<<<<< HEAD
-=======
     await screen.findByTestId('source-checkbox-CA')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('source-checkbox-LS'))
     fireEvent.click(screen.getByTestId('source-checkbox-RS'))
 
-<<<<<<< HEAD
-    // Apply should be disabled — clicking should not call fetch
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     const applyBtn = screen.getByTestId('modal-apply')
     expect(applyBtn).toBeDisabled()
     fireEvent.click(applyBtn)
 
-<<<<<<< HEAD
-    // Fetch call count should not increase
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     expect(global.fetch.mock.calls.length).toBe(fetchCallsBefore)
     expect(screen.getByTestId('source-validation')).toBeInTheDocument()
   })
@@ -740,10 +658,7 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-<<<<<<< HEAD
-=======
     await screen.findByTestId('date-from-input')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.change(screen.getByTestId('date-from-input'), {
       target: { value: '2022-06-01' },
     })
@@ -759,10 +674,7 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-<<<<<<< HEAD
-=======
     await screen.findByTestId('speaker-input')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.change(screen.getByTestId('speaker-input'), {
       target: { value: 'Singh' },
     })
@@ -780,10 +692,7 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-<<<<<<< HEAD
-=======
     await screen.findByTestId('session-input')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.change(screen.getByTestId('session-input'), {
       target: { value: 'Budget Session 2023' },
     })
@@ -796,8 +705,6 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     })
   })
 
-<<<<<<< HEAD
-=======
   it('no-results state with active filters shows the clear-filters affordance', async () => {
     // Filtered query returns zero results: empty state must render together with
     // the chips row "Clear all" control (F03 "No results with active filters").
@@ -827,18 +734,12 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     expect(screen.getByTestId('filter-chips-clear-all')).toBeInTheDocument()
   })
 
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   it('modal pre-populates from active filter state when reopened', async () => {
     renderResults()
     await screen.findByTestId('results-list')
 
-<<<<<<< HEAD
-    // Apply RS-only filter
-    fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-=======
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
     await screen.findByTestId('source-checkbox-CA')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('source-checkbox-LS'))
     fireEvent.click(screen.getByTestId('modal-apply'))
@@ -847,13 +748,8 @@ describe('Results — filter chips and modal (F03 UI)', () => {
       expect(screen.getByTestId('filter-chips-row')).toBeInTheDocument()
     })
 
-<<<<<<< HEAD
-    // Reopen modal
-    fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-=======
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
     await screen.findByTestId('source-checkbox-CA')
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
     expect(screen.getByTestId('source-checkbox-CA')).not.toBeChecked()
     expect(screen.getByTestId('source-checkbox-LS')).not.toBeChecked()
@@ -861,25 +757,6 @@ describe('Results — filter chips and modal (F03 UI)', () => {
   })
 })
 
-<<<<<<< HEAD
-describe('Results — index status footer', () => {
-  it('renders an "Index status" link', async () => {
-    global.fetch.mockResolvedValue({
-      ok: true,
-      json: async () =>
-        makeSearchResponse({
-          total: 1,
-          total_display: '1',
-          total_pages: 1,
-          results: [makeSpeechResult()],
-        }),
-    })
-    renderResults()
-    const link = await screen.findByTestId('index-status-link')
-    expect(link).toBeInTheDocument()
-    expect(link).toHaveAttribute('href', '/index-status')
-    expect(link).toHaveTextContent('Index status')
-=======
 describe('Results — F08 Search History wiring', () => {
   it('selecting a recent entry resets active filters and sort to defaults in the API call', async () => {
     // Pre-populate one recent entry so the dropdown shows a clickable item
@@ -1072,6 +949,5 @@ describe('Results — F08 Search History wiring', () => {
       // Exactly 2 arguments (name + data); no third options/expiry argument
       expect(savedCalls[savedCalls.length - 1]).toHaveLength(2)
     })
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   })
 })

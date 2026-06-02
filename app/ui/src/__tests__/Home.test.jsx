@@ -1,11 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-<<<<<<< HEAD
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
-
-import Home from '../pages/Home.jsx'
-import { makeStatusResponse } from './fixtures.js'
-=======
 
 vi.mock('../lib/cookie.js', () => ({
   areCookiesEnabled: vi.fn().mockReturnValue(true),
@@ -24,7 +17,6 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import Home from '../pages/Home.jsx'
 import { makeStatusResponse } from './fixtures.js'
 import * as cookieModule from '../lib/cookie.js'
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
 function renderHome(initialEntries = ['/']) {
   const navigateSpy = { current: null }
@@ -53,10 +45,6 @@ function useSearchString() {
   return window.location.search
 }
 
-<<<<<<< HEAD
-beforeEach(() => {
-  global.fetch = vi.fn()
-=======
 function NavStateCapture() {
   const location = useLocation()
   return (
@@ -70,7 +58,6 @@ beforeEach(() => {
   cookieModule.areCookiesEnabled.mockReturnValue(true)
   cookieModule.readCookie.mockReturnValue(null)
   cookieModule.trimRecentToFit.mockImplementation((entries) => entries)
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 })
 
 afterEach(() => {
@@ -341,11 +328,7 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
     })
   })
 
-<<<<<<< HEAD
-  it('clicking Advanced Search opens the modal', () => {
-=======
   it('clicking Advanced Search opens the modal', async () => {
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     render(
       <MemoryRouter>
         <Home />
@@ -353,31 +336,16 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
     )
     expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
     fireEvent.click(screen.getByTestId('home-advanced-search-link'))
-<<<<<<< HEAD
-    expect(screen.getByTestId('advanced-search-modal')).toBeInTheDocument()
-  })
-
-  it('modal close button closes the modal', () => {
-=======
     expect(await screen.findByTestId('advanced-search-modal')).toBeInTheDocument()
   })
 
   it('modal close button closes the modal', async () => {
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     render(
       <MemoryRouter>
         <Home />
       </MemoryRouter>
     )
     fireEvent.click(screen.getByTestId('home-advanced-search-link'))
-<<<<<<< HEAD
-    expect(screen.getByTestId('advanced-search-modal')).toBeInTheDocument()
-    fireEvent.click(screen.getByTestId('modal-close'))
-    expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
-  })
-
-  it('applying filters in modal stores them (modal closes)', () => {
-=======
     await screen.findByTestId('advanced-search-modal')
     fireEvent.click(screen.getByTestId('modal-close'))
     await waitFor(() => {
@@ -386,18 +354,12 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
   })
 
   it('applying filters in modal stores them (modal closes)', async () => {
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     render(
       <MemoryRouter>
         <Home />
       </MemoryRouter>
     )
     fireEvent.click(screen.getByTestId('home-advanced-search-link'))
-<<<<<<< HEAD
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
-    fireEvent.click(screen.getByTestId('modal-apply'))
-    expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
-=======
     await screen.findByTestId('source-checkbox-CA')
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
@@ -469,6 +431,5 @@ describe('Home — F08 Search History wiring', () => {
         { expires: 30 }
       )
     })
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   })
 })

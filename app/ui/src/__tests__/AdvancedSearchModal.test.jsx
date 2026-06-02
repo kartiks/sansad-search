@@ -39,18 +39,9 @@ describe('AdvancedSearchModal — rendering', () => {
 
   it('renders all 3 source checkboxes checked by default', () => {
     renderModal()
-<<<<<<< HEAD
-    const ca = screen.getByTestId('source-checkbox-CA')
-    const ls = screen.getByTestId('source-checkbox-LS')
-    const rs = screen.getByTestId('source-checkbox-RS')
-    expect(ca).toBeChecked()
-    expect(ls).toBeChecked()
-    expect(rs).toBeChecked()
-=======
     expect(screen.getByTestId('source-checkbox-CA')).toBeChecked()
     expect(screen.getByTestId('source-checkbox-LS')).toBeChecked()
     expect(screen.getByTestId('source-checkbox-RS')).toBeChecked()
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
   })
 
   it('renders all proceeding type checkboxes checked by default', () => {
@@ -157,10 +148,6 @@ describe('AdvancedSearchModal — proceeding types', () => {
 
   it('CA-only selected disables all non-Debate proceeding type checkboxes', () => {
     renderModal()
-<<<<<<< HEAD
-    // Uncheck LS and RS so only CA is selected
-=======
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     fireEvent.click(screen.getByTestId('source-checkbox-LS'))
     fireEvent.click(screen.getByTestId('source-checkbox-RS'))
 
@@ -178,13 +165,7 @@ describe('AdvancedSearchModal — proceeding types', () => {
     renderModal()
     fireEvent.click(screen.getByTestId('source-checkbox-LS'))
     fireEvent.click(screen.getByTestId('source-checkbox-RS'))
-<<<<<<< HEAD
-    // Now only CA selected
     fireEvent.click(screen.getByTestId('source-checkbox-LS'))
-    // Now CA+LS selected — all types should be enabled
-=======
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
     ALL_PROCEEDING_TYPES.forEach((pt) => {
       expect(screen.getByTestId(`type-checkbox-${pt}`)).not.toBeDisabled()
     })

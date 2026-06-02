@@ -10,6 +10,7 @@ import {
 import Home from './pages/Home.jsx'
 import Results from './pages/Results.jsx'
 import IndexingStatusPage from './pages/IndexingStatusPage.jsx'
+import RecordDetail from './pages/RecordDetail.jsx'
 import './index.css'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
@@ -19,6 +20,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/" element={<Home />} />
         <Route path="/search" element={<Results />} />
         <Route path="/index-status" element={<IndexingStatusPage />} />
+        <Route path="/record/:id" element={<RecordDetail />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

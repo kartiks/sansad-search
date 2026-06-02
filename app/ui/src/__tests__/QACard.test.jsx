@@ -149,3 +149,37 @@ describe('QACard — edge cases', () => {
     expect(snippet.querySelector('mark').textContent).toBe('NHM')
   })
 })
+
+describe('QACard — F05 v2.0: lang_original badge', () => {
+  it('renders "Hindi original" badge for lang_original=hi', () => {
+    render(<QACard result={makeQAResult({ lang_original: 'hi' })} />)
+    expect(screen.getByTestId('lang-badge')).toHaveTextContent('Hindi original')
+  })
+
+  it('renders "Mixed language" badge for lang_original=mixed', () => {
+    render(<QACard result={makeQAResult({ lang_original: 'mixed' })} />)
+    expect(screen.getByTestId('lang-badge')).toHaveTextContent('Mixed language')
+  })
+
+  it('renders no badge for lang_original=en — element absent from DOM', () => {
+    render(<QACard result={makeQAResult({ lang_original: 'en' })} />)
+    expect(screen.queryByTestId('lang-badge')).toBeNull()
+  })
+
+  it('renders no badge when lang_original is null', () => {
+    render(<QACard result={makeQAResult({ lang_original: null })} />)
+    expect(screen.queryByTestId('lang-badge')).toBeNull()
+  })
+})
+
+describe('QACard — F05 v2.0: time_of_day', () => {
+  it('renders time_of_day verbatim when present', () => {
+    render(<QACard result={makeQAResult({ time_of_day: '09:30' })} />)
+    expect(screen.getByTestId('time-of-day')).toHaveTextContent('09:30')
+  })
+
+  it('renders no time element when time_of_day is null — element absent from DOM', () => {
+    render(<QACard result={makeQAResult({ time_of_day: null })} />)
+    expect(screen.queryByTestId('time-of-day')).toBeNull()
+  })
+})
