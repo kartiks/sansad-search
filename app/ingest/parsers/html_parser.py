@@ -386,6 +386,18 @@ def _parse_speech_row_element(row: Tag) -> tuple[str, str] | None:
     return speaker, text
 
 
+def _walk_ca_elements(node: Any):
+    """Yield all descendant elements in document order, not descending into speech rows."""
+    for child in node.children:
+        if isinstance(child, NavigableString):
+            continue
+        if not hasattr(child, "name") or not child.name:
+            continue
+        yield child
+        if not _is_coi_speech_row(child):
+            yield from _walk_ca_elements(child)
+
+
 def _extract_coi_speech_pairs_with_subjects(
     soup: BeautifulSoup,
 ) -> list[tuple[str, str, str | None]]:
@@ -419,12 +431,7 @@ def _extract_coi_speech_pairs_with_subjects(
         or soup
     )
 
-    for child in wrapper.children:
-        if isinstance(child, NavigableString):
-            continue
-        if not hasattr(child, "name") or not child.name:
-            continue
-
+    for child in _walk_ca_elements(wrapper):
         if _is_coi_speech_row(child):
             result = _parse_speech_row_element(child)
             if result:

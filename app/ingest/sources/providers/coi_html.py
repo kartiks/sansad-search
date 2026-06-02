@@ -34,21 +34,14 @@ def _default_volume_filter(url: str) -> bool:
     """Return True for volume-level pages on constitutionofindia.net."""
     return COI_BASE in url and "volume" in url.lower() and url.rstrip("/") != COI_INDEX_URL.rstrip("/")
 
-
 def _default_day_filter(url: str) -> bool:
     """Return True for individual sitting pages (deeper than volume pages)."""
-    if COI_BASE not in url:
+    if not url.startswith(COI_DAY_URL_PREFIX):
         return False
-    # A day URL has more path depth than a volume URL.
-    # Volume URLs end with /volume-N/ or /volume-N; day URLs have an extra segment.
-    # path = url.replace(COI_BASE, "").strip("/")
-    path = url.replace(COI_DAY_URL_PREFIX, "").strip("/")
+    path = url[len(COI_DAY_URL_PREFIX):].strip("/")
     parts = [p for p in path.split("/") if p]
-    # Must be at least 3 levels deep (e.g. historical-constitution/debates/volume-1/1946-12-09)
-    # and the last segment must not be a volume indicator
-    #return len(parts) >= 3 and "volume" not in parts[-1].lower()
-    # Day URLs have 2 path segments after the prefix: volume-N / YYYY-MM-DD
-    return len(parts) == 2 and "volume" not in parts[-1].lower()
+    # After prefix: just the date slug (e.g. "09-dec-1946") → 1 part
+    return len(parts) == 1
 
 
 class CoidHtmlProvider(Provider):

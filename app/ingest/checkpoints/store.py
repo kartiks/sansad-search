@@ -129,6 +129,15 @@ class CheckpointStore:
             "SELECT COUNT(*) FROM processed_documents"
         ).fetchone()[0]
 
+    def clear_corpus(self, corpus: str) -> int:
+        """Delete all processed_documents entries for *corpus*. Returns the count deleted."""
+        conn = self._require_conn()
+        cursor = conn.execute(
+            "DELETE FROM processed_documents WHERE corpus = ?", (corpus,)
+        )
+        conn.commit()
+        return cursor.rowcount
+
     # ── Dedup key tracking ─────────────────────────────────────────────────────
 
     def has_dedup_key(self, key: str) -> bool:

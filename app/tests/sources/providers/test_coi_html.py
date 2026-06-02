@@ -52,22 +52,24 @@ class TestDefaultVolumeFilter:
 
 class TestDefaultDayFilter:
     def test_day_url_accepted(self):
-        url = f"{COI_BASE}/debates/volume-1/1946-12-09/"
+        url = f"{COI_BASE}/debates/09-dec-1946/"
         assert _default_day_filter(url) is True
 
-    def test_volume_url_rejected(self):
-        # Volume URLs end with /volume-N/ — last segment contains "volume"
-        url = f"{COI_BASE}/debates/volume-1/"
-        assert _default_day_filter(url) is False
+    def test_homepage_rejected(self):
+        assert _default_day_filter(f"{COI_BASE}/") is False
 
     def test_non_coi_url_rejected(self):
-        assert _default_day_filter("https://example.com/debates/volume-1/1946-12-09/") is False
+        assert _default_day_filter("https://example.com/debates/09-dec-1946/") is False
 
-    def test_shallow_url_rejected(self):
-        # Only 2 path parts — too shallow to be a day URL
-        url = f"{COI_BASE}/debates/volume-1"
-        # path parts after stripping base: ["debates", "volume-1"] → 2 parts < 3
+    def test_nested_two_segment_url_rejected(self):
+        # Two path segments after the debates/ prefix → not a day page
+        url = f"{COI_BASE}/debates/volume-1/1946-12-09/"
         assert _default_day_filter(url) is False
+
+    def test_prefix_only_url_rejected(self):
+        # The debates prefix itself has no date slug → not a day page
+        from ingest.sources.providers.coi_html import COI_DAY_URL_PREFIX
+        assert _default_day_filter(COI_DAY_URL_PREFIX) is False
 
 
 # ── CoidHtmlProvider.discover() ───────────────────────────────────────────────
@@ -86,14 +88,28 @@ class TestCoidHtmlProviderDiscover:
         """
         Build an AsyncMock client that returns:
           - index_html for the first call (index page)
-          - volume_html for subsequent calls (volume pages)
+          - per-volume unique HTML for subsequent calls (volume pages)
+
+        Each volume page response contains three day URLs unique to that volume
+        (e.g. /debates/vol1-day-a/) so that deduplication does not collapse all
+        volumes into the first volume's refs. The real site has distinct sitting
+        URLs per volume; volume_html serves as a structural reference only.
         """
         index_resp = MagicMock(status_code=200, text=index_html)
-        volume_resp = MagicMock(status_code=200, text=volume_html)
+
+        def _vol_resp(vol_num: int) -> MagicMock:
+            html = (
+                f"<html><body>"
+                f'<a href="{COI_BASE}/debates/vol{vol_num}-day-a/">Day A</a>'
+                f'<a href="{COI_BASE}/debates/vol{vol_num}-day-b/">Day B</a>'
+                f'<a href="{COI_BASE}/debates/vol{vol_num}-day-c/">Day C</a>'
+                f"</body></html>"
+            )
+            return MagicMock(status_code=200, text=html)
 
         client = AsyncMock(spec=httpx.AsyncClient)
-        # First call = index, remaining calls = volume pages
-        client.get.side_effect = [index_resp] + [volume_resp] * 20
+        # First call = index; calls 1-20 = per-volume pages with unique day URLs
+        client.get.side_effect = [index_resp] + [_vol_resp(i) for i in range(1, 21)]
         return client
 
     async def test_discovers_12_volumes_from_fixture_index(self):

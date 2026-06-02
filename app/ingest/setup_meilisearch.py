@@ -13,6 +13,12 @@ from pathlib import Path
 
 import httpx
 import meilisearch_python_sdk as meilisearch
+from meilisearch_python_sdk.models.settings import (
+    MeilisearchSettings,
+    MinWordSizeForTypos,
+    Pagination,
+    TypoTolerance,
+)
 
 INDEX_NAME = "parliamentary_records"
 
@@ -88,7 +94,7 @@ def main() -> None:
     client = meilisearch.Client(url, key)
 
     # Create index if absent
-    existing = [idx.uid for idx in client.get_indexes()["results"]]
+    existing = [idx.uid for idx in (client.get_indexes() or [])]
     if INDEX_NAME not in existing:
         task = client.create_index(INDEX_NAME, {"primaryKey": "id"})
         client.wait_for_task(task.task_uid)
@@ -99,14 +105,21 @@ def main() -> None:
     index = client.index(INDEX_NAME)
 
     # Apply all settings
-    task = index.update_settings({
-        "searchableAttributes": SEARCHABLE_ATTRIBUTES,
-        "filterableAttributes": FILTERABLE_ATTRIBUTES,
-        "sortableAttributes": SORTABLE_ATTRIBUTES,
-        "rankingRules": RANKING_RULES,
-        "typoTolerance": TYPO_TOLERANCE,
-        "pagination": PAGINATION,
-    })
+    task = index.update_settings(MeilisearchSettings(
+        searchable_attributes=SEARCHABLE_ATTRIBUTES,
+        filterable_attributes=FILTERABLE_ATTRIBUTES,
+        sortable_attributes=SORTABLE_ATTRIBUTES,
+        ranking_rules=RANKING_RULES,
+        typo_tolerance=TypoTolerance(
+            enabled=TYPO_TOLERANCE["enabled"],
+            min_word_size_for_typos=MinWordSizeForTypos(
+                one_typo=TYPO_TOLERANCE["minWordSizeForTypos"]["oneTypo"],
+                two_typos=TYPO_TOLERANCE["minWordSizeForTypos"]["twoTypos"],
+            ),
+            disable_on_attributes=TYPO_TOLERANCE["disableOnAttributes"],
+        ),
+        pagination=Pagination(max_total_hits=PAGINATION["maxTotalHits"]),
+    ))
     client.wait_for_task(task.task_uid)
     print("Index settings applied.")
 
@@ -114,8 +127,11 @@ def main() -> None:
     # PATCH /experimental-features is not exposed by the SDK; use httpx directly.
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     resp = httpx.patch(f"{url}/experimental-features", json=EXPERIMENTAL_FEATURES, headers=headers)
-    resp.raise_for_status()
-    print("Experimental features enabled:", list(EXPERIMENTAL_FEATURES.keys()))
+    if resp.status_code == 403:
+        print("Warning: /experimental-features returned 403 — managed instance likely controls this. Assuming containsFilter is already enabled.")
+    else:
+        resp.raise_for_status()
+        print("Experimental features enabled:", list(EXPERIMENTAL_FEATURES.keys()))
 
     # Load and push synonyms (full replace)
     synonyms_path = Path(__file__).parent.parent / "data" / "synonyms.json"
