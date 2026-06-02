@@ -196,13 +196,20 @@ class LSOrchestrator:
     """
     LS corpus orchestrator — provider chain: [InternetArchiveProvider, EparlibDspaceProvider].
 
-    Iterates providers in order. For each provider:
-      - discover() → list[DocumentRef]
-      - For each DocumentRef: checkpoint check → fetch → parse → segment → index
+    PRD v2.0 change (Phase 10): shared sequence_within_sitting is assigned at
+    orchestrator level across all records (speech + Q+A) within each sitting,
+    in the order documents are processed from the provider chain.
 
-    Document-level dedup via canonical_doc_id (= DSpace handle number N) shared
-    across both providers ensures each document is fetched and parsed once even
-    when it appears in both IA and DSpace.
+    BUILD-TIME VERIFICATION FINDING (ARCHITECTURE.md §8, item 1 — LS):
+    LS documents from InternetArchiveProvider are individual per-session
+    proceeding-type files (one file per proceeding type per sitting). Speeches
+    and Q+A exchanges appear in separate documents. The shared sitting-level
+    sequence reflects the order documents are discovered and processed by the
+    provider chain. For IA, discovery order follows the advancedsearch.php
+    result order (sorted by date). Within a sitting, the proceeding-type
+    ordering is not guaranteed to match the official parliamentary order
+    (Question Hour before debates). This is a known limitation of the
+    document-at-a-time processing model. Finding recorded: 2026-06-02.
     """
 
     def __init__(
@@ -221,14 +228,21 @@ class LSOrchestrator:
         self._names_dict = names_dict or {}
         self._rate_delay = rate_delay
         self._date_from = date_from
-        # date_from (ISO YYYY-MM-DD) overrides the providers' built-in scope.
-        # When None, each default provider keeps its own 2014-01-01 PRD-scope
-        # default. Injected providers are used as-is.
         _df = {"date_from": date_from} if date_from is not None else {}
         self._providers: list[Provider] = providers or [
             InternetArchiveProvider(client, corpus="LS", rate_delay=rate_delay, **_df),
             EparlibDspaceProvider(client, rate_delay=rate_delay, **_df),
         ]
+        # Per-sitting sequence counter shared across all providers and record types
+        self._sitting_seq: dict[str, int] = {}
+
+    def _next_seq(self, sitting_key: str) -> int:
+        n = self._sitting_seq.get(sitting_key, 1)
+        self._sitting_seq[sitting_key] = n + 1
+        return n
+
+    def _sitting_key(self, record: dict) -> str:
+        return f"LS_{record.get('date', '')}_{record.get('sitting_number')}"
 
     async def run(self) -> dict[str, int]:
         """
@@ -279,6 +293,11 @@ class LSOrchestrator:
                         record["speaker_name_unresolved"] = unresolved
                     record["session_name"] = canonicalize_session(
                         record.get("session_name"), source="LS"
+                    )
+
+                    # Assign shared sitting-level sequence at orchestrator level
+                    record["sequence_within_sitting"] = self._next_seq(
+                        self._sitting_key(record)
                     )
 
                     if self._indexer.index_record(record, self._checkpoint):

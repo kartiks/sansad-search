@@ -171,7 +171,8 @@ class TestSegmentSpeeches:
         result = segment_speeches(record, "LS")
         assert result[0]["speaker_name"] == "SHRI NARENDRA MODI"
 
-    def test_sequence_within_sitting_1_based(self):
+    def test_sequence_not_assigned_by_segmenter(self):
+        """sequence_within_sitting is assigned at orchestrator level, not by segmenter."""
         text = (
             "SHRI A :\nFirst.\n\n"
             "SHRI B :\nSecond.\n\n"
@@ -179,7 +180,12 @@ class TestSegmentSpeeches:
         )
         record = _raw_record(text)
         result = segment_speeches(record, "LS")
-        assert [s["sequence_within_sitting"] for s in result] == [1, 2, 3]
+        assert len(result) == 3
+        # Segmenter must not assign sequence — orchestrator is responsible
+        for s in result:
+            assert "sequence_within_sitting" not in s, (
+                "sequence_within_sitting must be assigned by the orchestrator, not the segmenter"
+            )
 
     def test_same_member_twice_produces_two_records(self):
         text = (
@@ -192,7 +198,6 @@ class TestSegmentSpeeches:
         assert len(result) == 3
         assert result[0]["speaker_name"] == "SHRI NARENDRA MODI"
         assert result[2]["speaker_name"] == "SHRI NARENDRA MODI"
-        assert result[0]["sequence_within_sitting"] != result[2]["sequence_within_sitting"]
 
     def test_metadata_propagated_to_speeches(self):
         text = "SHRI NARENDRA MODI :\nSpeech text.\n"
@@ -285,3 +290,158 @@ class TestSegmentSpeeches:
         assert all("HON. MEMBERS" not in sp for sp in speakers)
         # Presiding officer excluded
         assert all("SPEAKER" not in sp for sp in speakers)
+
+
+# ── Phase 10: lang_original, word_count, time_of_day ─────────────────────────
+
+class TestLangOriginal:
+    def test_case1_english_produces_en(self):
+        text = "SHRI TEST :\nThe government has addressed the situation properly.\n"
+        record = _raw_record(text)
+        result = segment_speeches(record, "LS")
+        assert result[0]["lang_original"] == "en"
+
+    def test_case4_hindi_only_produces_hi(self):
+        text = "SHRI TEST :\nयह भाषण पूरी तरह हिंदी में है।\n"
+        record = _raw_record(text)
+        result = segment_speeches(record, "LS")
+        assert result[0]["lang_original"] == "hi"
+
+    def test_case2_translated_hindi_produces_hi(self):
+        """Hindi speech with [Translation] marker — no English before the Hindi."""
+        text = (
+            "SHRI TEST :\n"
+            "यह हिंदी में है।\n"
+            "[Translation]\n"
+            "This is the English translation of the Hindi text.\n"
+        )
+        record = _raw_record(text)
+        result = segment_speeches(record, "LS")
+        assert result[0]["lang_original"] == "hi"
+
+    def test_case3_bilingual_produces_mixed(self):
+        """Significant English before first Hindi → genuinely bilingual (mixed)."""
+        english_before = "The first part of this speech is delivered in English and is quite long. " * 3
+        text = (
+            "SHRI TEST :\n"
+            f"{english_before}\n"
+            "अब हम हिंदी में आते हैं।\n"
+            "[Translation]\n"
+            "Now we move to Hindi.\n"
+        )
+        record = _raw_record(text)
+        result = segment_speeches(record, "LS")
+        assert result[0]["lang_original"] == "mixed"
+
+    def test_lang_original_present_in_all_records(self):
+        text = "SHRI A :\nFirst speech.\n\nSHRI B :\nSecond speech.\n"
+        record = _raw_record(text)
+        result = segment_speeches(record, "LS")
+        for s in result:
+            assert "lang_original" in s
+            assert s["lang_original"] in ("en", "hi", "mixed")
+
+
+class TestWordCount:
+    def test_word_count_computed_for_english_speech(self):
+        text = "SHRI TEST :\nThis speech has six words here.\n"
+        record = _raw_record(text)
+        result = segment_speeches(record, "LS")
+        assert result[0]["word_count"] == 6
+
+    def test_word_count_null_when_full_text_en_null(self):
+        """Case 4: Hindi only — full_text_en is None → word_count must be None."""
+        text = "SHRI TEST :\nयह हिंदी में है और कोई अनुवाद नहीं।\n"
+        record = _raw_record(text)
+        result = segment_speeches(record, "LS")
+        assert result[0]["full_text_en"] is None
+        assert result[0]["word_count"] is None
+
+    def test_word_count_present_for_translated_speech(self):
+        text = (
+            "SHRI TEST :\n"
+            "हिंदी।\n"
+            "[Translation]\n"
+            "Translation with three words here plus more.\n"
+        )
+        record = _raw_record(text)
+        result = segment_speeches(record, "LS")
+        assert result[0]["word_count"] is not None
+        assert isinstance(result[0]["word_count"], int)
+        assert result[0]["word_count"] > 0
+
+
+class TestTimeOfDay:
+    def test_time_of_day_passed_through_from_raw_record(self):
+        text = "SHRI TEST :\nA speech.\n"
+        record = _raw_record(text)
+        record["time_of_day"] = "11:30"
+        result = segment_speeches(record, "LS")
+        assert result[0]["time_of_day"] == "11:30"
+
+    def test_time_of_day_none_when_not_in_raw_record(self):
+        text = "SHRI TEST :\nA speech.\n"
+        record = _raw_record(text)
+        result = segment_speeches(record, "LS")
+        assert result[0]["time_of_day"] is None
+
+    def test_time_of_day_present_in_all_records(self):
+        text = "SHRI A :\nFirst.\n\nSHRI B :\nSecond.\n"
+        record = _raw_record(text)
+        record["time_of_day"] = "14:00"
+        result = segment_speeches(record, "LS")
+        for s in result:
+            assert "time_of_day" in s
+            assert s["time_of_day"] == "14:00"
+
+
+class TestCASubjectPerSpeech:
+    """CA speech pairs now carry per-speech subjects from the section-header walk."""
+
+    def test_ca_speeches_use_subject_from_pair_triples(self):
+        """CA segmenter reads subject from the third element of ca_speech_pairs."""
+        raw = {
+            "source": "CA",
+            "proceeding_type": "debate",
+            "date": "1946-12-09",
+            "session_name": None,
+            "session_number": None,
+            "sitting_number": None,
+            "source_url": None,
+            "page_reference": None,
+            "volume": 1,
+            "time_of_day": None,
+            "raw_text": "",
+            "ca_speech_pairs": [
+                ("Shri Jawaharlal Nehru", "I move the Objectives Resolution.", "Objectives Resolution"),
+                ("Dr. B.R. Ambedkar", "I support the resolution.", "Objectives Resolution"),
+                ("Shri T.T. Krishnamachari", "I also support.", "The Question of Procedure"),
+            ],
+        }
+        result = segment_speeches(raw, "CA")
+        assert len(result) == 3
+        assert result[0]["subject"] == "Objectives Resolution"
+        assert result[1]["subject"] == "Objectives Resolution"
+        assert result[2]["subject"] == "The Question of Procedure"
+
+    def test_ca_speech_subject_can_be_none(self):
+        """When no section header or TOC fallback exists, subject is None."""
+        raw = {
+            "source": "CA",
+            "proceeding_type": "debate",
+            "date": "1946-12-09",
+            "session_name": None,
+            "session_number": None,
+            "sitting_number": None,
+            "source_url": None,
+            "page_reference": None,
+            "volume": 1,
+            "time_of_day": None,
+            "raw_text": "",
+            "ca_speech_pairs": [
+                ("Shri Test Speaker", "Some speech text.", None),
+            ],
+        }
+        result = segment_speeches(raw, "CA")
+        assert len(result) == 1
+        assert result[0]["subject"] is None

@@ -4,6 +4,7 @@ filter building, sort, and error responses.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -41,6 +42,19 @@ def _meili_response(hits=None, total=0, pages=0, page=1) -> Dict[str, Any]:
         "page": page,
         "hitsPerPage": 20,
     }
+
+
+def _meili_ns(hits=None, total=0, pages=0, page=1) -> SimpleNamespace:
+    """Attribute-accessible version of _meili_response for use in fake_search
+    stubs.  search.py accesses results via raw.hits / raw.total_hits etc.,
+    so inline mock functions must return a SimpleNamespace, not a plain dict."""
+    return SimpleNamespace(
+        hits=hits or [],
+        total_hits=total,
+        total_pages=pages,
+        page=page,
+        hits_per_page=20,
+    )
 
 
 def _make_client(meili_response=None) -> TestClient:
@@ -322,9 +336,9 @@ class TestFilterForwarding:
         """Return (meili_mock, captured_params_list) where params are captured."""
         captured = []
 
-        async def fake_search(query, params=None):
-            captured.append({"query": query, "params": params or {}})
-            return _meili_response()
+        async def fake_search(query, **kwargs):
+            captured.append({"query": query, "params": kwargs})
+            return _meili_ns()
 
         mock_index = AsyncMock()
         mock_index.search = fake_search
@@ -462,9 +476,9 @@ class TestFilterEdgeCases:
         """Omitting sources key entirely places no source restriction."""
         mock_client, captured = [], []
 
-        async def fake_search(query, params=None):
-            captured.append(params or {})
-            return _meili_response()
+        async def fake_search(query, **kwargs):
+            captured.append(kwargs)
+            return _meili_ns()
 
         mock_index = AsyncMock()
         mock_index.search = fake_search
@@ -498,9 +512,9 @@ class TestPhraseQueryForwarding:
         adjacency correctly."""
         captured = []
 
-        async def fake_search(query, params=None):
+        async def fake_search(query, **kwargs):
             captured.append(query)
-            return _meili_response()
+            return _meili_ns()
 
         mock_index = AsyncMock()
         mock_index.search = fake_search
@@ -571,9 +585,9 @@ class TestCaseInsensitivity:
         for query_text in ("article 370", "Article 370", "ARTICLE 370"):
             calls: list = []
 
-            async def fake_search(q, params=None, _c=calls):
+            async def fake_search(q, _c=calls, **kwargs):
                 _c.append(q)
-                return _meili_response()
+                return _meili_ns()
 
             mock_index = AsyncMock()
             mock_index.search = fake_search
@@ -803,9 +817,9 @@ class TestSpeakerSubstringFilter:
         """CONTAINS expression must appear in the params forwarded to Meilisearch."""
         captured: list = []
 
-        async def fake_search(query, params=None):
-            captured.append(params or {})
-            return _meili_response()
+        async def fake_search(query, **kwargs):
+            captured.append(kwargs)
+            return _meili_ns()
 
         mock_index = AsyncMock()
         mock_index.search = fake_search

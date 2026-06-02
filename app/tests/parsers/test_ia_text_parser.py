@@ -195,3 +195,9 @@ class TestParseIaText:
         assert "First section" in result["raw_text"]
         assert "Second section" in result["raw_text"]
         assert "\x0c" not in result["raw_text"]
+
+    def test_time_of_day_is_none(self):
+        """IA pre-OCR text has no sitting start time; time_of_day must be None."""
+        result = parse_ia_text(_SAMPLE_TEXT, _meta(), "LS")
+        assert result is not None
+        assert result["time_of_day"] is None

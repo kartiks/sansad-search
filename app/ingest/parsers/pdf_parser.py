@@ -134,6 +134,7 @@ def parse_pdf(
         "volume": volume,
         "source_url": source_url,
         "page_reference": 1,
+        "time_of_day": None,  # PDF sources have no sitting start time
         "raw_text": raw_text,
         "pages": pages_out,
     }

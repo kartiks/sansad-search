@@ -42,6 +42,7 @@ _MEILI_EXCLUDED = frozenset({
     "session_number",
     "created_at",
     "dedup_key",
+    "word_count",   # PostgreSQL-only per DATA-MODELS.md §2.2
 })
 
 # All speeches-table columns (in INSERT order)
@@ -49,7 +50,8 @@ _SPEECH_COLUMNS = (
     "source", "proceeding_type", "date", "session_name", "session_number",
     "sitting_number", "subject", "speaker_name", "speaker_party",
     "speaker_constituency_or_state", "speaker_role", "sequence_within_sitting",
-    "full_text_en", "is_translated", "has_untranslated_content",
+    "full_text_en", "lang_original", "time_of_day", "word_count",
+    "is_translated", "has_untranslated_content",
     "speaker_name_unresolved", "source_url", "page_reference", "volume",
     "dedup_key",
 )
@@ -59,7 +61,9 @@ _QA_COLUMNS = (
     "source", "proceeding_type", "date", "session_name", "session_number",
     "sitting_number", "question_number", "subject", "questioner_names",
     "questioner_party", "minister_name", "ministry",
-    "full_text_en", "is_translated", "has_untranslated_content",
+    "sequence_within_sitting",
+    "full_text_en", "lang_original", "time_of_day", "word_count",
+    "is_translated", "has_untranslated_content",
     "source_url", "page_reference", "dedup_key",
 )
 

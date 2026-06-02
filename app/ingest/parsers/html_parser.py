@@ -1,23 +1,27 @@
 """
-HTML parser for Lok Sabha and Rajya Sabha parliamentary records.
+HTML parser for parliamentary records from constitutionofindia.net (CA) and
+sansad.in/rs (recent RS).
 
-Converts raw HTML fetched from sansad.in / rajyasabha.gov.in into raw record
-dicts. Each dict carries sufficient fields for the downstream segmenters to
-produce Speech or Q+A exchange units. The parser does not perform
-canonicalization or segmentation — it extracts structured text and metadata.
+Converts raw HTML into raw record dicts for downstream segmenters. Does not
+perform canonicalization or segmentation — it extracts structured text and
+metadata.
 
-Returned dict shape (fields may be None if not found in the HTML):
+Returned dict shape (fields may be None if not found in HTML):
 {
-    "source":           "LS" | "RS",
-    "proceeding_type":  str,           # debate | starred_question | ...
+    "source":           "LS" | "RS" | "CA",
+    "proceeding_type":  str,
     "date":             "YYYY-MM-DD" | None,
     "session_name":     str | None,
     "session_number":   int | None,
     "sitting_number":   int | None,
     "subject":          str | None,
     "source_url":       str | None,
-    "raw_text":         str,           # full extracted text for segmenters
-    "raw_html":         str,           # original HTML for segmenters needing structure
+    "time_of_day":      str | None,   # HH:MM; HTML sources only; None for IA/PDF
+    "raw_text":         str,
+    "raw_html":         str,
+    # CA only:
+    "ca_speech_pairs":  list[tuple[str, str, str | None]] | None,
+    #                   (speaker, text, subject_for_this_speech)
 }
 """
 
@@ -28,7 +32,7 @@ import re
 from datetime import date
 from typing import Any
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,12 @@ _MONTH_MAP = {
     "may": 5, "june": 6, "july": 7, "august": 8,
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
+
+# HH:MM pattern for time_of_day extraction
+_TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+
+# CSS classes that identify a coi speech grid row
+_COI_GRID_CLASS = "lg:grid-cols-12"
 
 
 def _parse_date(text: str) -> str | None:
@@ -116,6 +126,44 @@ def _clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _extract_time_of_day(soup: BeautifulSoup) -> str | None:
+    """
+    Extract sitting start time as HH:MM from HTML.
+
+    Looks for <time> elements first, then HH:MM patterns in header/metadata
+    areas. Returns None if no valid time is found.
+
+    BUILD-TIME VERIFICATION FINDING (ARCHITECTURE.md §8, item 3):
+    - CA (constitutionofindia.net): time_of_day present when a <time> element
+      exists in the sitting page header. Not all CA pages expose this. When
+      absent, time_of_day is None.
+    - RS (sansad.in/rs): time_of_day may appear in sitting header metadata.
+      Availability is inconsistent across sittings. When absent, None.
+    - IA pre-OCR text and PDF sources: time_of_day is always None by design
+      (set explicitly in ia_text_parser and pdf_parser). Finding: 2026-06-02.
+    """
+    # Check <time> element (most reliable when present)
+    time_tag = soup.find("time")
+    if time_tag:
+        text = time_tag.get_text(strip=True)
+        m = _TIME_RE.match(text)
+        if m:
+            h, mi = int(m.group(1)), int(m.group(2))
+            if 0 <= h <= 23 and 0 <= mi <= 59:
+                return f"{h:02d}:{mi:02d}"
+
+    # Fall back: look for HH:MM in header/metadata class elements
+    for tag in soup.find_all(class_=re.compile(r"time|header|meta", re.I)):
+        text = tag.get_text()
+        m = _TIME_RE.search(text)
+        if m:
+            h, mi = int(m.group(1)), int(m.group(2))
+            if 0 <= h <= 23 and 0 <= mi <= 59:
+                return f"{h:02d}:{mi:02d}"
+
+    return None
+
+
 def parse_html(
     html: str,
     source: str,
@@ -123,17 +171,18 @@ def parse_html(
     proceeding_type_hint: str | None = None,
 ) -> dict[str, Any]:
     """
-    Parse a single LS or RS HTML document into a raw record dict.
+    Parse a single CA, LS, or RS HTML document into a raw record dict.
 
     Args:
         html:                  Raw HTML string.
-        source:                "LS" or "RS".
+        source:                "CA", "LS", or "RS".
         source_url:            URL the HTML was fetched from.
         proceeding_type_hint:  If the caller already knows the proceeding type
                                (e.g. from the URL pattern), pass it here.
 
     Returns:
-        A raw record dict. The segmenters consume raw_text and raw_html.
+        A raw record dict. The segmenters consume raw_text, raw_html, and
+        ca_speech_pairs (CA only).
     """
     if source not in ("CA", "LS", "RS"):
         raise ValueError(f"Invalid source: {source!r}. Must be 'CA', 'LS', or 'RS'.")
@@ -142,7 +191,6 @@ def parse_html(
 
     # ── Metadata extraction ───────────────────────────────────────────────────
 
-    # Title candidates: <title>, <h1>, first heading-like element
     title_tag = soup.find("title")
     title_text = _clean_text(title_tag.get_text()) if title_tag else ""
 
@@ -151,7 +199,7 @@ def parse_html(
 
     meta_text = f"{title_text} {h1_text}"
 
-    # Date: look in title, h1, and common metadata divs
+    # Date: look in title, h1, and common metadata divs (CA overrides this in orchestrator)
     date_str: str | None = None
     for candidate in [title_text, h1_text]:
         date_str = _parse_date(candidate)
@@ -182,13 +230,14 @@ def parse_html(
     else:
         proceeding_type = _detect_proceeding_type(meta_text)
 
+    # time_of_day: extract from HTML sources
+    time_of_day = _extract_time_of_day(soup)
+
     # ── Body text extraction ──────────────────────────────────────────────────
 
-    # Remove script, style, nav, header, footer noise
     for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
         tag.decompose()
 
-    # Prefer a main content container
     main = (
         soup.find("main")
         or soup.find(id=re.compile(r"content|main|body", re.I))
@@ -197,19 +246,16 @@ def parse_html(
         or soup
     )
 
-    # Preserve newlines so segmenters can split on attribution lines.
-    # Only collapse horizontal whitespace within each line.
     lines = main.get_text(separator="\n").splitlines()
     raw_text = "\n".join(re.sub(r"[ \t]+", " ", ln).strip() for ln in lines)
     raw_html = str(main)
 
-    # CA records have no session names or session numbers per the PRD spec.
-    # Also extract structured speech pairs from the constitutionofindia.net DOM.
-    ca_speech_pairs: list[tuple[str, str]] | None = None
+    # CA records: no session names/numbers; extract structured speech pairs with subjects
+    ca_speech_pairs: list[tuple[str, str, str | None]] | None = None
     if source == "CA":
         session_name = None
         session_number = None
-        ca_speech_pairs = _extract_coi_speech_pairs(soup)
+        ca_speech_pairs = _extract_coi_speech_pairs_with_subjects(soup)
 
     return {
         "source": source,
@@ -220,56 +266,175 @@ def parse_html(
         "sitting_number": sitting_number,
         "subject": subject,
         "source_url": source_url,
+        "time_of_day": time_of_day,
         "raw_text": raw_text,
         "raw_html": raw_html,
         "ca_speech_pairs": ca_speech_pairs,
     }
 
 
-def _extract_coi_speech_pairs(soup: "BeautifulSoup") -> list[tuple[str, str]]:
-    """
-    Extract (speaker, text) pairs from constitutionofindia.net debate pages.
+# ── CA constitutionofindia.net DOM helpers ────────────────────────────────────
 
-    The site renders each speech as a CSS grid row:
-      div.lg:grid.lg:grid-cols-12
-        div.lg:col-span-3  → ref number (span.bg-[#F8FFA3]) + speaker name (span.font-medium)
+
+def _extract_coi_toc_first_item(soup: BeautifulSoup) -> str | None:
+    """
+    Extract the first item's text from the page TOC <ul>.
+
+    The TOC contains <li><a href="#ID">Topic</a></li> items. The first item's
+    text is used as the subject fallback when no section header precedes the
+    first speech in the sitting.
+
+    BUILD-TIME VERIFICATION FINDING (ARCHITECTURE.md §8, item 2):
+    The constitutionofindia.net TOC <li><a href="#ID"> anchor IDs do not
+    consistently correspond to id= attributes on body elements in the observed
+    HTML structure. The anchor href IDs in the TOC (#objectives-resolution,
+    etc.) are present but the matching id= attributes on body section elements
+    were not found reliably across all volumes. Therefore: TOC first-item link
+    text is used directly as the subject fallback (not resolved via anchor
+    mapping). This is the correct fallback per the PRD spec. Finding: 2026-06-02.
+    """
+    for ul in soup.find_all("ul"):
+        first_li = ul.find("li")
+        if not first_li:
+            continue
+        first_a = first_li.find("a", href=lambda h: h and h.startswith("#"))
+        if first_a:
+            return _clean_text(first_a.get_text())
+    return None
+
+
+def _is_coi_speech_row(element: Any) -> bool:
+    """Return True if the element is a constitutionofindia.net speech grid row."""
+    if not hasattr(element, "get"):
+        return False
+    classes = element.get("class") or []
+    return _COI_GRID_CLASS in classes
+
+
+def _extract_section_header_text(element: Any) -> str | None:
+    """
+    Return the text of a standalone bold section header, or None.
+
+    Section headers are standalone bold elements (<strong>, <b>) or paragraphs
+    containing only a single bold element. Bold speaker names are inside speech
+    grid rows (which are excluded by the caller iterating wrapper children).
+    """
+    if not hasattr(element, "name") or not element.name:
+        return None
+    name = element.name.lower()
+
+    if name in ("strong", "b"):
+        text = _clean_text(element.get_text())
+        if text and len(text) < 300:
+            return text
+
+    if name == "p":
+        # Standalone paragraph containing only a single bold element
+        bold_children = [
+            c for c in element.children
+            if hasattr(c, "name") and c.name in ("strong", "b")
+        ]
+        text_content = _clean_text(element.get_text())
+        if bold_children and text_content and len(text_content) < 300:
+            # Confirm the paragraph has no other substantial text outside the bold
+            non_bold_text = "".join(
+                str(c) for c in element.children
+                if not (hasattr(c, "name") and c.name in ("strong", "b"))
+            ).strip()
+            if len(non_bold_text) < 5:
+                return text_content
+
+    return None
+
+
+def _parse_speech_row_element(row: Tag) -> tuple[str, str] | None:
+    """
+    Extract (speaker_name, speech_text) from a constitutionofindia.net speech grid row.
+
+    Row structure:
+      div.lg:grid-cols-12
+        div.lg:col-span-3  → ref number (span.bg-[#F8FFA3]) + speaker (span.font-medium)
         div.lg:col-span-9  → speech prose text
-
-    Returns a list of (speaker_name, speech_text) tuples in document order.
     """
-    speech_rows = soup.find_all(
-        "div",
-        class_=lambda c: c and "lg:grid-cols-12" in c and "lg:grid" in c,
+    info_div = row.find("div", class_=lambda c: c and "lg:col-span-3" in c)
+    content_div = row.find("div", class_=lambda c: c and "lg:col-span-9" in c)
+    if not info_div or not content_div:
+        return None
+
+    # Only process rows with a reference number (yellow span)
+    ref_span = info_div.find("span", class_=lambda c: c and "bg-[#F8FFA3]" in c)
+    if not ref_span:
+        return None
+
+    # Speaker name: direct <span> child of info_div (not inside the ref wrapper)
+    speaker = None
+    for child in info_div.children:
+        if getattr(child, "name", None) == "span":
+            name = child.get_text(strip=True)
+            if name:
+                speaker = name
+                break
+
+    if not speaker:
+        return None
+
+    text_lines = content_div.get_text(separator="\n").splitlines()
+    text = "\n".join(re.sub(r"[ \t]+", " ", ln).strip() for ln in text_lines).strip()
+    if not text:
+        return None
+
+    return speaker, text
+
+
+def _extract_coi_speech_pairs_with_subjects(
+    soup: BeautifulSoup,
+) -> list[tuple[str, str, str | None]]:
+    """
+    Walk the constitutionofindia.net page DOM in document order.
+
+    Tracks standalone bold section headers as the current subject. When a new
+    section header is encountered, all subsequent speeches inherit that subject
+    until the next header. If no section header precedes the first speech,
+    falls back to the first TOC item's text.
+
+    Returns a list of (speaker, text, subject) triples.
+
+    BUILD-TIME VERIFICATION FINDING (ARCHITECTURE.md §8, item 1 — CA):
+    The constitutionofindia.net HTML structure (one page per sitting) exposes
+    all debate speeches in a single ordered DOM. Speeches appear as
+    lg:grid-cols-12 div elements. CA has no Q+A exchanges (no Question Hour
+    in the Constituent Assembly), so the shared sequence space contains only
+    speech records. Cross-type interleaving is not applicable for CA. The
+    sitting-level sequence is reliably assignable from DOM order. Finding: 2026-06-02.
+    """
+    toc_first = _extract_coi_toc_first_item(soup)
+    current_subject: str | None = toc_first
+    first_header_seen = False
+    pairs: list[tuple[str, str, str | None]] = []
+
+    wrapper = (
+        soup.find("div", class_="wrapper")
+        or soup.find("main")
+        or soup.body
+        or soup
     )
-    pairs: list[tuple[str, str]] = []
-    for row in speech_rows:
-        info_div = row.find("div", class_=lambda c: c and "lg:col-span-3" in c)
-        content_div = row.find("div", class_=lambda c: c and "lg:col-span-9" in c)
-        if not info_div or not content_div:
+
+    for child in wrapper.children:
+        if isinstance(child, NavigableString):
+            continue
+        if not hasattr(child, "name") or not child.name:
             continue
 
-        # Only process rows that have a reference number (yellow span)
-        ref_span = info_div.find("span", class_=lambda c: c and "bg-[#F8FFA3]" in c)
-        if not ref_span:
+        if _is_coi_speech_row(child):
+            result = _parse_speech_row_element(child)
+            if result:
+                speaker, text = result
+                pairs.append((speaker, text, current_subject))
             continue
 
-        # Speaker name: the direct <span> child of info_div (not inside the ref wrapper div)
-        speaker = None
-        for child in info_div.children:
-            if getattr(child, "name", None) == "span":
-                name = child.get_text(strip=True)
-                if name:
-                    speaker = name
-                    break
-
-        if not speaker:
-            continue
-
-        text_lines = content_div.get_text(separator="\n").splitlines()
-        text = "\n".join(re.sub(r"[ \t]+", " ", ln).strip() for ln in text_lines).strip()
-        if not text:
-            continue
-
-        pairs.append((speaker, text))
+        header_text = _extract_section_header_text(child)
+        if header_text:
+            current_subject = header_text
+            first_header_seen = True
 
     return pairs

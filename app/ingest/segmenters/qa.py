@@ -22,6 +22,8 @@ from typing import Any
 from ingest.segmenters.speech import (
     _HINDI_SCRIPT_RE,
     _TRANSLATION_RE,
+    _compute_lang_original,
+    _count_words,
     _detect_language_handling,
     _is_presiding_officer,
     _is_unattributed,
@@ -208,9 +210,10 @@ def _parse_single_qa(
             break
 
     # Build full_text_en
-    full_text_en, is_translated, has_untranslated = _detect_language_handling(
-        "\n\n".join(text_parts)
-    )
+    combined_text = "\n\n".join(text_parts)
+    full_text_en, is_translated, has_untranslated = _detect_language_handling(combined_text)
+    lang_original = _compute_lang_original(combined_text)
+    word_count = _count_words(full_text_en)
 
     # Ensure at least one questioner
     if not questioner_names:
@@ -233,6 +236,9 @@ def _parse_single_qa(
         "minister_name": minister_name,
         "ministry": ministry,
         "full_text_en": full_text_en,
+        "lang_original": lang_original,
+        "time_of_day": raw_record.get("time_of_day"),
+        "word_count": word_count,
         "is_translated": is_translated,
         "has_untranslated_content": has_untranslated,
         "source_url": raw_record.get("source_url"),

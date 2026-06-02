@@ -151,5 +151,6 @@ def parse_ia_text(
         "source_url": source_url,
         "page_reference": None,  # IA text has no page numbers
         "volume": None,
+        "time_of_day": None,     # IA pre-OCR text has no sitting start time
         "raw_text": raw_text,
     }

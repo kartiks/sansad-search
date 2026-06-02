@@ -6,11 +6,20 @@ Provides two components:
                 Kept for backward compatibility; superseded by CAOrchestrator.
   - CAOrchestrator — Phase 8+ orchestrator using the CoidHtmlProvider chain.
                      Implements discover → fetch → parse → segment → index.
+
+PRD v2.0 changes (Phase 10):
+  - CA date always derived from URL slug (authoritative per F01 CA parsing rules).
+    HTML body date is discarded even when present.
+  - Shared sequence_within_sitting assigned at orchestrator level across all
+    speech and Q+A records within each sitting in document order.
+    CA has no Q+A exchanges; sequence is assigned to speeches only.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from datetime import date as _date
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
@@ -31,26 +40,65 @@ from ingest.sources.providers.coi_html import CoidHtmlProvider
 
 logger = logging.getLogger(__name__)
 
-# Base URL for CA PDF volumes on sansad.in
+# Base URL for CA PDF volumes on sansad.in (legacy)
 CA_VOLUME_BASE = "https://sansad.in/getFile/constitutiondebates"
 
-# All 12 Constituent Assembly Debates volumes (fixed, no discovery needed)
 CA_VOLUME_URLS: list[str] = [
     f"{CA_VOLUME_BASE}/Volume_{i:02d}.pdf" for i in range(1, 13)
 ]
+
+# CA URL slug formats:
+#   DD-MMM-YYYY (e.g. "09-dec-1946") — PRD canonical format
+#   YYYY-MM-DD  (e.g. "1946-12-09")  — ISO format also observed in some URL patterns
+_CA_URL_SLUG_DMY_RE = re.compile(r"^(\d{1,2})-([a-z]{3})-(\d{4})$", re.IGNORECASE)
+_CA_URL_SLUG_ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_CA_MONTH_ABBR = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _extract_ca_date_from_url(fetch_url: str) -> str | None:
+    """
+    Extract the sitting date from a constitutionofindia.net URL slug.
+
+    Handles both:
+    - DD-MMM-YYYY format (e.g. "09-dec-1946") — PRD canonical
+    - YYYY-MM-DD format  (e.g. "1946-12-09")  — ISO, also seen in URL patterns
+
+    Returns ISO date string YYYY-MM-DD, or None if the slug cannot be parsed.
+
+    Per PRD v2.0 F01 CA field-level parsing rules: the URL slug is the
+    authoritative date source for CA records. Any date extracted from the HTML
+    body is discarded; this function's result always takes precedence.
+    """
+    slug = fetch_url.rstrip("/").rsplit("/", 1)[-1]
+
+    # Try DD-MMM-YYYY first (PRD canonical format)
+    m = _CA_URL_SLUG_DMY_RE.match(slug)
+    if m:
+        month = _CA_MONTH_ABBR.get(m.group(2).lower())
+        if month:
+            try:
+                return _date(int(m.group(3)), month, int(m.group(1))).isoformat()
+            except ValueError:
+                pass
+
+    # Try ISO YYYY-MM-DD format
+    m = _CA_URL_SLUG_ISO_RE.match(slug)
+    if m:
+        try:
+            return _date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+        except ValueError:
+            pass
+
+    return None
 
 
 class CASource:
     """
     Fetches all 12 Constituent Assembly debate PDF volumes from sansad.in.
-
-    Usage (async context):
-        async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}) as client:
-            source = CASource(rate_delay=1.0)
-            async for url, content, meta in source.fetch_documents(client):
-                # content is bytes (PDF)
-                # meta = {"source": "CA", "volume": N}
-                ...
+    Legacy — superseded by CAOrchestrator.
     """
 
     def __init__(
@@ -71,13 +119,6 @@ class CASource:
         self,
         client: httpx.AsyncClient,
     ) -> AsyncGenerator[tuple[str, bytes, dict], None]:
-        """
-        Async generator yielding (url, content_bytes, metadata) for each volume.
-
-        Skips volumes disallowed by robots.txt or where the HTTP response
-        indicates the document should be skipped (4xx, exhausted 5xx retries).
-        Yields nothing for skipped volumes so the caller can count skips separately.
-        """
         for i, url in enumerate(self.enumerate_urls(), start=1):
             if not await self.robots_checker.is_allowed(client, url):
                 logger.warning("robots.txt disallows %s; skipping", url)
@@ -101,11 +142,17 @@ class CAOrchestrator:
     """
     CA corpus orchestrator — provider chain: [CoidHtmlProvider].
 
-    Orchestrates discovery → fetch → parse → segment → canonicalize → index
-    for the Constituent Assembly corpus.
+    PRD v2.0 changes (Phase 10):
+    - CA date always overridden from URL slug (F01 CA field-level parsing rules).
+    - Shared sequence_within_sitting assigned at orchestrator level.
+      CA has no Q+A exchanges; sequence is 1-based for speeches in DOM order.
 
-    Injects a default CoidHtmlProvider when none is supplied; tests inject a
-    custom provider (or use a pre-seeded provider) to control discovery output.
+    BUILD-TIME VERIFICATION FINDING (ARCHITECTURE.md §8, item 1 — CA shared sequence):
+    constitutionofindia.net serves one HTML page per sitting day. All debate
+    speeches for a sitting appear in that page in DOM order. CA has no Question
+    Hour (no Q+A exchanges), so the shared sequence space for CA contains only
+    speech records. The sitting-level sequence is reliably assignable from
+    document order without cross-type interleaving. Finding recorded: 2026-06-02.
     """
 
     def __init__(
@@ -125,6 +172,13 @@ class CAOrchestrator:
         self._provider: Provider = provider or CoidHtmlProvider(
             client, rate_delay=rate_delay
         )
+        # Per-sitting sequence counter: sitting_key → next sequence number
+        self._sitting_seq: dict[str, int] = {}
+
+    def _next_seq(self, sitting_key: str) -> int:
+        n = self._sitting_seq.get(sitting_key, 1)
+        self._sitting_seq[sitting_key] = n + 1
+        return n
 
     async def run(self) -> dict[str, int]:
         """
@@ -170,48 +224,33 @@ class CAOrchestrator:
                 stats["errors"] += 1
                 continue
 
-            if raw_record.get("date") is None:
-                # URL format: https://www.constitutionofindia.net/debates/DD-MMM-YYYY/
-                # e.g. "09-dec-1946", "27-aug-1947"
-                import re as _re
-                from datetime import date as _date
-                _MONTH_ABBR = {
-                    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-                    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
-                }
-                url_seg = doc_ref.fetch_url.rstrip("/").rsplit("/", 1)[-1]
-                m = _re.match(r"^(\d{1,2})-([a-z]{3})-(\d{4})$", url_seg, _re.IGNORECASE)
-                if m:
-                    mon = _MONTH_ABBR.get(m.group(2).lower())
-                    if mon:
-                        try:
-                            parsed = _date(int(m.group(3)), mon, int(m.group(1)))
-                            raw_record["date"] = parsed.isoformat()
-                            logger.debug(
-                                "ca_orchestrator: extracted date %s from URL for %s",
-                                raw_record["date"],
-                                doc_ref.canonical_doc_id,
-                            )
-                        except ValueError:
-                            logger.warning(
-                                "ca_orchestrator: invalid date in URL %s for %s",
-                                doc_ref.fetch_url,
-                                doc_ref.canonical_doc_id,
-                            )
-                    else:
-                        logger.warning(
-                            "ca_orchestrator: unrecognised month in URL %s for %s",
-                            doc_ref.fetch_url,
-                            doc_ref.canonical_doc_id,
-                        )
-                else:
-                    logger.warning(
-                        "ca_orchestrator: could not extract date from URL %s for %s",
-                        doc_ref.fetch_url,
-                        doc_ref.canonical_doc_id,
-                    )
+            # CA date: URL slug is always authoritative (PRD v2.0 F01 CA rules).
+            # Override whatever html_parser returned — even when it found a date.
+            ca_date = _extract_ca_date_from_url(doc_ref.fetch_url)
+            if ca_date:
+                raw_record["date"] = ca_date
+            else:
+                logger.warning(
+                    "ca_orchestrator: could not extract date from URL %s for %s; skipping",
+                    doc_ref.fetch_url,
+                    doc_ref.canonical_doc_id,
+                )
+                stats["errors"] += 1
+                continue
+
+            if not raw_record.get("date"):
+                logger.warning(
+                    "ca_orchestrator: no date for %s; skipping",
+                    doc_ref.canonical_doc_id,
+                )
+                stats["errors"] += 1
+                continue
 
             speeches = segment_speeches(raw_record, source="CA")
+
+            # Sitting key for shared sequence: CA records group by source + date
+            # (sitting_number is null for CA; date alone identifies the sitting)
+            sitting_key = f"CA_{raw_record['date']}"
 
             for speech in speeches:
                 speech["volume"] = doc_ref.metadata.get("volume")
@@ -223,6 +262,9 @@ class CAOrchestrator:
                 speech["session_name"] = None
                 speech["session_number"] = None
                 speech["record_type"] = "speech"
+
+                # Assign shared sequence at orchestrator level (not in segmenter)
+                speech["sequence_within_sitting"] = self._next_seq(sitting_key)
 
                 if self._indexer.index_record(speech, self._checkpoint):
                     stats["indexed"] += 1

@@ -298,3 +298,107 @@ class TestQaLanguageHandling:
             "full_text_en must contain the original English portion"
         assert "translated Hindi portion" in r["full_text_en"], \
             "full_text_en must contain the translated Hindi portion"
+
+
+
+# ── Phase 10: lang_original, word_count, time_of_day ─────────────────────────
+
+class TestQALangOriginal:
+    def test_english_qa_produces_en(self):
+        text = (
+            "STARRED QUESTION NO. 1\n\n"
+            "SHRI QUESTIONER :\nWhat is the government policy on agriculture?\n\n"
+            "SHRI MINISTER OF AGRICULTURE :\nThe government has taken several steps.\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0]["lang_original"] == "en"
+
+    def test_hindi_only_qa_produces_hi(self):
+        text = (
+            "STARRED QUESTION NO. 2\n\n"
+            "SHRI QUESTIONER :\nसरकार की नीति क्या है?\n\n"
+            "SHRI MINISTER :\nसरकार ने कई कदम उठाए हैं।\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0]["lang_original"] == "hi"
+
+    def test_translated_hindi_qa_produces_hi(self):
+        text = (
+            "STARRED QUESTION NO. 3\n\n"
+            "SHRI QUESTIONER :\nसरकार की नीति?\n"
+            "[Translation]\nWhat is the policy?\n\n"
+            "SHRI MINISTER :\nनीति यह है।\n"
+            "[Translation]\nThe policy is as follows.\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0]["lang_original"] == "hi"
+
+    def test_lang_original_in_all_qa_records(self):
+        text = (
+            "STARRED QUESTION NO. 1\n\n"
+            "SHRI Q :\nQuestion in English.\n\n"
+            "SHRI M MINISTER OF FINANCE :\nAnswer in English.\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        for r in result:
+            assert "lang_original" in r
+            assert r["lang_original"] in ("en", "hi", "mixed")
+
+
+class TestQAWordCount:
+    def test_word_count_present_for_english_qa(self):
+        text = (
+            "STARRED QUESTION NO. 1\n\n"
+            "SHRI Q :\nWhat is the government policy on agriculture?\n\n"
+            "SHRI MINISTER OF AGRICULTURE :\nThe government has taken several steps.\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0]["word_count"] is not None
+        assert isinstance(result[0]["word_count"], int)
+        assert result[0]["word_count"] > 0
+
+    def test_word_count_null_when_full_text_en_null(self):
+        """When full_text_en is None (Hindi only), word_count must also be None."""
+        text = (
+            "STARRED QUESTION NO. 2\n\n"
+            "SHRI QUESTIONER :\nसरकार की नीति क्या है?\n\n"
+            "SHRI MINISTER :\nसरकार ने कई कदम उठाए हैं।\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        if result[0]["full_text_en"] is None:
+            assert result[0]["word_count"] is None
+
+
+class TestQATimeOfDay:
+    def test_time_of_day_passed_through_from_raw_record(self):
+        text = (
+            "STARRED QUESTION NO. 1\n\n"
+            "SHRI Q :\nA question.\n\n"
+            "SHRI M MINISTER :\nAn answer.\n"
+        )
+        record = _raw_record(text, time_of_day="09:30")
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0]["time_of_day"] == "09:30"
+
+    def test_time_of_day_none_when_not_in_raw_record(self):
+        text = (
+            "STARRED QUESTION NO. 1\n\n"
+            "SHRI Q :\nA question.\n\n"
+            "SHRI M MINISTER :\nAn answer.\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0]["time_of_day"] is None

@@ -60,6 +60,7 @@ def test_schema_has_all_required_speeches_columns():
         "speaker_name", "full_text_en", "is_translated",
         "has_untranslated_content", "speaker_name_unresolved",
         "dedup_key", "sequence_within_sitting",
+        "lang_original", "time_of_day", "word_count",
     ]
     for col in required:
         assert col in content, f"Missing column: {col}"
@@ -82,9 +83,64 @@ def test_schema_has_all_required_qa_columns():
         "id", "source", "proceeding_type", "date", "questioner_names",
         "minister_name", "ministry", "full_text_en", "is_translated",
         "has_untranslated_content", "question_number", "dedup_key",
+        "sequence_within_sitting", "lang_original", "time_of_day", "word_count",
     ]
     for col in required:
         assert col in content, f"Missing QA column: {col}"
+
+
+# ── Phase 10: PRD v2.0 new columns and indexes ────────────────────────────────
+
+def test_schema_speeches_lang_original_constraint():
+    """lang_original must have CHECK IN ('en','hi','mixed') constraint."""
+    content = SCHEMA_PATH.read_text()
+    speeches_block = content.split("CREATE TABLE IF NOT EXISTS qa_exchanges")[0]
+    assert "lang_original" in speeches_block
+    assert "'en'" in speeches_block
+    assert "'hi'" in speeches_block
+    assert "'mixed'" in speeches_block
+
+
+def test_schema_qa_lang_original_constraint():
+    """qa_exchanges.lang_original must have CHECK IN ('en','hi','mixed') constraint."""
+    content = SCHEMA_PATH.read_text()
+    qa_block = content.split("CREATE TABLE IF NOT EXISTS qa_exchanges")[1].split(
+        "CREATE TABLE IF NOT EXISTS index_status"
+    )[0]
+    assert "lang_original" in qa_block
+    assert "'en'" in qa_block
+    assert "'hi'" in qa_block
+    assert "'mixed'" in qa_block
+
+
+def test_schema_qa_has_sequence_within_sitting():
+    """qa_exchanges must have sequence_within_sitting column (added in PRD v2.0)."""
+    content = SCHEMA_PATH.read_text()
+    qa_block = content.split("CREATE TABLE IF NOT EXISTS qa_exchanges")[1].split(
+        "CREATE TABLE IF NOT EXISTS index_status"
+    )[0]
+    assert "sequence_within_sitting" in qa_block, (
+        "qa_exchanges must have sequence_within_sitting (shared space with speeches)"
+    )
+
+
+def test_schema_has_sitting_composite_index_speeches():
+    """idx_speeches_sitting composite index required for F09 adjacent navigation."""
+    content = SCHEMA_PATH.read_text()
+    assert "idx_speeches_sitting" in content, (
+        "Missing idx_speeches_sitting index for F09 adjacent navigation"
+    )
+    assert "source, date, sitting_number, sequence_within_sitting" in content.replace(
+        "\n", " "
+    ).replace("  ", " ")
+
+
+def test_schema_has_sitting_composite_index_qa():
+    """idx_qa_sitting composite index required for F09 adjacent navigation."""
+    content = SCHEMA_PATH.read_text()
+    assert "idx_qa_sitting" in content, (
+        "Missing idx_qa_sitting index for F09 adjacent navigation"
+    )
 
 
 def test_schema_has_index_on_speeches_date():

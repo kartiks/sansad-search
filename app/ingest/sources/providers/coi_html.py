@@ -47,7 +47,8 @@ def _default_day_filter(url: str) -> bool:
     # Must be at least 3 levels deep (e.g. historical-constitution/debates/volume-1/1946-12-09)
     # and the last segment must not be a volume indicator
     #return len(parts) >= 3 and "volume" not in parts[-1].lower()
-    return len(parts) == 1 and "volume" not in parts[-1].lower()
+    # Day URLs have 2 path segments after the prefix: volume-N / YYYY-MM-DD
+    return len(parts) == 2 and "volume" not in parts[-1].lower()
 
 
 class CoidHtmlProvider(Provider):

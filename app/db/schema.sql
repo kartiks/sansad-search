@@ -1,5 +1,7 @@
 -- SansadSearch PostgreSQL schema
 -- Run this against a fresh database to create all tables and indexes.
+-- PRD v2.0: added lang_original, time_of_day, word_count to both tables;
+-- sequence_within_sitting added to qa_exchanges; sitting composite indexes added.
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
@@ -20,6 +22,9 @@ CREATE TABLE IF NOT EXISTS speeches (
     speaker_role                VARCHAR(30) CHECK (speaker_role IN ('member','minister','presiding_officer')),
     sequence_within_sitting     INTEGER,
     full_text_en                TEXT,
+    lang_original               VARCHAR(5)  NOT NULL CHECK (lang_original IN ('en','hi','mixed')),
+    time_of_day                 VARCHAR(5),
+    word_count                  INTEGER,
     is_translated               BOOLEAN     NOT NULL DEFAULT FALSE,
     has_untranslated_content    BOOLEAN     NOT NULL DEFAULT FALSE,
     speaker_name_unresolved     BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -36,6 +41,8 @@ CREATE INDEX IF NOT EXISTS idx_speeches_proceeding_type ON speeches(proceeding_t
 CREATE INDEX IF NOT EXISTS idx_speeches_speaker_name   ON speeches(speaker_name);
 CREATE INDEX IF NOT EXISTS idx_speeches_session_name   ON speeches(session_name);
 CREATE INDEX IF NOT EXISTS idx_speeches_dedup_key      ON speeches(dedup_key);
+-- F09 adjacent-navigation: same-sitting neighbour lookup by sequence
+CREATE INDEX IF NOT EXISTS idx_speeches_sitting        ON speeches(source, date, sitting_number, sequence_within_sitting);
 
 -- ── qa_exchanges ─────────────────────────────────────────────────────────────
 
@@ -53,7 +60,11 @@ CREATE TABLE IF NOT EXISTS qa_exchanges (
     questioner_party         VARCHAR(200),
     minister_name            VARCHAR(300),
     ministry                 VARCHAR(300),
+    sequence_within_sitting  INTEGER,
     full_text_en             TEXT,
+    lang_original            VARCHAR(5)  NOT NULL CHECK (lang_original IN ('en','hi','mixed')),
+    time_of_day              VARCHAR(5),
+    word_count               INTEGER,
     is_translated            BOOLEAN     NOT NULL DEFAULT FALSE,
     has_untranslated_content BOOLEAN     NOT NULL DEFAULT FALSE,
     source_url               TEXT,
@@ -69,6 +80,8 @@ CREATE INDEX IF NOT EXISTS idx_qa_questioner_names ON qa_exchanges USING GIN(que
 CREATE INDEX IF NOT EXISTS idx_qa_minister_name    ON qa_exchanges(minister_name);
 CREATE INDEX IF NOT EXISTS idx_qa_session_name     ON qa_exchanges(session_name);
 CREATE INDEX IF NOT EXISTS idx_qa_dedup_key        ON qa_exchanges(dedup_key);
+-- F09 adjacent-navigation: same-sitting neighbour lookup by sequence
+CREATE INDEX IF NOT EXISTS idx_qa_sitting          ON qa_exchanges(source, date, sitting_number, sequence_within_sitting);
 
 -- ── index_status ─────────────────────────────────────────────────────────────
 

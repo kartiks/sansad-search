@@ -165,3 +165,108 @@ class TestParseHtml:
         html = _load("coi_day.html")
         result = parse_html(html, "CA")
         assert result["session_number"] is None
+
+    def test_time_of_day_key_present_in_result(self):
+        """parse_html must always return time_of_day key."""
+        html = _load("debate_ls.html")
+        result = parse_html(html, "LS")
+        assert "time_of_day" in result
+
+    def test_time_of_day_extracted_from_time_element(self):
+        """When <time>11:00</time> is present, time_of_day must be '11:00'."""
+        html = _load("coi_day.html")
+        result = parse_html(html, "CA")
+        assert result["time_of_day"] == "11:00"
+
+    def test_time_of_day_none_when_no_time_element(self):
+        """When no <time> element or HH:MM pattern exists, time_of_day is None."""
+        html = "<html><body><p>SHRI TEST : Some speech.</p></body></html>"
+        result = parse_html(html, "LS")
+        assert result["time_of_day"] is None
+
+
+# ── Phase 10: CA parsing rules ────────────────────────────────────────────────
+
+class TestCASpeechPairsWithSubjects:
+    def test_ca_speech_pairs_is_list_of_triples(self):
+        """ca_speech_pairs must be a list of (speaker, text, subject) triples."""
+        html = _load("coi_day.html")
+        result = parse_html(html, "CA")
+        pairs = result["ca_speech_pairs"]
+        assert pairs is not None
+        assert len(pairs) == 3
+        for triple in pairs:
+            assert len(triple) == 3, f"Expected 3-tuple, got {len(triple)}-tuple"
+
+    def test_ca_section_header_assigned_as_subject(self):
+        """Speeches after a section header must have that header as subject."""
+        html = _load("coi_day.html")
+        result = parse_html(html, "CA")
+        pairs = result["ca_speech_pairs"]
+        # Fixture: speeches 1+2 → "Objectives Resolution"; speech 3 → "The Question of Procedure"
+        assert pairs[0][2] == "Objectives Resolution"
+        assert pairs[1][2] == "Objectives Resolution"
+        assert pairs[2][2] == "The Question of Procedure"
+
+    def test_ca_speeches_under_same_header_share_subject(self):
+        """Two speeches under the same section header must have identical subject values."""
+        html = _load("coi_day.html")
+        result = parse_html(html, "CA")
+        pairs = result["ca_speech_pairs"]
+        assert pairs[0][2] == pairs[1][2]
+
+    def test_ca_speech_subject_changes_at_new_header(self):
+        """A speech after a new header must not retain the previous header's subject."""
+        html = _load("coi_day.html")
+        result = parse_html(html, "CA")
+        pairs = result["ca_speech_pairs"]
+        assert pairs[1][2] != pairs[2][2]
+
+    def test_ca_toc_fallback_when_no_header_before_first_speech(self):
+        """When no section header precedes the first speech, use TOC first item."""
+        html = """<!DOCTYPE html>
+<html><body><div class="wrapper">
+  <ul>
+    <li><a href="#topic1">Constituent Assembly Resolved</a></li>
+  </ul>
+  <div class="lg:grid lg:grid-cols-12 relative">
+    <div class="lg:col-span-3 grid grid-cols-4 sm:grid-cols-6 lg:gap-x-2.5 xl:grid-cols-4 empty">
+      <div class="col-span-2"><span class="bg-[#F8FFA3]">1.1.1</span></div>
+      <span class="col-span-2 md:text-lg font-medium">Shri Test Speaker</span>
+    </div>
+    <div class="lg:col-span-9">Speech before any section header.</div>
+    <div class="social-links-block"></div>
+  </div>
+</div></body></html>"""
+        result = parse_html(html, "CA")
+        pairs = result["ca_speech_pairs"]
+        assert len(pairs) == 1
+        # subject must be TOC first item, not None
+        assert pairs[0][2] == "Constituent Assembly Resolved"
+
+    def test_ca_ls_does_not_produce_ca_speech_pairs(self):
+        """ca_speech_pairs is only set for source=CA."""
+        html = _load("debate_ls.html")
+        result = parse_html(html, "LS")
+        assert result["ca_speech_pairs"] is None
+
+
+class TestCATocExtraction:
+    def test_extract_toc_first_item(self):
+        """_extract_coi_toc_first_item returns text of first <a href="#..."> in first <ul>."""
+        from ingest.parsers.html_parser import _extract_coi_toc_first_item
+        from bs4 import BeautifulSoup
+        html = """<html><body>
+        <ul><li><a href="#section1">First Topic</a></li><li><a href="#s2">Second</a></li></ul>
+        </body></html>"""
+        soup = BeautifulSoup(html, "lxml")
+        result = _extract_coi_toc_first_item(soup)
+        assert result == "First Topic"
+
+    def test_extract_toc_returns_none_when_no_toc(self):
+        from ingest.parsers.html_parser import _extract_coi_toc_first_item
+        from bs4 import BeautifulSoup
+        html = "<html><body><p>No TOC here.</p></body></html>"
+        soup = BeautifulSoup(html, "lxml")
+        result = _extract_coi_toc_first_item(soup)
+        assert result is None

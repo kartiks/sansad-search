@@ -657,3 +657,95 @@ class TestUnattributedSpeech:
             "Unattributed speakers must be excluded by the segmenter; "
             f"got {len(speeches)} record(s)"
         )
+
+
+# ── Phase 10: Meilisearch exclusions and new fields ───────────────────────────
+
+class TestMeilisearchFieldsV2:
+    def test_word_count_excluded_from_meili_document(self):
+        """word_count is PostgreSQL-only — must not appear in Meilisearch push."""
+        record = {
+            "record_type": "speech",
+            "source": "LS",
+            "date": "2023-03-15",
+            "proceeding_type": "debate",
+            "speaker_name": "Test Speaker",
+            "full_text_en": "A speech with some words.",
+            "lang_original": "en",
+            "time_of_day": "14:00",
+            "word_count": 5,
+            "is_translated": False,
+            "has_untranslated_content": False,
+            "speaker_name_unresolved": False,
+            "sequence_within_sitting": 1,
+            "dedup_key": "LS_2023-03-15_1_debate_test_speaker_1",
+        }
+        doc = build_meili_document(record)
+        assert "word_count" not in doc, (
+            "word_count is PostgreSQL-only and must not appear in Meilisearch document"
+        )
+
+    def test_lang_original_included_in_meili_document(self):
+        """lang_original must be present in Meilisearch document for F05 badge."""
+        record = {
+            "record_type": "speech",
+            "source": "LS",
+            "date": "2023-03-15",
+            "proceeding_type": "debate",
+            "lang_original": "en",
+            "time_of_day": None,
+            "word_count": 5,
+            "is_translated": False,
+            "dedup_key": "test",
+        }
+        doc = build_meili_document(record)
+        assert "lang_original" in doc
+        assert doc["lang_original"] == "en"
+
+    def test_time_of_day_included_in_meili_document_when_not_none(self):
+        """time_of_day is included in Meilisearch document when present."""
+        record = {
+            "record_type": "speech",
+            "source": "RS",
+            "date": "2023-03-15",
+            "lang_original": "en",
+            "time_of_day": "11:30",
+            "word_count": 3,
+            "dedup_key": "test",
+        }
+        doc = build_meili_document(record)
+        assert "time_of_day" in doc
+        assert doc["time_of_day"] == "11:30"
+
+    def test_time_of_day_omitted_from_meili_document_when_none(self):
+        """None fields are omitted from Meilisearch document (no null-padding)."""
+        record = {
+            "record_type": "speech",
+            "source": "LS",
+            "date": "2023-03-15",
+            "lang_original": "en",
+            "time_of_day": None,
+            "word_count": None,
+            "dedup_key": "test",
+        }
+        doc = build_meili_document(record)
+        assert "time_of_day" not in doc
+
+    def test_qa_sequence_within_sitting_in_meili_document(self):
+        """Q+A records carry sequence_within_sitting in Meilisearch document (new in v2.0)."""
+        record = {
+            "record_type": "qa",
+            "source": "LS",
+            "date": "2023-03-15",
+            "proceeding_type": "starred_question",
+            "questioner_names": ["Shri Test"],
+            "lang_original": "en",
+            "time_of_day": None,
+            "word_count": 10,
+            "sequence_within_sitting": 3,
+            "is_translated": False,
+            "dedup_key": "test",
+        }
+        doc = build_meili_document(record)
+        assert "sequence_within_sitting" in doc
+        assert doc["sequence_within_sitting"] == 3

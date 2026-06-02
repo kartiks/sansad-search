@@ -4,6 +4,15 @@
 <body>
 <div class="wrapper">
   <h1 class="uppercase text-black">09 Dec 1946</h1>
+  <!-- Sitting start time (present on some pages; used for time_of_day extraction) -->
+  <time>11:00</time>
+  <!-- Table of contents — used as subject fallback when no section header precedes first speech -->
+  <ul>
+    <li><a href="#objectives-resolution">Objectives Resolution</a></li>
+    <li><a href="#second-topic">The Question of Procedure</a></li>
+  </ul>
+  <!-- Section header 1: appears before first two speeches -->
+  <p><strong>Objectives Resolution</strong></p>
   <!-- Speech 1 -->
   <div class="lg:grid lg:grid-cols-12 relative">
     <div class="lg:col-span-3 grid grid-cols-4 sm:grid-cols-6 lg:gap-x-2.5 xl:grid-cols-4 empty">
@@ -19,7 +28,7 @@
     </div>
     <div class="social-links-block absolute top-0 right-0"></div>
   </div>
-  <!-- Speech 2 -->
+  <!-- Speech 2 (same section) -->
   <div class="lg:grid lg:grid-cols-12 relative">
     <div class="lg:col-span-3 grid grid-cols-4 sm:grid-cols-6 lg:gap-x-2.5 xl:grid-cols-4 empty">
       <div class="col-span-2 sm:col-span-2 xl:col-span-2">
@@ -34,7 +43,9 @@
     </div>
     <div class="social-links-block absolute top-0 right-0"></div>
   </div>
-  <!-- Speech 3 -->
+  <!-- Section header 2: appears before speech 3 -->
+  <p><strong>The Question of Procedure</strong></p>
+  <!-- Speech 3 (different section) -->
   <div class="lg:grid lg:grid-cols-12 relative">
     <div class="lg:col-span-3 grid grid-cols-4 sm:grid-cols-6 lg:gap-x-2.5 xl:grid-cols-4 empty">
       <div class="col-span-2 sm:col-span-2 xl:col-span-2">

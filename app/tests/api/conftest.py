@@ -6,6 +6,7 @@ are required.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -52,6 +53,23 @@ _DEFAULT_MEILI_RESPONSE: Dict[str, Any] = {
     "hitsPerPage": 20,
 }
 
+# camelCase → snake_case mapping for the keys search.py accesses as attributes
+_MEILI_KEY_MAP: Dict[str, str] = {
+    "totalHits": "total_hits",
+    "totalPages": "total_pages",
+    "hitsPerPage": "hits_per_page",
+}
+
+
+def _meili_dict_to_ns(d: Dict[str, Any]) -> SimpleNamespace:
+    """
+    Convert a camelCase Meilisearch response dict to an attribute-accessible
+    SimpleNamespace.  search.py accesses results via attribute lookup
+    (raw.hits, raw.total_hits, …) so the mock must return an object that
+    supports that, not a plain dict.
+    """
+    return SimpleNamespace(**{_MEILI_KEY_MAP.get(k, k): v for k, v in d.items()})
+
 
 def make_mock_meili_client(
     search_result: Optional[Dict[str, Any]] = None,
@@ -60,14 +78,17 @@ def make_mock_meili_client(
     """
     Build a mock meilisearch.AsyncClient whose index("parliamentary_records")
     returns an async index with a configurable search().
+
+    search() returns a SimpleNamespace (not a plain dict) so that
+    attribute-style access used in search.py (raw.hits, raw.total_hits, …)
+    works correctly.
     """
     mock_index = AsyncMock()
     if search_side_effect is not None:
         mock_index.search = AsyncMock(side_effect=search_side_effect)
     else:
-        mock_index.search = AsyncMock(
-            return_value=search_result or dict(_DEFAULT_MEILI_RESPONSE)
-        )
+        result_ns = _meili_dict_to_ns(search_result or dict(_DEFAULT_MEILI_RESPONSE))
+        mock_index.search = AsyncMock(return_value=result_ns)
 
     mock_client = MagicMock()
     mock_client.index = MagicMock(return_value=mock_index)

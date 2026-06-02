@@ -124,7 +124,7 @@ class TestIndexConfiguration:
         assert "sequence_within_sitting" in SORTABLE_ATTRIBUTES
 
     def test_ranking_rules_order(self):
-        expected = ["words", "typos", "proximity", "attribute", "sort", "exactness"]
+        expected = ["words", "typo", "proximity", "attribute", "sort", "exactness"]
         assert RANKING_RULES == expected
 
     def test_pagination_max_total_hits(self):
@@ -170,14 +170,14 @@ class TestExpansionWeightOrdering:
     a live Meilisearch instance.
     """
 
-    def test_words_precedes_typos_in_ranking_rules(self):
-        """'words' must come before 'typos' — original/synonym matches outrank
+    def test_words_precedes_typo_in_ranking_rules(self):
+        """'words' must come before 'typo' — original/synonym matches outrank
         typo-correction matches."""
         assert "words" in RANKING_RULES
-        assert "typos" in RANKING_RULES
-        assert RANKING_RULES.index("words") < RANKING_RULES.index("typos"), (
-            "'words' must precede 'typos' in ranking rules so that synonym matches "
-            "(words class) outrank spell-corrected matches (typos class)"
+        assert "typo" in RANKING_RULES
+        assert RANKING_RULES.index("words") < RANKING_RULES.index("typo"), (
+            "'words' must precede 'typo' in ranking rules so that synonym matches "
+            "(words class) outrank spell-corrected matches (typo class)"
         )
 
     def test_exactness_in_ranking_rules(self):
@@ -220,15 +220,15 @@ class TestRelevanceSortIsolation:
 class TestDataModelsExactConstants:
     """Phase 7 spec: verify all constants match DATA-MODELS.md §2.3 exactly."""
 
-    def test_ranking_rules_no_typo_typo_variant(self):
-        """DATA-MODELS.md §2.3 specifies 'typos' not 'typo'. Corrected in Phase 7."""
-        assert "typos" in RANKING_RULES, "'typos' must be in RANKING_RULES"
-        assert "typo" not in RANKING_RULES or RANKING_RULES.count("typos") == 1, (
-            "RANKING_RULES must use 'typos' (not 'typo') per DATA-MODELS.md §2.3"
+    def test_ranking_rules_uses_typo_singular(self):
+        """DATA-MODELS.md §2.3 specifies 'typo' (singular). Corrected in Phase 10."""
+        assert "typo" in RANKING_RULES, "'typo' must be in RANKING_RULES"
+        assert "typos" not in RANKING_RULES, (
+            "RANKING_RULES must use 'typo' (not 'typos') per DATA-MODELS.md §2.3"
         )
 
     def test_ranking_rules_exact_match_data_models(self):
-        expected = ["words", "typos", "proximity", "attribute", "sort", "exactness"]
+        expected = ["words", "typo", "proximity", "attribute", "sort", "exactness"]
         assert RANKING_RULES == expected, (
             f"RANKING_RULES must exactly match DATA-MODELS.md §2.3. "
             f"Expected {expected}, got {RANKING_RULES}"

@@ -166,3 +166,10 @@ class TestParsePdf:
         assert "tesseract" not in src.lower(), (
             "Any tesseract reference must be absent from pdf_parser after Phase 7"
         )
+
+    def test_time_of_day_is_none(self):
+        """PDF sources have no sitting start time; time_of_day must be None."""
+        pdf = _make_pdf(["Lok Sabha Debates\n15 March 2023\nContent here."])
+        result = parse_pdf(pdf, "LS")
+        assert result is not None
+        assert result["time_of_day"] is None

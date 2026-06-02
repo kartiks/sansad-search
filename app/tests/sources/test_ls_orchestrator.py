@@ -519,3 +519,179 @@ class TestLSOrchestratorProviderChain:
             )
         finally:
             checkpoint.close()
+
+
+# ── Phase 10: Shared sequence assignment ──────────────────────────────────────
+
+class TestLSSharedSequence:
+    """sequence_within_sitting is assigned at orchestrator level (not segmenter)."""
+
+    def _make_ia_content_for_qa(self, handle_n: str) -> str:
+        """IA text content for a starred_question document."""
+        return (
+            "STARRED QUESTION NO. 42\n\n"
+            "SHRI QUESTIONER:\nWhat is the policy on infrastructure?\n\n"
+            "SHRI MINISTER OF FINANCE:\nThe government has invested significantly.\n"
+        )
+
+    async def test_speech_records_get_sequence_from_orchestrator(self):
+        """Speech records produced by LS orchestrator have sequence_within_sitting set."""
+        handle = "99001"
+        metadata = {
+            "identifier": f"eparlib.nic.in.{handle}",
+            "eparlib_document_url": f"https://eparlib.sansad.in/handle/123456789/{handle}",
+            "eparlib_date": "2023-03-15",
+            "title": "Lok Sabha Debates",
+        }
+        doc_ref = _make_ia_doc_ref(handle, date="2023-03-15")
+        ia_content = IA_DJVU_TEXT
+
+        ia_provider = StubProvider([doc_ref], {handle: ia_content}, name="ia")
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = LSOrchestrator(
+            client=client,
+            checkpoint=checkpoint,
+            indexer=indexer,
+            providers=[ia_provider],
+        )
+        await orchestrator.run()
+
+        try:
+            assert len(indexer.indexed_records) >= 1
+            for record in indexer.indexed_records:
+                assert "sequence_within_sitting" in record
+                assert isinstance(record["sequence_within_sitting"], int)
+                assert record["sequence_within_sitting"] >= 1
+        finally:
+            checkpoint.close()
+
+    async def test_sequences_unique_within_same_sitting(self):
+        """No two records from the same sitting share a sequence number."""
+        handle1 = "99002"
+        handle2 = "99003"
+        # Both documents for the same sitting date
+        doc_ref1 = _make_ia_doc_ref(handle1, date="2023-03-15")
+        doc_ref2 = _make_ia_doc_ref(handle2, date="2023-03-15")
+        doc_ref2 = DocumentRef(
+            corpus="LS",
+            provider="internet_archive",
+            format="ia_text",
+            fetch_url=f"https://archive.org/download/eparlib.nic.in.{handle2}/eparlib.nic.in.{handle2}_djvu.txt",
+            canonical_doc_id=handle2,
+            citation_url=f"https://eparlib.sansad.in/handle/123456789/{handle2}",
+            metadata={
+                "identifier": f"eparlib.nic.in.{handle2}",
+                "eparlib_document_url": f"https://eparlib.sansad.in/handle/123456789/{handle2}",
+                "eparlib_date": "2023-03-15",
+                "title": "Lok Sabha Debates",
+            },
+        )
+
+        ia_provider = StubProvider(
+            [doc_ref1, doc_ref2],
+            {handle1: IA_DJVU_TEXT, handle2: IA_DJVU_TEXT},
+            name="ia",
+        )
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = LSOrchestrator(
+            client=client,
+            checkpoint=checkpoint,
+            indexer=indexer,
+            providers=[ia_provider],
+        )
+        await orchestrator.run()
+
+        try:
+            sitting_records = [
+                r for r in indexer.indexed_records
+                if r.get("date") == "2023-03-15"
+            ]
+            sequences = [r.get("sequence_within_sitting") for r in sitting_records]
+            assert len(set(sequences)) == len(sequences), (
+                f"Duplicate sequence numbers in same sitting: {sequences}"
+            )
+        finally:
+            checkpoint.close()
+
+    async def test_sequence_shared_across_speech_and_qa_types_in_same_sitting(self):
+        """sequence_within_sitting is a shared counter: no number appears in both speech
+        and Q+A records from the same sitting."""
+        debate_handle = "99010"
+        qa_handle = "99011"
+        date = "2023-04-01"
+
+        debate_ref = _make_ia_doc_ref(debate_handle, date=date)
+        # Override title so the QA doc is detected as starred_question proceeding type
+        qa_ref = DocumentRef(
+            corpus="LS",
+            provider="internet_archive",
+            format="ia_text",
+            fetch_url=f"https://archive.org/download/eparlib.nic.in.{qa_handle}/eparlib.nic.in.{qa_handle}_djvu.txt",
+            canonical_doc_id=qa_handle,
+            citation_url=f"https://eparlib.sansad.in/handle/123456789/{qa_handle}",
+            metadata={
+                "identifier": f"eparlib.nic.in.{qa_handle}",
+                "eparlib_document_url": f"https://eparlib.sansad.in/handle/123456789/{qa_handle}",
+                "eparlib_date": date,
+                "eparlib_lok_sabha_number": "17",
+                "eparlib_session_number": "8",
+                "eparlib_title": "Starred Questions — 1 April 2023",
+            },
+        )
+        qa_content = self._make_ia_content_for_qa(qa_handle)
+
+        provider = StubProvider(
+            [debate_ref, qa_ref],
+            {debate_handle: IA_DJVU_TEXT, qa_handle: qa_content},
+            name="ia",
+        )
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = LSOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+        )
+        await orchestrator.run()
+
+        try:
+            sitting_records = [r for r in indexer.indexed_records if r.get("date") == date]
+            speech_records = [r for r in sitting_records if r.get("record_type") == "speech"]
+            qa_records = [r for r in sitting_records if r.get("record_type") == "qa"]
+
+            assert len(speech_records) >= 1, "Expected at least one speech record from debate doc"
+            assert len(qa_records) >= 1, "Expected at least one Q+A record from starred_question doc"
+
+            all_seqs = [r["sequence_within_sitting"] for r in sitting_records]
+            assert len(set(all_seqs)) == len(all_seqs), (
+                f"sequence_within_sitting collision across speech+Q+A types: {all_seqs}"
+            )
+        finally:
+            checkpoint.close()
+
+    async def test_records_have_lang_original(self):
+        """All LS records must have lang_original set."""
+        handle = "99004"
+        doc_ref = _make_ia_doc_ref(handle)
+        ia_provider = StubProvider([doc_ref], {handle: IA_DJVU_TEXT}, name="ia")
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = LSOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, providers=[ia_provider]
+        )
+        await orchestrator.run()
+
+        try:
+            for record in indexer.indexed_records:
+                assert "lang_original" in record
+                assert record["lang_original"] in ("en", "hi", "mixed")
+        finally:
+            checkpoint.close()

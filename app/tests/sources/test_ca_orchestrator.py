@@ -275,3 +275,158 @@ class TestCAOrchestratorRun:
             assert checkpoint.is_document_processed(url2)
         finally:
             checkpoint.close()
+
+    async def test_sequence_assigned_at_orchestrator_level(self):
+        """Records from fixture page get 1-based sequence_within_sitting assigned."""
+        doc_ref = _make_doc_ref()
+        provider = StubProvider([doc_ref], {COI_DAY_URL: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        await orchestrator.run()
+
+        try:
+            assert len(indexer.indexed_records) == 3  # fixture has 3 speeches
+            sequences = [r.get("sequence_within_sitting") for r in indexer.indexed_records]
+            assert sequences == [1, 2, 3], f"Expected [1,2,3], got {sequences}"
+        finally:
+            checkpoint.close()
+
+    async def test_sequence_unique_within_sitting(self):
+        """No two records from the same sitting share a sequence number."""
+        doc_ref = _make_doc_ref()
+        provider = StubProvider([doc_ref], {COI_DAY_URL: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        await orchestrator.run()
+
+        try:
+            sequences = [r.get("sequence_within_sitting") for r in indexer.indexed_records]
+            assert len(set(sequences)) == len(sequences), "Duplicate sequence numbers found"
+        finally:
+            checkpoint.close()
+
+    async def test_ca_date_always_derived_from_url_slug(self):
+        """CA date must be derived from URL slug regardless of HTML body date."""
+        url = "https://www.constitutionofindia.net/debates/volume-1/09-dec-1946/"
+        doc_ref = _make_doc_ref(url=url)
+        provider = StubProvider([doc_ref], {url: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        await orchestrator.run()
+
+        try:
+            for record in indexer.indexed_records:
+                assert record.get("date") == "1946-12-09", (
+                    f"CA date must be from URL slug '09-dec-1946' → '1946-12-09', "
+                    f"got {record.get('date')!r}"
+                )
+        finally:
+            checkpoint.close()
+
+    async def test_ca_date_url_slug_overrides_html_body_date(self):
+        """Even when HTML contains a different date, URL slug date is used."""
+        # The coi_day.html fixture title says '9 December 1946' → same date,
+        # but the slug check ensures the slug is ALWAYS the authoritative source.
+        url = "https://www.constitutionofindia.net/debates/volume-1/27-aug-1947/"
+        doc_ref = _make_doc_ref(url=url)
+        # Use the fixture HTML which embeds '9 December 1946' in the title
+        provider = StubProvider([doc_ref], {url: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        await orchestrator.run()
+
+        try:
+            for record in indexer.indexed_records:
+                # Must be '1947-08-27' (from URL), not '1946-12-09' (from HTML title)
+                assert record.get("date") == "1947-08-27", (
+                    f"CA date must use URL slug '27-aug-1947' even when HTML says otherwise. "
+                    f"Got: {record.get('date')!r}"
+                )
+        finally:
+            checkpoint.close()
+
+    async def test_ca_speeches_have_lang_original(self):
+        """All CA speech records must have a lang_original field."""
+        doc_ref = _make_doc_ref()
+        provider = StubProvider([doc_ref], {COI_DAY_URL: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        await orchestrator.run()
+
+        try:
+            for record in indexer.indexed_records:
+                assert "lang_original" in record
+                assert record["lang_original"] in ("en", "hi", "mixed")
+        finally:
+            checkpoint.close()
+
+    async def test_ca_speeches_have_word_count_or_none(self):
+        """word_count is an int when full_text_en is non-null; None otherwise."""
+        doc_ref = _make_doc_ref()
+        provider = StubProvider([doc_ref], {COI_DAY_URL: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        await orchestrator.run()
+
+        try:
+            for record in indexer.indexed_records:
+                if record.get("full_text_en") is not None:
+                    assert isinstance(record.get("word_count"), int)
+                    assert record["word_count"] > 0
+                else:
+                    assert record.get("word_count") is None
+        finally:
+            checkpoint.close()
+
+    async def test_ca_per_speech_subjects_from_section_headers(self):
+        """CA speeches carry subjects from section-header DOM walk."""
+        doc_ref = _make_doc_ref()
+        provider = StubProvider([doc_ref], {COI_DAY_URL: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        await orchestrator.run()
+
+        try:
+            assert len(indexer.indexed_records) == 3
+            # Fixture: speeches 1+2 under "Objectives Resolution", speech 3 under "The Question of Procedure"
+            subjects = [r.get("subject") for r in indexer.indexed_records]
+            assert subjects[0] == "Objectives Resolution"
+            assert subjects[1] == "Objectives Resolution"
+            assert subjects[2] == "The Question of Procedure"
+        finally:
+            checkpoint.close()

@@ -441,3 +441,101 @@ class TestRSOrchestratorProviderChain:
                 assert record.get("record_type") == "qa"
         finally:
             checkpoint.close()
+
+
+# ── Phase 10: Shared sequence assignment ──────────────────────────────────────
+
+class TestRSSharedSequence:
+    """sequence_within_sitting is assigned at orchestrator level for RS records."""
+
+    async def test_rs_speech_records_get_sequence(self):
+        """RS speech records produced by RSOrchestrator have sequence_within_sitting."""
+        doc_id = "rs-sansad-2023-03-15"
+        doc_ref = DocumentRef(
+            corpus="RS",
+            provider="sansad_rs_html",
+            format="html",
+            fetch_url="https://sansad.in/rs/debates/2023-03-15",
+            canonical_doc_id=doc_id,
+            citation_url="https://sansad.in/rs/debates/2023-03-15",
+            metadata={},
+        )
+        provider = StubProvider(
+            [doc_ref],
+            {doc_id: _SANSAD_HTML},
+        )
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        try:
+            await _orchestrator([provider], checkpoint, indexer).run()
+            assert len(indexer.indexed_records) >= 1
+            for record in indexer.indexed_records:
+                assert "sequence_within_sitting" in record
+                assert isinstance(record["sequence_within_sitting"], int)
+                assert record["sequence_within_sitting"] >= 1
+        finally:
+            checkpoint.close()
+
+    async def test_sequences_unique_in_sitting(self):
+        """No two RS records from the same sitting have the same sequence number."""
+        doc_id1 = "rs-sansad-2023-03-16-a"
+        doc_id2 = "rs-sansad-2023-03-16-b"
+        def make_ref(doc_id):
+            return DocumentRef(
+                corpus="RS",
+                provider="sansad_rs_html",
+                format="html",
+                fetch_url=f"https://sansad.in/rs/debates/2023-03-16/{doc_id}",
+                canonical_doc_id=doc_id,
+                citation_url=f"https://sansad.in/rs/debates/2023-03-16/{doc_id}",
+                metadata={},
+            )
+        html_with_date = (
+            "<html><head><title>Rajya Sabha Debate - 16 March 2023</title></head>"
+            "<body><div class='content'>"
+            "<h1>Rajya Sabha Debate - 16 March 2023</h1>"
+            f"<pre>{_SPEECH_TEXT}</pre>"
+            "</div></body></html>"
+        )
+        provider = StubProvider(
+            [make_ref(doc_id1), make_ref(doc_id2)],
+            {doc_id1: html_with_date, doc_id2: html_with_date},
+        )
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        try:
+            await _orchestrator([provider], checkpoint, indexer).run()
+            sitting_records = [
+                r for r in indexer.indexed_records
+                if r.get("date") == "2023-03-16"
+            ]
+            sequences = [r.get("sequence_within_sitting") for r in sitting_records]
+            if len(sequences) > 1:
+                assert len(set(sequences)) == len(sequences), (
+                    f"Duplicate sequence numbers: {sequences}"
+                )
+        finally:
+            checkpoint.close()
+
+    async def test_rs_records_have_lang_original(self):
+        """All RS records must have lang_original set."""
+        doc_id = "rs-lang-test"
+        doc_ref = DocumentRef(
+            corpus="RS",
+            provider="sansad_rs_html",
+            format="html",
+            fetch_url="https://sansad.in/rs/debates/lang-test",
+            canonical_doc_id=doc_id,
+            citation_url="https://sansad.in/rs/debates/lang-test",
+            metadata={},
+        )
+        provider = StubProvider([doc_ref], {doc_id: _SANSAD_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        try:
+            await _orchestrator([provider], checkpoint, indexer).run()
+            for record in indexer.indexed_records:
+                assert "lang_original" in record
+                assert record["lang_original"] in ("en", "hi", "mixed")
+        finally:
+            checkpoint.close()

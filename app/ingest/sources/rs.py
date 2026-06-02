@@ -191,15 +191,20 @@ class RSOrchestrator:
     RS corpus orchestrator — provider chain:
     [SansadRsHtmlProvider, InternetArchiveProvider(RS), RsdebateDspaceProvider].
 
-    Iterates providers in order. For each provider:
-      - discover() → list[DocumentRef]
-      - For each DocumentRef: checkpoint check → fetch → parse → segment → index
+    PRD v2.0 change (Phase 10): shared sequence_within_sitting is assigned at
+    orchestrator level across all records (speech + Q+A) within each sitting,
+    in the order documents are processed from the provider chain.
 
-    Document-level dedup via canonical_doc_id (= DSpace handle number N for IA
-    and rsdebate; sitting page URL for sansad.in/rs) ensures each document is
-    fetched and parsed once. Because the recent sansad.in/rs sittings and the
-    older IA/DSpace items use different id schemes, any true cross-source overlap
-    is caught by the record-level dedup_key in the indexer.
+    BUILD-TIME VERIFICATION FINDING (ARCHITECTURE.md §8, item 1 — RS):
+    RS has two document types: recent sittings from sansad.in/rs HTML (one page
+    per sitting, speeches in DOM order) and older sittings from Internet Archive
+    or rsdebate.nic.in DSpace (one file per proceeding type per sitting). For
+    sansad.in/rs, Q+A exchanges and speeches may appear interleaved within a
+    single page — the HTML exposes their relative order reliably. For IA/DSpace,
+    speeches and Q+A come from separate files; the shared sequence reflects the
+    provider discovery order, not necessarily the official parliamentary order.
+    The sansad.in/rs path (primary) provides reliable ordering for recent sittings.
+    Finding recorded: 2026-06-02.
 
     Canonical RS citation rule (PRD v1.3): source_url on every indexed record is
     set to doc_ref.citation_url. For RS-via-IA this is the rsdebate.nic.in URL
@@ -224,15 +229,22 @@ class RSOrchestrator:
         self._names_dict = names_dict or {}
         self._rate_delay = rate_delay
         self._date_from = date_from
-        # date_from (ISO YYYY-MM-DD) overrides the providers' built-in scope.
-        # When None, each default provider keeps its own 2014-01-01 PRD-scope
-        # default. Injected providers are used as-is.
         _df = {"date_from": date_from} if date_from is not None else {}
         self._providers: list[Provider] = providers or [
             SansadRsHtmlProvider(client, rate_delay=rate_delay, **_df),
             InternetArchiveProvider(client, corpus="RS", rate_delay=rate_delay, **_df),
             RsdebateDspaceProvider(client, rate_delay=rate_delay, **_df),
         ]
+        # Per-sitting sequence counter shared across all providers and record types
+        self._sitting_seq: dict[str, int] = {}
+
+    def _next_seq(self, sitting_key: str) -> int:
+        n = self._sitting_seq.get(sitting_key, 1)
+        self._sitting_seq[sitting_key] = n + 1
+        return n
+
+    def _sitting_key(self, record: dict) -> str:
+        return f"RS_{record.get('date', '')}_{record.get('sitting_number')}"
 
     async def run(self) -> dict[str, int]:
         """
@@ -283,6 +295,11 @@ class RSOrchestrator:
                         record["speaker_name_unresolved"] = unresolved
                     record["session_name"] = canonicalize_session(
                         record.get("session_name"), source="RS"
+                    )
+
+                    # Assign shared sitting-level sequence at orchestrator level
+                    record["sequence_within_sitting"] = self._next_seq(
+                        self._sitting_key(record)
                     )
 
                     if self._indexer.index_record(record, self._checkpoint):
