@@ -1,7 +1,7 @@
 # Data Models — SansadSearch
 
-**PRD version:** v1.3
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable)
+**PRD version:** v2.0
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable); updated 2026-06-01 (PRD v2.0: F01 — `lang_original`/`time_of_day`/`word_count` added to both tables, `sequence_within_sitting` added to `qa_exchanges`, sitting composite indexes for F09 adjacent nav; F05 — `lang_original`/`time_of_day` added to Meilisearch doc + search results; F09 — new `GET /api/record/{id}` contract; `id` stability rule documented)
 
 ---
 
@@ -13,7 +13,7 @@ Primary canonical store for all speech-type records (debates, zero hour, calling
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | UUID | PK, DEFAULT gen_random_uuid() | Primary key; used as Meilisearch document ID |
+| `id` | UUID | PK, DEFAULT gen_random_uuid() | Primary key; used as Meilisearch document ID and as the F09 detail-page route param. **Stable across incremental re-runs** (inserts use `ON CONFLICT (dedup_key) DO NOTHING`, so an existing row keeps its `id`); reassigned only by a full clean reindex that truncates the table (see §1.4) |
 | `source` | VARCHAR(2) | NOT NULL, CHECK IN ('CA','LS','RS') | Source corpus |
 | `proceeding_type` | VARCHAR(50) | NOT NULL | See proceeding type enum below |
 | `date` | DATE | NOT NULL | Date of sitting (YYYY-MM-DD) |
@@ -27,6 +27,9 @@ Primary canonical store for all speech-type records (debates, zero hour, calling
 | `speaker_role` | VARCHAR(30) | CHECK IN ('member','minister','presiding_officer') | Role in this speech |
 | `sequence_within_sitting` | INTEGER | NULL | 1-based position within sitting proceedings |
 | `full_text_en` | TEXT | NULL | Full English text; NULL if no translation available |
+| `lang_original` | VARCHAR(5) | NOT NULL, CHECK IN ('en','hi','mixed') | Language of the original speech before translation. Derived from F01 Language Handling: case 1→`en`; cases 2 & 4→`hi`; case 3→`mixed` if genuinely alternating, `hi` if predominantly Hindi with only translation fragments |
+| `time_of_day` | VARCHAR(5) | NULL | Speech start time as `HH:MM` (24-hour), stored verbatim (no reformatting). Extracted from HTML sources only; NULL for Internet Archive pre-OCR text and PDF sources |
+| `word_count` | INTEGER | NULL | Word count of `full_text_en`, computed at ingest; NULL when `full_text_en` is NULL |
 | `is_translated` | BOOLEAN | NOT NULL DEFAULT FALSE | True if any portion is official English translation of Hindi |
 | `has_untranslated_content` | BOOLEAN | NOT NULL DEFAULT FALSE | True if Hindi portions could not be indexed |
 | `speaker_name_unresolved` | BOOLEAN | NOT NULL DEFAULT FALSE | True if speaker_name could not be matched to names_dict |
@@ -46,6 +49,8 @@ CREATE INDEX idx_speeches_proceeding_type ON speeches(proceeding_type);
 CREATE INDEX idx_speeches_speaker_name ON speeches(speaker_name);
 CREATE INDEX idx_speeches_session_name ON speeches(session_name);
 CREATE INDEX idx_speeches_dedup_key ON speeches(dedup_key);
+-- F09 adjacent-navigation: same-sitting neighbour lookup by sequence
+CREATE INDEX idx_speeches_sitting ON speeches(source, date, sitting_number, sequence_within_sitting);
 ```
 
 ---
@@ -56,7 +61,7 @@ Primary canonical store for starred and unstarred question records.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | UUID | PK, DEFAULT gen_random_uuid() | Primary key; used as Meilisearch document ID |
+| `id` | UUID | PK, DEFAULT gen_random_uuid() | Primary key; used as Meilisearch document ID and as the F09 detail-page route param. Stability identical to `speeches.id` (stable across incremental re-runs; reassigned only by a full clean reindex) |
 | `source` | VARCHAR(2) | NOT NULL, CHECK IN ('LS','RS') | Source corpus (CA has no question hour) |
 | `proceeding_type` | VARCHAR(30) | NOT NULL, CHECK IN ('starred_question','unstarred_question') | |
 | `date` | DATE | NOT NULL | Date of sitting |
@@ -69,7 +74,11 @@ Primary canonical store for starred and unstarred question records.
 | `questioner_party` | VARCHAR(200) | NULL | Party affiliation of primary questioner |
 | `minister_name` | VARCHAR(300) | NULL | Minister answering |
 | `ministry` | VARCHAR(300) | NULL | Ministry responsible |
+| `sequence_within_sitting` | INTEGER | NULL | 1-based position within the sitting's proceedings, in document order. **Shared sequence space with `speeches`** for the same sitting (a Q+A exchange and a speech never share a number); powers F09 adjacent navigation. **Not** part of the dedup key (see §1.4) |
 | `full_text_en` | TEXT | NULL | Full exchange text (main Q + answer + supplementaries for starred; Q + written answer for unstarred) |
+| `lang_original` | VARCHAR(5) | NOT NULL, CHECK IN ('en','hi','mixed') | Language of the original exchange before translation; same derivation as `speeches.lang_original` |
+| `time_of_day` | VARCHAR(5) | NULL | Exchange start time as `HH:MM` (24-hour), stored verbatim; HTML sources only; NULL for IA pre-OCR text and PDF sources |
+| `word_count` | INTEGER | NULL | Word count of `full_text_en`, computed at ingest; NULL when `full_text_en` is NULL |
 | `is_translated` | BOOLEAN | NOT NULL DEFAULT FALSE | True if any portion is translated from Hindi |
 | `has_untranslated_content` | BOOLEAN | NOT NULL DEFAULT FALSE | True if any portion could not be indexed |
 | `source_url` | TEXT | NULL | Canonical citation URL: `eparlib_document_url` for **LS** via Internet Archive; `rsdebate.nic.in` item URL derived from DSpace handle N for **RS** via Internet Archive (null when no handle is derivable — PRD v1.3 no-handle edge case); DSpace item URL (LS/RS direct); sansad.in/rs page URL for recent RS HTML. **Never an archive.org URL** (ARCHITECTURE.md Non-Negotiable #9) |
@@ -86,6 +95,8 @@ CREATE INDEX idx_qa_questioner_names ON qa_exchanges USING GIN(questioner_names)
 CREATE INDEX idx_qa_minister_name ON qa_exchanges(minister_name);
 CREATE INDEX idx_qa_session_name ON qa_exchanges(session_name);
 CREATE INDEX idx_qa_dedup_key ON qa_exchanges(dedup_key);
+-- F09 adjacent-navigation: same-sitting neighbour lookup by sequence
+CREATE INDEX idx_qa_sitting ON qa_exchanges(source, date, sitting_number, sequence_within_sitting);
 ```
 
 ---
@@ -132,6 +143,10 @@ Compound key format for each record type. Keys are stored in the `dedup_key` col
 
 `speaker_name_normalized`: lowercase, spaces replaced with `_`, special characters stripped. Applied before canonicalization to ensure consistency even when canonical name lookup fails.
 
+**`sequence_within_sitting` is excluded from the Q+A dedup key** (PRD v2.0). The Q+A key stays `{source}_{date}_{sitting_number}_{proceeding_type}_{question_number}`. The speech key already includes `sequence_within_sitting`. Keeping `sequence_within_sitting` out of the Q+A key ensures a re-parse that shifts the shared sequence numbering does not create duplicate Q+A rows.
+
+**`id` stability.** Because inserts use `ON CONFLICT (dedup_key) DO NOTHING`, a record's `id` is preserved across incremental re-runs (the existing row is left untouched). A **full clean reindex** truncates the tables (DEPLOYMENT §6.1) and therefore reassigns all `id`s — externally shared/bookmarked `/record/:id` URLs are stable only within the same canonical dataset, not across a full reingest.
+
 **Two dedup layers.** The `dedup_key` above is the **record-level** guard (one row per unique speech / Q+A exchange), enforced by the PostgreSQL `UNIQUE` constraint and the SQLite `inserted_dedup_keys` mirror. It is distinct from **document-level** identity (`canonical_doc_id`, see §4.3), which prevents the same source document — available from more than one provider (e.g. Internet Archive `eparlib.nic.in.{N}` and DSpace `123456789/{N}`) — from being fetched and parsed twice. Document-level identity is a fetch-time optimisation in the checkpoint store; record-level `dedup_key` is the authoritative guarantee that no duplicate record is written.
 
 ---
@@ -161,6 +176,8 @@ Denormalized merge of `speeches` and `qa_exchanges` fields. `record_type` discri
   "sitting_number": 42,
   "subject": "Discussion on the Constitution (Amendment) Bill",
   "full_text_en": "Mr. President, I rise to speak on...",
+  "lang_original": "en",
+  "time_of_day": "14:35",
   "is_translated": false,
   "source_url": "https://sansad.in/...",
 
@@ -174,9 +191,11 @@ Denormalized merge of `speeches` and `qa_exchanges` fields. `record_type` discri
 }
 ```
 
-**Q+A exchange document:** uses `"record_type": "qa"` and includes `question_number`, `questioner_names` (array), `questioner_party`, `minister_name`, `ministry` in place of speech-specific fields (`speaker_name`, `speaker_party`, `speaker_constituency_or_state`, `speaker_role`, `sequence_within_sitting`, `speaker_name_unresolved`, `volume`).
+Both record types carry `lang_original` and `time_of_day` (for the F05 result-card badge and time row).
 
-Fields excluded from Meilisearch (stored in PostgreSQL only): `page_reference`, `has_untranslated_content`, `session_number`, `created_at`, `dedup_key`.
+**Q+A exchange document:** uses `"record_type": "qa"` and includes `question_number`, `questioner_names` (array), `questioner_party`, `minister_name`, `ministry`, **and `sequence_within_sitting`** (new in v2.0 — Q+A now carries it for correct chronological sort within the shared sitting sequence) in place of speech-specific fields (`speaker_name`, `speaker_party`, `speaker_constituency_or_state`, `speaker_role`, `speaker_name_unresolved`, `volume`). Like the speech doc, it also carries `lang_original` and `time_of_day`.
+
+Fields excluded from Meilisearch (stored in PostgreSQL only, served by the F09 detail endpoint): `word_count`, `page_reference`, `has_untranslated_content`, `session_number`, `created_at`, `dedup_key`.
 
 ### 2.3 Index Configuration
 
@@ -307,6 +326,8 @@ Field rules:
       "subject": "General Discussion on the Union Budget",
       "snippet": "The Finance Minister stated that <mark>PM</mark> infrastructure...",
       "snippet_from_supplementary": false,
+      "lang_original": "en",
+      "time_of_day": "14:35",
       "is_translated": false,
       "source_url": "https://sansad.in/...",
       "speaker_name": "Jairam Ramesh",
@@ -327,6 +348,8 @@ Field rules:
 `expansion_notice`: array of expanded term strings for the "Also searching for:" UI notice. Empty array if no expansion occurred.
 `snippet`: HTML-safe string; matched terms wrapped in `<mark>` tags. All other HTML stripped.
 `snippet_from_supplementary`: `true` only for Q+A records where the best-match passage is from a supplementary exchange.
+`lang_original`: `"en" | "hi" | "mixed"` — drives the F05 card badge (`hi`→"Hindi original", `mixed`→"Mixed language", `en`→no badge).
+`time_of_day`: `"HH:MM"` or `null` — F05 cards render it verbatim near the date; omit silently when null.
 
 **Validation error response (400):**
 ```json
@@ -385,6 +408,74 @@ Single endpoint serving both F07 surfaces (per PRD v1.1). The **homepage status 
 ```json
 { "status": "unavailable" }
 ```
+
+---
+
+### 3.3 GET /api/record/{id}
+
+F09 detail page. Served from **PostgreSQL** (not Meilisearch). Single record fetched by `id` from `speeches` UNION ALL `qa_exchanges`; adjacent neighbours resolved over the same sitting.
+
+**Path parameter:** `id` — the record UUID (the `id` column / Meilisearch document id).
+
+**Response body (200 OK):**
+
+All fields the F09 spec displays. Speech-only and Q+A-only fields are `null` (or omitted) for the other record type. `null`/not-applicable fields are rendered as silently omitted by the client.
+
+```json
+{
+  "id": "3f2a1b...",
+  "record_type": "speech | qa",
+  "source": "LS",
+  "proceeding_type": "debate",
+  "proceeding_type_label": "Debate",
+  "date": "2023-03-15",
+  "date_display": "15 March 2023",
+  "time_of_day": "14:35",
+  "session_name": "Budget Session 2023",
+  "session_number": 7,
+  "sitting_number": 42,
+  "volume": null,
+  "subject": "General Discussion on the Union Budget",
+  "full_text_en": "Mr. Speaker, I rise to speak on...",
+  "lang_original": "en",
+  "is_translated": false,
+  "has_untranslated_content": false,
+  "page_reference": null,
+  "word_count": 1820,
+  "source_url": "https://eparlib.sansad.in/...",
+
+  "speaker_name": "Jairam Ramesh",
+  "speaker_role": "member",
+  "speaker_party": "INC",
+  "speaker_constituency_or_state": null,
+  "speaker_name_unresolved": false,
+
+  "question_number": null,
+  "questioner_names": null,
+  "questioner_party": null,
+  "minister_name": null,
+  "ministry": null,
+
+  "sequence_within_sitting": 7,
+  "sitting_total": 58,
+  "adjacent": { "prev_id": "9c1d...", "next_id": "a4e8..." }
+}
+```
+
+Field rules:
+- `record_type`: `"speech"` (from `speeches`) or `"qa"` (from `qa_exchanges`).
+- `proceeding_type_label`, `date_display`: server-formatted display strings (same conventions as `/api/search`).
+- Speech-type records populate the speaker block and `volume`; Q+A-type records populate `question_number`, `questioner_names`, `questioner_party`, `minister_name`, `ministry`. The non-applicable group is `null`.
+- `sitting_total`: count of all records (speeches + Q+A) in the same sitting — supports the "[N] of [total]" display; `sequence_within_sitting` is `N`.
+- `adjacent.prev_id`: id of the record at `sequence_within_sitting − 1` in the same sitting, or `null` at the lower boundary (client disables, does not hide, the Prev control).
+- `adjacent.next_id`: id at `sequence_within_sitting + 1`, or `null` at the upper boundary.
+- Same sitting = same `source` + `date` + `sitting_number` (`IS NOT DISTINCT FROM`, so CA records with `NULL sitting_number` group by `source`+`date`). Neighbours are drawn from **both** tables ordered by `sequence_within_sitting` (shared space).
+
+**Not-found response (404):**
+```json
+{ "error": "not_found", "message": "Record not found." }
+```
+Returned when no row in either table has the given `id`. The client renders a "Record not found" page (no blank page, no JS error).
 
 ---
 

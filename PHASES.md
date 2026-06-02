@@ -1,12 +1,7 @@
 # SansadSearch — Phase Plan
 
-<<<<<<< HEAD
-PRD version: v1.1
-Generated: 2026-05-29
-=======
-PRD version: v1.3
-Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes)
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
+PRD version: v2.0
+Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes); updated 2026-06-02 (Phases 10–11 added — PRD v2.0: new ingestion fields, CA parsing rules, shared sequence, F05 badge changes, F09 record detail page; merge-conflict marker in header resolved)
 
 ---
 
@@ -196,4 +191,50 @@ Implement:
 
 Stop when: `sansad_rs_html.py` tests crawl fixture HTML listing and produce correct DocumentRef list for RS sittings; `rsdebate_dspace.py` tests resolve bitstream URL from fixture DSpace item page (no constructed filenames); `internet_archive.py` RS tests: (a) `citation_url` = rsdebate.nic.in URL when handle derivable from IA identifier; (b) `citation_url` = null + warning logged when identifier contains no derivable handle (PRD v1.3 edge case); `rs.py` integration test: sansad.in/rs HTML path preferred for recent sittings, IA fallback for older items, DSpace fallback for IA-missing items, no archive.org URL in any `citation_url`, checkpoint skip works on re-run.
 Do not implement anything beyond Phase 9.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 10 — v2.0 Ingestion: New Fields, CA Parsing, Shared Sequence
+
+PRD sections: F01 (lang_original, time_of_day, word_count new fields; sequence_within_sitting on qa_exchanges; CA field-level parsing rules; shared sitting sequence assignment)
+UI sections: none
+
+Implement:
+- `app/db/schema.sql` — add `lang_original` (VARCHAR(5) NOT NULL CHECK IN ('en','hi','mixed')), `time_of_day` (VARCHAR(5) NULL), `word_count` (INTEGER NULL) to `speeches` and `qa_exchanges`; add `sequence_within_sitting` (INTEGER NULL) to `qa_exchanges`; add composite sitting indexes `idx_speeches_sitting` and `idx_qa_sitting` per DATA-MODELS.md §1.1 and §1.2
+- `app/ingest/segmenters/speech.py` — compute `lang_original` for all four F01 language-handling cases (case 1→`en`; cases 2 & 4→`hi`; case 3→`mixed` if genuinely alternating, `hi` if predominantly Hindi with only translation fragments); compute `word_count` (word count of `full_text_en`, null when `full_text_en` is null); accept `time_of_day` from parser and pass through to record dict
+- `app/ingest/segmenters/qa.py` — same `lang_original` and `word_count` computation; accept and pass through `time_of_day`
+- `app/ingest/parsers/html_parser.py` — CA date: derive from URL slug (`DD-MMM-YYYY`, e.g. `09-dec-1946`); discard any date found in HTML body even when present; CA subject: nearest preceding standalone bold section header in document order (not bold speaker names inside speech-grid rows); walk DOM, update current topic on each section header, assign to subsequent speeches until next header; if no header precedes first speech, fall back to first item's link text in page TOC `<ul>`; surface `time_of_day` from HTML timestamp elements where present (CA coi + RS sansad.in/rs); build-time verification: confirm CA TOC `<li><a href="#ID">` anchor IDs correspond to `id=` attributes on body elements — if mapping exists, use it for first-topic fallback; document finding
+- `app/ingest/parsers/ia_text_parser.py` — `time_of_day` = None (IA pre-OCR text has no sitting start time)
+- `app/ingest/parsers/pdf_parser.py` — `time_of_day` = None (PDF sources have no sitting start time)
+- `app/ingest/sources/ca.py` — assign shared `sequence_within_sitting` across all speech and Q+A records within each sitting in document order (1-based; speech and Q+A share the sequence space, never the same number); assignment at orchestrator level after both segmenters have run for the sitting; build-time verification: confirm CA (coi HTML) format exposes a reliable interleaved order between speech and Q+A record types — document finding
+- `app/ingest/sources/ls.py` — same shared `sequence_within_sitting` assignment; build-time verification: confirm IA text + DSpace PDF formats expose reliable interleaved order — document finding
+- `app/ingest/sources/rs.py` — same shared `sequence_within_sitting` assignment; build-time verification: confirm sansad.in/rs HTML + IA + rsdebate PDF formats expose reliable interleaved order — document finding
+- `app/ingest/indexer.py` — include `lang_original` and `time_of_day` in Meilisearch document push for both record types; include `sequence_within_sitting` in Q+A Meilisearch document (was previously excluded — DATA-MODELS §2.2 v2.0 adds it to Q+A docs); exclude `word_count` from Meilisearch (PostgreSQL-only per DATA-MODELS §2.2)
+- `app/ingest/setup_meilisearch.py` — verify index configuration matches DATA-MODELS §2.3 exactly after v2.0 changes (`sequence_within_sitting` now in `sortableAttributes` for Q+A documents); correct any discrepancies; unit test asserts no deviation from DATA-MODELS §2.3
+
+Stop when: `schema.sql` adds all five new columns and both composite sitting indexes without error on a clean PostgreSQL instance; segmenter tests compute `lang_original` correctly for all four language-handling cases and `word_count` correctly (null when `full_text_en` is null); `html_parser.py` tests confirm CA date derived from URL slug (body date discarded); CA subject tests confirm section-header walk assigns correct topics and TOC fallback activates when no header precedes first speech; `time_of_day` extracted from HTML fixture and None for IA/PDF; orchestrator tests confirm shared `sequence_within_sitting` assigned in document order across speech+Q+A in a fixture sitting (no number shared between the two types); `indexer.py` tests confirm `lang_original`, `time_of_day`, and Q+A `sequence_within_sitting` present in Meilisearch push and `word_count` absent; `setup_meilisearch.py` unit test passes against DATA-MODELS §2.3; build-time verification findings documented in test output or a comment in the relevant orchestrator/parser file.
+Do not implement anything from Phase 11 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 11 — F05 Result Card Badges + F09 Record Detail Page
+
+PRD sections: F05 (lang_original badge, time_of_day on result cards), F09 (record detail page)
+UI sections: 02-ui-ux-spec.md (visual identity and card interaction patterns); ARCHITECTURE.md §3 (RecordDetail.jsx and useRecord.js spec); DATA-MODELS.md §3.3 (GET /api/record/{id} contract)
+
+Implement:
+- `app/api/routes/record.py` — GET /api/record/{id}; returns 404 with `{"error":"not_found","message":"Record not found."}` when no row in either table matches the id
+- `app/api/services/record.py` — fetch one record by id: `SELECT ... FROM speeches WHERE id = $1 UNION ALL SELECT ... FROM qa_exchanges WHERE id = $1`; 404 if empty result; adjacent-neighbour query: union both tables for the same sitting (`source` + `date` + `sitting_number IS NOT DISTINCT FROM`), ordered by `sequence_within_sitting`, resolve `prev_id` (seq−1, null at lower boundary) and `next_id` (seq+1, null at upper boundary); compute `sitting_total` (count of all records in the same sitting across both tables); format response per DATA-MODELS §3.3: `proceeding_type_label`, `date_display` (DD Month YYYY), speech/Q+A fields null for the inapplicable record type
+- `app/api/main.py` — register the record route (`/api/record/{id}`)
+- `app/ui/src/components/SpeechCard.jsx` — replace `is_translated` indicator with `lang_original` badge (`hi`→"Hindi original", `mixed`→"Mixed language", `en`→no badge rendered); add `time_of_day` row near the date (rendered verbatim as "HH:MM"; omitted silently when null)
+- `app/ui/src/components/QACard.jsx` — same `lang_original` badge and `time_of_day` row
+- `app/ui/src/components/ResultCard.jsx` — wrap each card in a link to `/record/:id` (the record's `id` field from the search result)
+- `app/ui/src/hooks/useRecord.js` — GET /api/record/{id}; loading, error, and 404 state (404 is a distinct state, not collapsed into error)
+- `app/ui/src/pages/RecordDetail.jsx` — full text display + all metadata fields from DATA-MODELS §3.3 response; prev/next adjacent controls (disabled when `adjacent.prev_id` or `adjacent.next_id` is null — not hidden); position indicator "[sequence_within_sitting] of [sitting_total]"; back-nav: "← Back to results" when router location state carries a referrer, "← Search" when loaded via direct URL; 404 state renders "Record not found" message (no blank page, no JS error); loading state; error state with Retry
+- `app/ui/src/main.jsx` — add `/record/:id` route pointing to RecordDetail.jsx
+
+Stop when: GET /api/record/{id} returns correct full response for a fixture speech record and a fixture Q+A record (including adjacent nav, sitting_total, proceeding_type_label, date_display); 404 returned and rendered correctly when id does not exist in either table; SpeechCard and QACard render `lang_original` badge correctly for all three values (`hi`, `mixed`, `en`/absent) and render `time_of_day` when present, silent when null; ResultCard links correctly to /record/:id; RecordDetail.jsx renders full text, all metadata, prev/next controls (disabled at boundaries), position indicator, and correct back-nav for both in-app and direct-URL entry; all tests pass.
+Do not implement anything beyond Phase 11.
 Tests: write and run tests for all items above before finishing.

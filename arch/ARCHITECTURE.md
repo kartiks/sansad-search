@@ -1,7 +1,7 @@
 # Architecture — SansadSearch
 
-**PRD version:** v1.3
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified)
+**PRD version:** v2.0
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules)
 
 ---
 
@@ -10,7 +10,7 @@
 SansadSearch is a two-subsystem application:
 
 - **Ingestion pipeline** — local CLI that discovers, fetches, parses, segments, canonicalizes, and indexes parliamentary records across three corpora (CA, LS, RS). Each corpus is served by an ordered chain of providers (government sites plus the Internet Archive mirror); URLs are discovered at runtime from listing/browse pages, never hardcoded. Writes canonical records to PostgreSQL (primary record store) and pushes a derived search index to Meilisearch Cloud.
-- **Web application** — FastAPI backend + React SPA serving search, filtering, sorting, and result display. Read-only. No authentication.
+- **Web application** — FastAPI backend + React SPA serving search, filtering, sorting, result display, and a single-record detail view (F09). Read-only. No authentication.
 
 The two subsystems share no runtime coupling. Ingestion runs offline on the operator's machine. The web application is a stateless read interface over the populated stores.
 
@@ -54,11 +54,15 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
     routes/
       search.py                  # POST /api/search
       status.py                  # GET /api/status
+      record.py                  # GET /api/record/{id} (F09 detail; 404 if not found)
     services/
       query_expander.py          # Query parsing, stop-word stripping, synonym lookup,
                                  # phrase synonym detection, expansion notice generation
       search.py                  # Meilisearch filter construction, result formatting,
                                  # snippet post-processing
+      record.py                  # F09: fetch one record by id (speeches UNION qa_exchanges),
+                                 # adjacent-neighbour query (same sitting, by sequence),
+                                 # sitting_total count, response formatting
     lib/
       meilisearch_client.py      # Shared Meilisearch async client (singleton, search key)
       db.py                      # asyncpg connection pool init and teardown
@@ -122,9 +126,10 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
   ui/
     src/
       components/
-        ResultCard.jsx           # Dispatches to SpeechCard or QACard by record_type
-        SpeechCard.jsx
-        QACard.jsx
+        ResultCard.jsx           # Dispatches to SpeechCard or QACard by record_type;
+                                 # each card links to /record/:id
+        SpeechCard.jsx           # F05: renders lang_original badge + time_of_day row
+        QACard.jsx               # F05: renders lang_original badge + time_of_day row
         FilterChip.jsx
         Pagination.jsx
         SkeletonCard.jsx
@@ -138,8 +143,13 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
         IndexingStatusPage.jsx   # Full F07 indexing status panel (detailed: total +
                                  # per-source counts + per-source date coverage +
                                  # last-updated); reached via Results.jsx footer link
+        RecordDetail.jsx         # F09 detail page (route /record/:id): full text +
+                                 # all metadata; prev/next adjacent controls (disabled at
+                                 # boundaries); back-nav = "Back to results" (in-app referrer
+                                 # via router location state) | "Search" (direct URL)
       hooks/
         useSearch.js             # POST /api/search call; loading/error state management
+        useRecord.js             # GET /api/record/{id} call (F09); loading/error/404 state
         useCookieHistory.js      # Recent searches read/write (F08)
         useSavedSearches.js      # Saved searches read/write (F08)
       lib/
@@ -149,7 +159,8 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
         constants.js             # Proceeding type labels, source labels
       main.jsx                   # SPA entry point; mounts React root; defines BrowserRouter
                                  # routes: / → Home, /search → Results,
-                                 # /index-status → IndexingStatusPage, * → redirect /
+                                 # /index-status → IndexingStatusPage,
+                                 # /record/:id → RecordDetail, * → redirect /
       index.css                  # CSS custom properties (design tokens: colours, fonts,
                                  # shadows); global base styles (box-sizing, body, button)
     public/
@@ -183,6 +194,7 @@ The Coding Agent updates this table after any change to API routes or core lib f
 |------|------|
 | **Search request** | Browser → `POST /api/search` → `query_expander.py` (parse, strip stop words, synonym lookup, phrase detection) → `services/search.py` (build Meilisearch filter expression, call Meilisearch Cloud, format results and snippets) → Browser |
 | **Index status (F07)** | Browser → `GET /api/status` → asyncpg query on `index_status` table (most recent row) → Browser. Both F07 surfaces share this one flow: the homepage strip (`Home.jsx`, condensed — counts + last-updated) and the full panel (`IndexingStatusPage.jsx`, detailed — total + per-source counts + per-source date coverage + last-updated) render different subsets of the same response. No separate endpoint. |
+| **Record detail (F09)** | Browser → `GET /api/record/{id}` → `services/record.py`: (1) asyncpg fetch by id — `speeches WHERE id` UNION ALL `qa_exchanges WHERE id`; 404 if neither matches. (2) adjacent-neighbour query over the same sitting (`source` + `date` + `sitting_number IS NOT DISTINCT FROM`), both tables unioned, ordered by `sequence_within_sitting`; resolves `prev_id`/`next_id` (null at boundaries) and `sitting_total` → Browser. **Detail is served from PostgreSQL, not Meilisearch** (the canonical store holds every display field, incl. `session_number`, `has_untranslated_content`, `page_reference`, `word_count`). Search remains Meilisearch-only. |
 | **Search history (F08)** | Browser ↔ Browser cookies only — no server involvement |
 | **Bulk ingestion** | Operator CLI → corpus orchestrator → provider chain `discover()` (HTML listing crawl / DSpace browse / IA `advancedsearch`; document-level dedup on canonical doc id `N`) → httpx fetcher (rate-limited, robots.txt compliant) → parser by format: HTML (`html_parser`) / IA pre-OCR text (`ia_text_parser`) / PDF (`pdf_parser`, embedded-text only) → segmenter → canonicalizer → PostgreSQL writer → Meilisearch document pusher → `index_status` table updated on completion |
 | **Re-indexing** | `SELECT * FROM speeches UNION ALL SELECT * FROM qa_exchanges` → `indexer.py` → Meilisearch Cloud (no re-scraping) |
@@ -230,6 +242,14 @@ In neither case is the archive.org mirror URL ever used as `source_url` (Non-Neg
 
 **Pre-computed index status.** The ingestion pipeline writes a row to the `index_status` PostgreSQL table on successful completion. The `GET /api/status` endpoint reads the most recent row. The status panel never issues a Meilisearch document count query at request time.
 
+**Record detail served from PostgreSQL (F09).** The detail page reads from PostgreSQL, not Meilisearch. PostgreSQL is the canonical store and already holds every field the detail page shows — including fields deliberately excluded from the Meilisearch document (`session_number`, `has_untranslated_content`, `page_reference`, `word_count`). `GET /api/record/{id}` fetches one record (`speeches` UNION ALL `qa_exchanges` by `id`) and runs one adjacent-neighbour query over the same sitting. This is the **only** record-serving Postgres read path; search continues to run exclusively against Meilisearch. The split is deliberate: search needs ranking/typo/synonym behaviour (Meilisearch); detail needs the complete record with no document-size pressure (Postgres). PERF-2 (≤500ms p95) is met by the `id` primary-key lookup plus a composite sitting index (DATA-MODELS §1.1/§1.2).
+
+**Unified sitting-level sequence assignment.** `sequence_within_sitting` is a single 1-based ordering **shared** across speech and Q+A records within one sitting (a Q+A exchange and a speech never share a number). It is assigned at the corpus-orchestrator level by walking the sitting's parsed proceedings in document order across both record types — not independently inside `segmenters/speech.py` and `segmenters/qa.py`. This shared space is what makes F09 adjacent navigation (prev = seq−1, next = seq+1) traverse speeches and questions in true document order. `sequence_within_sitting` is **not** part of the Q+A `dedup_key` (DATA-MODELS §1.4).
+
+**CA field-level parsing (F01).** Two CA-only rules in the CA parse path (`providers/coi_html.py` → `parsers/html_parser.py`):
+- **Date** — the constitutionofindia.net URL slug (`DD-MMM-YYYY`, e.g. `09-dec-1946`) is the *authoritative* date source. The parser derives `date` from the slug and **discards** any date found in the HTML body, even when present. (Supersedes the prior URL-as-fallback-only behaviour.) A CA record's date is missing only if the slug itself fails to parse.
+- **Subject** — each CA speech's `subject` is the nearest *preceding standalone bold section header* in the sitting body (topic labels between speech entries; **not** bold speaker names inside speech-grid rows). Walk the DOM in document order, set the current topic on each section header, assign it to subsequent speeches until the next header. If no header precedes the first speech, fall back to the first item in the page TOC `<ul>`.
+
 ---
 
 ## 6. Integration Points
@@ -238,7 +258,7 @@ In neither case is the archive.org mirror URL ever used as `source_url` (Non-Neg
 |-------------|-----------|---------|-------|
 | Meilisearch Cloud | Read (search) | API (`meilisearch_client.py`) | Search-only API key used at runtime |
 | Meilisearch Cloud | Write (index, settings) | Ingestion pipeline | Master key used for document push and index config; never exposed to API at runtime |
-| PostgreSQL (Railway) | Read | API (`db.py`) | `index_status` table for F07 status endpoint only; records not served directly from Postgres |
+| PostgreSQL (Railway) | Read | API (`db.py`) | Two read paths: `index_status` table for the F07 status endpoint, and `speeches`/`qa_exchanges` for the F09 record-detail endpoint (`GET /api/record/{id}` — single record + adjacent navigation). Search records are **not** served from Postgres (search runs on Meilisearch) |
 | PostgreSQL (Railway) | Write | Ingestion pipeline | All speech and Q+A records; `index_status` on completion |
 | constitutionofindia.net (CLPR) | Read (HTTP) | Ingestion `providers/coi_html.py` | CA primary & only; clean semantic HTML, one page per sitting; rate-limited; robots.txt compliant |
 | archive.org (Internet Archive) | Read (HTTP) | Ingestion `providers/internet_archive.py` | **Preferred LS/RS bulk path**; pre-OCR `_djvu.txt` + metadata JSON via `advancedsearch.php` / `metadata`; identifier `eparlib.nic.in.{N}` ↔ DSpace handle `123456789/{N}` |
@@ -270,3 +290,15 @@ Decisions that must not be changed without explicit user approval. Changes to an
 8. **React SPA — no SSR.** The frontend is a static Vite build served from Vercel. No server-side rendering.
 
 9. **IA-sourced records cite the canonical record, not the mirror.** For LS records ingested via the Internet Archive, `source_url` is set to `eparlib_document_url` (the official parliamentary-library URL). For RS records ingested via the Internet Archive, `source_url` is set to the `rsdebate.nic.in` item URL derived from the DSpace handle `N`; when no handle is derivable, `source_url` is null (PRD v1.3 no-handle edge case). The archive.org mirror URL is never cited in either case — the mirror is a fetch path, not a citation.
+
+---
+
+## 8. Build-Time Verifications (PRD v2.0)
+
+Items the Coding Agent must confirm against live source structure during the build that introduces F01 v2.0 fields and F09; architecture is silent on the outcome because it depends on source-document reality.
+
+1. **Shared speech↔Q+A sequence feasibility (all three providers).** Confirm that, for CA (coi HTML), LS (IA text + DSpace PDF), and RS (sansad.in/rs HTML + IA + rsdebate PDF), the sitting's speeches and Q+A exchanges can be ordered into a single document-order sequence. If a provider's format does not expose a reliable interleaved order between the two record types, flag it — F09 adjacent navigation depends on the shared space.
+
+2. **CA TOC anchor mapping.** For the CA subject fallback, verify whether TOC `<li><a href="#ID">` anchor IDs correspond to `id=` attributes on body elements. If the mapping exists, use it to resolve the first-topic fallback; otherwise fall back to the first TOC item's link text. Record the finding.
+
+3. **`time_of_day` extraction surface.** Confirm which HTML sources expose a sitting start time (CA coi, recent RS sansad.in/rs). `time_of_day` is HTML-only — null for all IA pre-OCR text and PDF-sourced records by design.

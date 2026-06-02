@@ -1,7 +1,7 @@
 # Deployment — SansadSearch
 
-**PRD version:** v1.3
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks)
+**PRD version:** v2.0
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks); updated 2026-06-01 for PRD v2.0 — §6.3 schema migration for F01 new columns/indexes + re-ingestion; no new env vars, dependencies, or infrastructure (F09 detail endpoint reuses the existing Railway Postgres pool)
 
 ---
 
@@ -273,3 +273,35 @@ python -m ingest.indexer --reindex-from-db
 Reads all records from `speeches` and `qa_exchanges` in PostgreSQL and pushes them to Meilisearch in batches. Does not modify the checkpoint store or PostgreSQL data. See §3.6 for full details.
 
 If the Meilisearch index settings need to be re-applied first (e.g. after deleting the index entirely), run `python -m ingest.setup_meilisearch` before the reindex (§3.4).
+
+---
+
+### 6.3 PRD v2.0 migration (F01 new fields + F09)
+
+PRD v2.0 adds columns to both record tables (`lang_original`, `time_of_day`, `word_count` on both; `sequence_within_sitting` on `qa_exchanges`) plus two composite sitting indexes for F09 adjacent navigation. The new field values are **not derivable from stored data** — they require re-parsing the source documents — so applying v2.0 means a schema migration **followed by a full re-ingestion**.
+
+**Step 1 — Apply the schema changes.** On a fresh database, re-run `app/db/schema.sql` (§3.3). On an existing database, apply the additive migration:
+
+```sql
+ALTER TABLE speeches
+  ADD COLUMN lang_original VARCHAR(5) NOT NULL DEFAULT 'en'
+    CHECK (lang_original IN ('en','hi','mixed')),
+  ADD COLUMN time_of_day VARCHAR(5),
+  ADD COLUMN word_count INTEGER;
+
+ALTER TABLE qa_exchanges
+  ADD COLUMN lang_original VARCHAR(5) NOT NULL DEFAULT 'en'
+    CHECK (lang_original IN ('en','hi','mixed')),
+  ADD COLUMN time_of_day VARCHAR(5),
+  ADD COLUMN word_count INTEGER,
+  ADD COLUMN sequence_within_sitting INTEGER;
+
+CREATE INDEX idx_speeches_sitting ON speeches(source, date, sitting_number, sequence_within_sitting);
+CREATE INDEX idx_qa_sitting ON qa_exchanges(source, date, sitting_number, sequence_within_sitting);
+```
+
+The `DEFAULT 'en'` on `lang_original` exists only to satisfy `NOT NULL` for any pre-existing rows; re-ingestion overwrites it with the correctly derived value. `schema.sql` itself declares the column without a default (re-ingestion always sets it explicitly).
+
+**Step 2 — Full clean reindex.** Because the new fields require re-parsing, run the full clean reindex (§6.1) so every record is re-ingested with the v2.0 fields populated and a fresh, stable `id`. A Meilisearch-only reindex (§6.2) is **not** sufficient — it would only re-push existing rows that still lack the new values.
+
+**No new env vars, dependencies, or infrastructure.** The F09 `GET /api/record/{id}` endpoint reuses the existing Railway PostgreSQL connection pool (`api/lib/db.py`). PERF-2 (detail page ≤500ms p95) is satisfied by the `id` primary-key lookup plus the `idx_*_sitting` composite indexes for the adjacent-neighbour query; no caching layer or additional service is required.
