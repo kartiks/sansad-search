@@ -244,6 +244,26 @@ class TestCASpeechPairsWithSubjects:
         # subject must be TOC first item, not None
         assert pairs[0][2] == "Constituent Assembly Resolved"
 
+    def test_ca_speaker_nested_in_extra_div_extracted(self):
+        """Speaker span nested inside an extra wrapper div inside info_div must still be found."""
+        html = """<!DOCTYPE html>
+<html><body><div class="wrapper">
+  <div class="lg:grid lg:grid-cols-12 relative">
+    <div class="lg:col-span-3 grid grid-cols-4 sm:grid-cols-6 lg:gap-x-2.5 xl:grid-cols-4 empty">
+      <div class="col-span-2"><span class="bg-[#F8FFA3]">1.1.1</span></div>
+      <div class="col-span-2">
+        <span class="md:text-lg font-medium">Shri Nested Speaker</span>
+      </div>
+    </div>
+    <div class="lg:col-span-9">Speech text from nested speaker.</div>
+    <div class="social-links-block"></div>
+  </div>
+</div></body></html>"""
+        result = parse_html(html, "CA")
+        pairs = result["ca_speech_pairs"]
+        assert len(pairs) == 1
+        assert pairs[0][0] == "Shri Nested Speaker"
+
     def test_ca_ls_does_not_produce_ca_speech_pairs(self):
         """ca_speech_pairs is only set for source=CA."""
         html = _load("debate_ls.html")

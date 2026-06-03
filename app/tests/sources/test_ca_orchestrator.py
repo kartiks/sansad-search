@@ -21,7 +21,7 @@ from ingest.sources.ca import CAOrchestrator
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures"
 
-COI_DAY_URL = "https://www.constitutionofindia.net/debates/volume-1/1946-12-09/"
+COI_DAY_URL = "https://www.constitutionofindia.net/debates/09-dec-1946/"
 COI_DAY_HTML = (_FIXTURES / "coi_day.html").read_text()
 
 
@@ -344,7 +344,8 @@ class TestCAOrchestratorRun:
         # but the slug check ensures the slug is ALWAYS the authoritative source.
         url = "https://www.constitutionofindia.net/debates/volume-1/27-aug-1947/"
         doc_ref = _make_doc_ref(url=url)
-        # Use the fixture HTML which embeds '9 December 1946' in the title
+        # The fixture HTML has no parseable date in its body; the URL slug date
+        # must still be used and must not be contaminated by any body content.
         provider = StubProvider([doc_ref], {url: COI_DAY_HTML})
         checkpoint = _make_checkpoint()
         indexer = MockIndexer()
@@ -430,3 +431,71 @@ class TestCAOrchestratorRun:
             assert subjects[2] == "The Question of Procedure"
         finally:
             checkpoint.close()
+
+    async def test_full_month_name_url_slug_parsed_correctly(self):
+        """URLs with full month names (e.g. 29-july-1947) must be parsed to a valid date."""
+        url = "https://www.constitutionofindia.net/debates/29-july-1947/"
+        doc_ref = _make_doc_ref(url=url)
+        provider = StubProvider([doc_ref], {url: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        await orchestrator.run()
+
+        try:
+            # Document must not be skipped due to date-parse failure
+            assert len(indexer.indexed_records) >= 1, (
+                "Expected speeches indexed for full-month-name URL; got 0. "
+                "Check _extract_ca_date_from_url month mapping."
+            )
+            for record in indexer.indexed_records:
+                assert record.get("date") == "1947-07-29"
+        finally:
+            checkpoint.close()
+
+
+# ── Unit tests for _extract_ca_date_from_url ─────────────────────────────────
+
+class TestExtractCADateFromUrl:
+    """Unit tests for _extract_ca_date_from_url covering all slug formats."""
+
+    def _call(self, url: str) -> str | None:
+        from ingest.sources.ca import _extract_ca_date_from_url
+        return _extract_ca_date_from_url(url)
+
+    def test_three_letter_month_abbr(self):
+        assert self._call("https://www.constitutionofindia.net/debates/09-dec-1946/") == "1946-12-09"
+
+    def test_full_month_name_july(self):
+        assert self._call("https://www.constitutionofindia.net/debates/29-july-1947/") == "1947-07-29"
+
+    def test_full_month_name_august(self):
+        assert self._call("https://www.constitutionofindia.net/debates/08-august-1947/") == "1947-08-08"
+
+    def test_full_month_name_september(self):
+        assert self._call("https://www.constitutionofindia.net/debates/17-september-1949/") == "1949-09-17"
+
+    def test_full_month_name_october(self):
+        assert self._call("https://www.constitutionofindia.net/debates/01-october-1949/") == "1949-10-01"
+
+    def test_full_month_name_november(self):
+        assert self._call("https://www.constitutionofindia.net/debates/14-november-1949/") == "1949-11-14"
+
+    def test_full_month_name_december(self):
+        assert self._call("https://www.constitutionofindia.net/debates/15-december-1946/") == "1946-12-15"
+
+    def test_iso_format_slug(self):
+        assert self._call("https://www.constitutionofindia.net/debates/volume-1/1946-12-09/") == "1946-12-09"
+
+    def test_case_insensitive_month(self):
+        assert self._call("https://www.constitutionofindia.net/debates/09-DEC-1946/") == "1946-12-09"
+
+    def test_unrecognised_slug_returns_none(self):
+        assert self._call("https://www.constitutionofindia.net/debates/volume-1/") is None
+
+    def test_no_trailing_slash_handled(self):
+        assert self._call("https://www.constitutionofindia.net/debates/09-dec-1946") == "1946-12-09"

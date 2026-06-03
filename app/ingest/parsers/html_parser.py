@@ -366,14 +366,18 @@ def _parse_speech_row_element(row: Tag) -> tuple[str, str] | None:
     if not ref_span:
         return None
 
-    # Speaker name: direct <span> child of info_div (not inside the ref wrapper)
+    # Speaker name: first non-ref span anywhere inside info_div.
+    # The ref span is identified by bg-[#F8FFA3]; the speaker span may be
+    # a direct child or nested one level deeper depending on site version.
     speaker = None
-    for child in info_div.children:
-        if getattr(child, "name", None) == "span":
-            name = child.get_text(strip=True)
-            if name:
-                speaker = name
-                break
+    for span in info_div.find_all("span"):
+        span_classes = span.get("class") or []
+        if any("bg-[#F8FFA3]" in c for c in span_classes):
+            continue  # skip the yellow reference-number span
+        name = span.get_text(strip=True)
+        if name:
+            speaker = name
+            break
 
     if not speaker:
         return None
@@ -421,11 +425,15 @@ def _extract_coi_speech_pairs_with_subjects(
     """
     toc_first = _extract_coi_toc_first_item(soup)
     current_subject: str | None = toc_first
-    first_header_seen = False
     pairs: list[tuple[str, str, str | None]] = []
 
+    # Prefer the narrowest content container so page chrome (nav, footer, site
+    # header) is excluded. The live site wraps speech rows in
+    # page-debate-detail__content. Never use div.wrapper — the site header also
+    # carries that class and appears earlier in the DOM than the content area.
+    # <main> is a reliable fallback for modern pages; soup.body covers fixtures.
     wrapper = (
-        soup.find("div", class_="wrapper")
+        soup.find("div", class_="page-debate-detail__content")
         or soup.find("main")
         or soup.body
         or soup
@@ -437,11 +445,26 @@ def _extract_coi_speech_pairs_with_subjects(
             if result:
                 speaker, text = result
                 pairs.append((speaker, text, current_subject))
+            else:
+                # Grid row with no ref span — on the live site, section headers
+                # use the same lg:grid-cols-12 layout as speech rows but omit
+                # the reference number span. Extract the header text from inside
+                # the content column (lg:col-span-9).
+                content_div = child.find(
+                    "div", class_=lambda c: c and "lg:col-span-9" in c
+                )
+                if content_div:
+                    for inner in content_div.children:
+                        if isinstance(inner, NavigableString):
+                            continue
+                        header_text = _extract_section_header_text(inner)
+                        if header_text:
+                            current_subject = header_text
+                            break
             continue
 
         header_text = _extract_section_header_text(child)
         if header_text:
             current_subject = header_text
-            first_header_seen = True
 
     return pairs

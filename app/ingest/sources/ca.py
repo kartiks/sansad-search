@@ -49,12 +49,23 @@ CA_VOLUME_URLS: list[str] = [
 
 # CA URL slug formats:
 #   DD-MMM-YYYY (e.g. "09-dec-1946") — PRD canonical format
+#   DD-MMMM-YYYY (e.g. "29-july-1947") — full month name, also observed on the live site
 #   YYYY-MM-DD  (e.g. "1946-12-09")  — ISO format also observed in some URL patterns
-_CA_URL_SLUG_DMY_RE = re.compile(r"^(\d{1,2})-([a-z]{3})-(\d{4})$", re.IGNORECASE)
+_CA_URL_SLUG_DMY_RE = re.compile(r"^(\d{1,2})-([a-z]{3,9})-(\d{4})$", re.IGNORECASE)
 _CA_URL_SLUG_ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _CA_MONTH_ABBR = {
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
 }
 
 
@@ -238,15 +249,15 @@ class CAOrchestrator:
                 stats["errors"] += 1
                 continue
 
-            if not raw_record.get("date"):
+            speeches = segment_speeches(raw_record, source="CA")
+
+            if not speeches:
                 logger.warning(
-                    "ca_orchestrator: no date for %s; skipping",
+                    "ca_orchestrator: no speeches extracted from %s — "
+                    "HTML structure may not match expected speech row pattern; "
+                    "document checkpointed as processed with 0 records",
                     doc_ref.canonical_doc_id,
                 )
-                stats["errors"] += 1
-                continue
-
-            speeches = segment_speeches(raw_record, source="CA")
 
             # Sitting key for shared sequence: CA records group by source + date
             # (sitting_number is null for CA; date alone identifies the sitting)

@@ -1,7 +1,7 @@
 # Architecture — SansadSearch
 
 **PRD version:** v2.0
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules)
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules); updated 2026-06-03 (§5 CA Date: document all three URL slug formats — DD-MMM-YYYY, DD-MMMM-YYYY, YYYY-MM-DD)
 
 ---
 
@@ -247,7 +247,10 @@ In neither case is the archive.org mirror URL ever used as `source_url` (Non-Neg
 **Unified sitting-level sequence assignment.** `sequence_within_sitting` is a single 1-based ordering **shared** across speech and Q+A records within one sitting (a Q+A exchange and a speech never share a number). It is assigned at the corpus-orchestrator level by walking the sitting's parsed proceedings in document order across both record types — not independently inside `segmenters/speech.py` and `segmenters/qa.py`. This shared space is what makes F09 adjacent navigation (prev = seq−1, next = seq+1) traverse speeches and questions in true document order. `sequence_within_sitting` is **not** part of the Q+A `dedup_key` (DATA-MODELS §1.4).
 
 **CA field-level parsing (F01).** Two CA-only rules in the CA parse path (`providers/coi_html.py` → `parsers/html_parser.py`):
-- **Date** — the constitutionofindia.net URL slug (`DD-MMM-YYYY`, e.g. `09-dec-1946`) is the *authoritative* date source. The parser derives `date` from the slug and **discards** any date found in the HTML body, even when present. (Supersedes the prior URL-as-fallback-only behaviour.) A CA record's date is missing only if the slug itself fails to parse.
+- **Date** — the constitutionofindia.net URL slug is the *authoritative* date source. The parser derives `date` from the slug and **discards** any date found in the HTML body, even when present. (Supersedes the prior URL-as-fallback-only behaviour.) A CA record's date is missing only if the slug itself fails to parse. Three slug formats are handled (all observed on the live site):
+  1. `DD-MMM-YYYY` (e.g. `09-dec-1946`) — PRD canonical format, 3-letter month abbreviation
+  2. `DD-MMMM-YYYY` (e.g. `29-july-1947`) — full month name
+  3. `YYYY-MM-DD` (e.g. `1946-12-09`) — ISO format
 - **Subject** — each CA speech's `subject` is the nearest *preceding standalone bold section header* in the sitting body (topic labels between speech entries; **not** bold speaker names inside speech-grid rows). Walk the DOM in document order, set the current topic on each section header, assign it to subsequent speeches until the next header. If no header precedes the first speech, fall back to the first item in the page TOC `<ul>`.
 
 ---
