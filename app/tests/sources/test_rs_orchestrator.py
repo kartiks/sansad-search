@@ -50,14 +50,45 @@ _SANSAD_HTML = (
 
 
 class MockIndexer:
-    """Records index_record() calls; always returns True."""
+    """
+    Records index_record() calls and simulates raw_documents in-memory store.
+    Supports the Phase 12 two-stage pipeline.
+    """
 
     def __init__(self):
         self.indexed_records: list[dict] = []
+        self._raw_docs: dict[str, dict] = {}
 
     def index_record(self, record: dict, checkpoint: CheckpointStore) -> bool:
         self.indexed_records.append(record)
         return True
+
+    def check_raw_document_exists(self, canonical_doc_id: str) -> bool:
+        return canonical_doc_id in self._raw_docs
+
+    def write_raw_document(
+        self, canonical_doc_id, corpus, date, provider, format,
+        extracted_text, metadata_json, fetch_url, citation_url,
+    ) -> None:
+        if canonical_doc_id in self._raw_docs:
+            return
+        import json
+        meta = json.loads(json.dumps(metadata_json, default=str))
+        self._raw_docs[canonical_doc_id] = {
+            "canonical_doc_id": canonical_doc_id, "corpus": corpus, "date": date,
+            "provider": provider, "format": format, "extracted_text": extracted_text,
+            "metadata_json": meta, "fetch_url": fetch_url, "citation_url": citation_url,
+        }
+
+    def read_raw_documents_for_scope(self, corpus, date_from=None, date_to=None):
+        for row in self._raw_docs.values():
+            if row["corpus"] != corpus:
+                continue
+            if date_from and row["date"] and str(row["date"]) < date_from:
+                continue
+            if date_to and row["date"] and str(row["date"]) > date_to:
+                continue
+            yield dict(row)
 
 
 class StubProvider(Provider):

@@ -149,9 +149,30 @@ class CASource:
 # ── Phase 8+ Orchestrator ─────────────────────────────────────────────────────
 
 
+def _extract_stage1_fields(raw_record: dict) -> tuple[Optional[str], dict]:
+    """
+    Split a parser-output raw_record into (extracted_text, metadata_json).
+
+    ``extracted_text`` is the raw_text field (consumed by segmenters).
+    ``metadata_json`` contains all other fields needed to reconstruct the
+    raw_record in Stage 2, minus raw_html (large, not used by segmenters).
+    """
+    extracted_text = raw_record.get("raw_text")
+    metadata = {
+        k: v for k, v in raw_record.items()
+        if k not in ("raw_text", "raw_html")
+    }
+    return extracted_text, metadata
+
+
 class CAOrchestrator:
     """
     CA corpus orchestrator — provider chain: [CoidHtmlProvider].
+
+    Phase 12: split into run_stage1() and run_stage2() for the two-stage pipeline.
+    - Stage 1: discover → fetch → parse → write to raw_documents (PK dedup)
+    - Stage 2: read from raw_documents → segment → canonicalize → index
+    run() calls both in sequence for --stage all.
 
     PRD v2.0 changes (Phase 10):
     - CA date always overridden from URL slug (F01 CA field-level parsing rules).
@@ -191,80 +212,113 @@ class CAOrchestrator:
         self._sitting_seq[sitting_key] = n + 1
         return n
 
-    async def run(self) -> dict[str, int]:
+    async def run_stage1(self) -> dict[str, int]:
         """
-        Run CA ingestion. Returns stats: indexed, skipped, errors.
+        Stage 1: discover CA documents, fetch, parse, write to raw_documents.
 
-        Document-level dedup via checkpoint store prevents reprocessing on re-run.
+        Dedup guard: indexer.check_raw_document_exists() (PK lookup in PostgreSQL).
+        No SQLite checkpoint writes in Stage 1.
+        Returns stats: fetched, skipped, errors.
         """
-        stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
+        stats: dict[str, int] = {"fetched": 0, "skipped": 0, "errors": 0}
 
         doc_refs = await self._provider.discover()
-        logger.info("ca_orchestrator: discovered %d CA documents", len(doc_refs))
+        logger.info("ca_stage1: discovered %d CA documents", len(doc_refs))
 
         for doc_ref in doc_refs:
-            if self._checkpoint.is_document_processed(doc_ref.canonical_doc_id):
-                logger.debug(
-                    "ca_orchestrator: already processed %s; skipping",
-                    doc_ref.canonical_doc_id,
-                )
+            if self._indexer.check_raw_document_exists(doc_ref.canonical_doc_id):
+                logger.debug("ca_stage1: already fetched %s; skipping", doc_ref.canonical_doc_id)
                 stats["skipped"] += 1
                 continue
 
             content = await self._provider.fetch(doc_ref)
             if content is None:
-                logger.warning(
-                    "ca_orchestrator: fetch failed for %s; skipping",
-                    doc_ref.canonical_doc_id,
-                )
+                logger.warning("ca_stage1: fetch failed for %s; skipping", doc_ref.canonical_doc_id)
                 stats["errors"] += 1
                 continue
 
             try:
-                raw_record = parse_html(
-                    content,
-                    source="CA",
-                    source_url=doc_ref.citation_url,
-                )
+                raw_record = parse_html(content, source="CA", source_url=doc_ref.citation_url)
             except Exception as exc:
-                logger.error(
-                    "ca_orchestrator: parse error for %s: %s; skipping",
-                    doc_ref.canonical_doc_id,
-                    exc,
-                )
+                logger.error("ca_stage1: parse error for %s: %s; skipping", doc_ref.canonical_doc_id, exc)
                 stats["errors"] += 1
                 continue
 
-            # CA date: URL slug is always authoritative (PRD v2.0 F01 CA rules).
-            # Override whatever html_parser returned — even when it found a date.
+            # CA date: URL slug is always authoritative (PRD v2.0 F01 CA rules)
             ca_date = _extract_ca_date_from_url(doc_ref.fetch_url)
             if ca_date:
                 raw_record["date"] = ca_date
             else:
                 logger.warning(
-                    "ca_orchestrator: could not extract date from URL %s for %s; skipping",
+                    "ca_stage1: could not extract date from URL %s for %s; "
+                    "writing row with null date",
                     doc_ref.fetch_url,
                     doc_ref.canonical_doc_id,
                 )
-                stats["errors"] += 1
+
+            extracted_text, metadata = _extract_stage1_fields(raw_record)
+            metadata["volume"] = doc_ref.metadata.get("volume")
+
+            self._indexer.write_raw_document(
+                canonical_doc_id=doc_ref.canonical_doc_id,
+                corpus="CA",
+                date=raw_record.get("date"),
+                provider=doc_ref.provider,
+                format=doc_ref.format,
+                extracted_text=extracted_text,
+                metadata_json=metadata,
+                fetch_url=doc_ref.fetch_url,
+                citation_url=doc_ref.citation_url,
+            )
+            stats["fetched"] += 1
+
+        logger.info(
+            "ca_stage1: done — fetched=%d skipped=%d errors=%d",
+            stats["fetched"], stats["skipped"], stats["errors"],
+        )
+        return stats
+
+    async def run_stage2(
+        self,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> dict[str, int]:
+        """
+        Stage 2: read raw_documents for CA, segment, canonicalize, index.
+
+        Resumability: SQLite processed_documents checkpoint guards re-runs.
+        Returns stats: indexed, skipped, errors.
+        """
+        stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
+
+        rows = list(self._indexer.read_raw_documents_for_scope("CA", date_from, date_to))
+        logger.info("ca_stage2: %d raw_documents rows to process", len(rows))
+
+        for row in rows:
+            canonical_doc_id = row["canonical_doc_id"]
+            if self._checkpoint.is_document_processed(canonical_doc_id):
+                logger.debug("ca_stage2: already processed %s; skipping", canonical_doc_id)
+                stats["skipped"] += 1
                 continue
+
+            raw_record = dict(row["metadata_json"])
+            if row["extracted_text"] is not None:
+                raw_record["raw_text"] = row["extracted_text"]
 
             speeches = segment_speeches(raw_record, source="CA")
 
             if not speeches:
                 logger.warning(
-                    "ca_orchestrator: no speeches extracted from %s — "
+                    "ca_stage2: no speeches extracted from %s — "
                     "HTML structure may not match expected speech row pattern; "
                     "document checkpointed as processed with 0 records",
-                    doc_ref.canonical_doc_id,
+                    canonical_doc_id,
                 )
 
-            # Sitting key for shared sequence: CA records group by source + date
-            # (sitting_number is null for CA; date alone identifies the sitting)
-            sitting_key = f"CA_{raw_record['date']}"
+            sitting_key = f"CA_{raw_record.get('date', '')}"
 
             for speech in speeches:
-                speech["volume"] = doc_ref.metadata.get("volume")
+                speech["volume"] = row["metadata_json"].get("volume")
                 canon_name, unresolved = canonicalize_name(
                     speech.get("speaker_name"), self._names_dict
                 )
@@ -273,25 +327,35 @@ class CAOrchestrator:
                 speech["session_name"] = None
                 speech["session_number"] = None
                 speech["record_type"] = "speech"
-
-                # Assign shared sequence at orchestrator level (not in segmenter)
                 speech["sequence_within_sitting"] = self._next_seq(sitting_key)
 
                 if self._indexer.index_record(speech, self._checkpoint):
                     stats["indexed"] += 1
 
-            # Mark document fully processed (even when no speeches — document is done)
             self._checkpoint.mark_document_processed(
-                doc_ref.canonical_doc_id,
+                canonical_doc_id,
                 corpus="CA",
-                provider=doc_ref.provider,
-                fetch_url=doc_ref.fetch_url,
+                provider=row["provider"],
+                fetch_url=row["fetch_url"],
             )
 
         logger.info(
-            "ca_orchestrator: done — indexed=%d skipped=%d errors=%d",
-            stats["indexed"],
-            stats["skipped"],
-            stats["errors"],
+            "ca_stage2: done — indexed=%d skipped=%d errors=%d",
+            stats["indexed"], stats["skipped"], stats["errors"],
         )
         return stats
+
+    async def run(self) -> dict[str, int]:
+        """
+        Run full CA ingestion (--stage all): Stage 1 then Stage 2.
+
+        Returns combined stats. "skipped" reflects Stage 2 document-level skips
+        (already-processed documents), consistent with the pre-Phase-12 semantics.
+        """
+        s1 = await self.run_stage1()
+        s2 = await self.run_stage2()
+        return {
+            "indexed": s2["indexed"],
+            "skipped": s2["skipped"],
+            "errors": s1["errors"] + s2["errors"],
+        }

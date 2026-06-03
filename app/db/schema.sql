@@ -83,6 +83,25 @@ CREATE INDEX IF NOT EXISTS idx_qa_dedup_key        ON qa_exchanges(dedup_key);
 -- F09 adjacent-navigation: same-sitting neighbour lookup by sequence
 CREATE INDEX IF NOT EXISTS idx_qa_sitting          ON qa_exchanges(source, date, sitting_number, sequence_within_sitting);
 
+-- ── raw_documents ────────────────────────────────────────────────────────────
+-- Intermediate raw document store. Written by Stage 1 (fetch + parse).
+-- Read by Stage 2 (segment + index). One row per source document.
+
+CREATE TABLE IF NOT EXISTS raw_documents (
+    canonical_doc_id TEXT         PRIMARY KEY,
+    corpus           VARCHAR(2)   NOT NULL CHECK (corpus IN ('CA','LS','RS')),
+    date             DATE,
+    provider         VARCHAR(50)  NOT NULL,
+    format           VARCHAR(10)  NOT NULL CHECK (format IN ('html','ia_text','pdf')),
+    extracted_text   TEXT,
+    metadata_json    JSONB        NOT NULL DEFAULT '{}',
+    fetch_url        TEXT,
+    citation_url     TEXT,
+    fetched_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_raw_documents_corpus_date ON raw_documents(corpus, date);
+
 -- ── index_status ─────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS index_status (

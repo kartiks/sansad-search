@@ -21,9 +21,10 @@ Indexer.reindex_from_db()
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from ingest.canonical.names import normalize_for_dedup
 from ingest.checkpoints.store import CheckpointStore
@@ -244,6 +245,98 @@ class Indexer:
             return True
         logger.debug("Q+A with dedup_key=%s already exists", record.get("dedup_key"))
         return False
+
+    # ── Stage 1: raw document store ───────────────────────────────────────────
+
+    def write_raw_document(
+        self,
+        canonical_doc_id: str,
+        corpus: str,
+        date: Optional[str],
+        provider: str,
+        format: str,
+        extracted_text: Optional[str],
+        metadata_json: dict,
+        fetch_url: Optional[str],
+        citation_url: Optional[str],
+    ) -> None:
+        """
+        Insert a row into raw_documents (Stage 1 complete signal).
+
+        No-op on PK conflict: if the document was already fetched in a prior
+        Stage 1 run, the existing row is left untouched. This is the sole
+        Stage 1 dedup guard — no SQLite checkpoint entry is written.
+        """
+        cursor = self._pg.cursor()
+        cursor.execute(
+            """
+            INSERT INTO raw_documents
+                (canonical_doc_id, corpus, date, provider, format,
+                 extracted_text, metadata_json, fetch_url, citation_url)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (canonical_doc_id) DO NOTHING
+            """,
+            (
+                canonical_doc_id,
+                corpus,
+                date,
+                provider,
+                format,
+                extracted_text,
+                json.dumps(metadata_json, default=str),
+                fetch_url,
+                citation_url,
+            ),
+        )
+        self._pg.commit()
+        logger.debug("write_raw_document: %s (corpus=%s)", canonical_doc_id, corpus)
+
+    def check_raw_document_exists(self, canonical_doc_id: str) -> bool:
+        """Return True if canonical_doc_id already exists in raw_documents."""
+        cursor = self._pg.cursor()
+        cursor.execute(
+            "SELECT 1 FROM raw_documents WHERE canonical_doc_id = %s",
+            (canonical_doc_id,),
+        )
+        return cursor.fetchone() is not None
+
+    def read_raw_documents_for_scope(
+        self,
+        corpus: str,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> Iterator[dict]:
+        """
+        Yield raw_documents rows for *corpus*, optionally filtered by date range.
+
+        Used by Stage 2 orchestrators to iterate over documents to process.
+        metadata_json is returned as a Python dict (psycopg2 decodes JSONB).
+        """
+        cursor = self._pg.cursor()
+        params: list[Any] = [corpus]
+        clauses = ["corpus = %s"]
+        if date_from:
+            clauses.append("date >= %s")
+            params.append(date_from)
+        if date_to:
+            clauses.append("date <= %s")
+            params.append(date_to)
+        where = " AND ".join(clauses)
+        cursor.execute(
+            f"SELECT canonical_doc_id, corpus, date, provider, format, "
+            f"extracted_text, metadata_json, fetch_url, citation_url "
+            f"FROM raw_documents WHERE {where}",
+            tuple(params),
+        )
+        columns = [desc[0] for desc in cursor.description]
+        for row in cursor.fetchall():
+            d = dict(zip(columns, row))
+            # psycopg2 returns JSONB as a Python dict; normalise to dict if str
+            if isinstance(d.get("metadata_json"), str):
+                d["metadata_json"] = json.loads(d["metadata_json"])
+            if d["metadata_json"] is None:
+                d["metadata_json"] = {}
+            yield d
 
     # ── Meilisearch flush ─────────────────────────────────────────────────────
 

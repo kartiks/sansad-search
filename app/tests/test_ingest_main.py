@@ -1,13 +1,14 @@
 """
 Tests for the ingestion CLI entry point (ingest.main).
 
+Phase 12 update: --stage fetch|process|all replaces the combined run() path.
+--date-override removed; --date-from/--date-to added for Stage 2 scope.
+_make_orchestrator no longer takes a date_override argument.
+
 These tests exercise argument parsing, source selection, the
 reindex-from-db path, and the orchestration glue in ``_async_main``.
 External systems (PostgreSQL, Meilisearch) and the per-source orchestrators
-(CAOrchestrator, LSOrchestrator, RSOrchestrator) are mocked — the
-orchestrators are tested in isolation in their own test modules, so here we
-only verify that ``main`` selects and drives the correct orchestrator with
-the correct constructor arguments and a no-argument ``run()`` call.
+(CAOrchestrator, LSOrchestrator, RSOrchestrator) are mocked.
 """
 from __future__ import annotations
 
@@ -29,14 +30,21 @@ class TestParseArgs:
     def test_source_ca(self) -> None:
         args = main_mod._parse_args(["--source", "ca"])
         assert args.source == "ca"
-        assert args.date_override is None
+        assert args.date_from is None
+        assert args.date_to is None
         assert args.reindex_from_db is False
 
-    def test_date_override_parsed(self) -> None:
+    def test_date_from_parsed(self) -> None:
         args = main_mod._parse_args(
-            ["--source", "ls", "--date-override", "2014-05-01"]
+            ["--source", "ls", "--date-from", "2014-05-01"]
         )
-        assert args.date_override == "2014-05-01"
+        assert args.date_from == "2014-05-01"
+
+    def test_date_to_parsed(self) -> None:
+        args = main_mod._parse_args(
+            ["--source", "ls", "--date-to", "2024-12-31"]
+        )
+        assert args.date_to == "2024-12-31"
 
     def test_reindex_flag(self) -> None:
         args = main_mod._parse_args(["--source", "all", "--reindex-from-db"])
@@ -51,73 +59,58 @@ class TestParseArgs:
         args = main_mod._parse_args(["--source", source])
         assert args.source == source
 
+    def test_date_override_no_longer_accepted(self) -> None:
+        """--date-override was removed in Phase 12; must be rejected."""
+        with pytest.raises(SystemExit):
+            main_mod._parse_args(["--source", "ls", "--date-override", "2014-01-01"])
+
 
 # ── orchestrator selection (_make_orchestrator) ──────────────────────────────
 class TestMakeOrchestrator:
-    """Verify the right orchestrator class is built with the real signature.
-
-    Real constructor order is (client, checkpoint, indexer, names_dict, ...) —
-    these tests fail if the argument order regresses.
-    """
+    """Verify the right orchestrator class is built with the real signature."""
 
     def _commons(self) -> tuple[Any, Any, Any, dict[str, str]]:
         return MagicMock(name="client"), MagicMock(name="checkpoint"), \
             MagicMock(name="indexer"), {}
 
-    def test_ca_builds_ca_orchestrator_without_date(self) -> None:
+    def test_ca_builds_ca_orchestrator(self) -> None:
         client, checkpoint, indexer, names = self._commons()
         with patch.object(main_mod, "CAOrchestrator") as ca_cls:
-            main_mod._make_orchestrator(
-                "ca", client, checkpoint, indexer, names, "2014-01-01"
-            )
-        # CA ignores the override and takes no date_from.
+            main_mod._make_orchestrator("ca", client, checkpoint, indexer, names)
         ca_cls.assert_called_once_with(client, checkpoint, indexer, names)
 
-    def test_ls_builds_ls_orchestrator_with_date_from(self) -> None:
+    def test_ls_builds_ls_orchestrator(self) -> None:
         client, checkpoint, indexer, names = self._commons()
         with patch.object(main_mod, "LSOrchestrator") as ls_cls:
-            main_mod._make_orchestrator(
-                "ls", client, checkpoint, indexer, names, "2014-05-01"
-            )
-        ls_cls.assert_called_once_with(
-            client, checkpoint, indexer, names, date_from="2014-05-01"
-        )
+            main_mod._make_orchestrator("ls", client, checkpoint, indexer, names)
+        ls_cls.assert_called_once_with(client, checkpoint, indexer, names)
 
-    def test_rs_builds_rs_orchestrator_with_date_from(self) -> None:
+    def test_rs_builds_rs_orchestrator(self) -> None:
         client, checkpoint, indexer, names = self._commons()
         with patch.object(main_mod, "RSOrchestrator") as rs_cls:
-            main_mod._make_orchestrator(
-                "rs", client, checkpoint, indexer, names, "2014-05-01"
-            )
-        rs_cls.assert_called_once_with(
-            client, checkpoint, indexer, names, date_from="2014-05-01"
-        )
-
-    def test_ls_date_from_none_when_no_override(self) -> None:
-        client, checkpoint, indexer, names = self._commons()
-        with patch.object(main_mod, "LSOrchestrator") as ls_cls:
-            main_mod._make_orchestrator(
-                "ls", client, checkpoint, indexer, names, None
-            )
-        ls_cls.assert_called_once_with(
-            client, checkpoint, indexer, names, date_from=None
-        )
+            main_mod._make_orchestrator("rs", client, checkpoint, indexer, names)
+        rs_cls.assert_called_once_with(client, checkpoint, indexer, names)
 
     def test_unknown_source_raises(self) -> None:
         client, checkpoint, indexer, names = self._commons()
         with pytest.raises(ValueError):
-            main_mod._make_orchestrator(
-                "zz", client, checkpoint, indexer, names, None
-            )
+            main_mod._make_orchestrator("zz", client, checkpoint, indexer, names)
 
 
 # ── shared orchestration harness ─────────────────────────────────────────────
-def _orchestrator_mock(stats: Optional[dict[str, int]] = None) -> MagicMock:
-    """Return a mock orchestrator class whose instance has an async run()."""
-    if stats is None:
-        stats = {"indexed": 1, "skipped": 0, "errors": 0}
+def _orchestrator_mock(
+    s1_stats: Optional[dict] = None,
+    s2_stats: Optional[dict] = None,
+) -> MagicMock:
+    """Return a mock orchestrator class with async run_stage1/run_stage2 methods."""
+    if s1_stats is None:
+        s1_stats = {"fetched": 1, "skipped": 0, "errors": 0}
+    if s2_stats is None:
+        s2_stats = {"indexed": 1, "skipped": 0, "errors": 0}
     instance = MagicMock()
-    instance.run = AsyncMock(return_value=stats)
+    instance.run_stage1 = AsyncMock(return_value=s1_stats)
+    instance.run_stage2 = AsyncMock(return_value=s2_stats)
+    instance.run = AsyncMock(return_value={"indexed": 1, "skipped": 0, "errors": 0})
     cls = MagicMock(return_value=instance)
     return cls
 
@@ -150,57 +143,66 @@ def _patched_main(
 
 # ── end-to-end orchestration (mocked) ────────────────────────────────────────
 class TestAsyncMainOrchestration:
-    def test_source_ca_calls_only_ca_run(self) -> None:
+    def test_source_ca_calls_only_ca_stages(self) -> None:
         ca_cls, ls_cls, rs_cls = (
             _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
         )
         rc = _patched_main(["--source", "ca"], ca_cls, ls_cls, rs_cls)
         assert rc == 0
-        ca_cls.return_value.run.assert_awaited_once()
-        ls_cls.return_value.run.assert_not_called()
-        rs_cls.return_value.run.assert_not_called()
+        ca_cls.return_value.run_stage1.assert_awaited_once()
+        ca_cls.return_value.run_stage2.assert_awaited_once()
+        ls_cls.return_value.run_stage1.assert_not_called()
+        rs_cls.return_value.run_stage1.assert_not_called()
 
-    def test_source_ls_calls_only_ls_run(self) -> None:
+    def test_source_ls_calls_only_ls_stages(self) -> None:
         ca_cls, ls_cls, rs_cls = (
             _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
         )
         rc = _patched_main(["--source", "ls"], ca_cls, ls_cls, rs_cls)
         assert rc == 0
-        ls_cls.return_value.run.assert_awaited_once()
-        ca_cls.return_value.run.assert_not_called()
-        rs_cls.return_value.run.assert_not_called()
+        ls_cls.return_value.run_stage1.assert_awaited_once()
+        ls_cls.return_value.run_stage2.assert_awaited_once()
+        ca_cls.return_value.run_stage1.assert_not_called()
+        rs_cls.return_value.run_stage1.assert_not_called()
 
-    def test_source_rs_calls_only_rs_run(self) -> None:
+    def test_source_rs_calls_only_rs_stages(self) -> None:
         ca_cls, ls_cls, rs_cls = (
             _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
         )
         rc = _patched_main(["--source", "rs"], ca_cls, ls_cls, rs_cls)
         assert rc == 0
-        rs_cls.return_value.run.assert_awaited_once()
-        ca_cls.return_value.run.assert_not_called()
-        ls_cls.return_value.run.assert_not_called()
+        rs_cls.return_value.run_stage1.assert_awaited_once()
+        rs_cls.return_value.run_stage2.assert_awaited_once()
+        ca_cls.return_value.run_stage1.assert_not_called()
+        ls_cls.return_value.run_stage1.assert_not_called()
 
-    def test_source_all_calls_all_three_runs_in_order(self) -> None:
+    def test_source_all_calls_all_three_in_order(self) -> None:
         ca_cls, ls_cls, rs_cls = (
             _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
         )
         rc = _patched_main(["--source", "all"], ca_cls, ls_cls, rs_cls)
         assert rc == 0
-        ca_cls.return_value.run.assert_awaited_once()
-        ls_cls.return_value.run.assert_awaited_once()
-        rs_cls.return_value.run.assert_awaited_once()
+        ca_cls.return_value.run_stage1.assert_awaited_once()
+        ls_cls.return_value.run_stage1.assert_awaited_once()
+        rs_cls.return_value.run_stage1.assert_awaited_once()
 
-    def test_run_called_with_no_arguments(self) -> None:
-        # The real orchestrator.run() takes no args (the client is injected at
-        # construction). A regression to run(client) would fail this.
+    def test_stage1_called_with_no_arguments(self) -> None:
         ca_cls, ls_cls, rs_cls = (
             _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
         )
         _patched_main(["--source", "ca"], ca_cls, ls_cls, rs_cls)
-        ca_cls.return_value.run.assert_awaited_once_with()
+        ca_cls.return_value.run_stage1.assert_awaited_once_with()
+
+    def test_stage2_called_with_date_from_none_by_default(self) -> None:
+        ca_cls, ls_cls, rs_cls = (
+            _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
+        )
+        _patched_main(["--source", "ca"], ca_cls, ls_cls, rs_cls)
+        ca_cls.return_value.run_stage2.assert_awaited_once_with(
+            date_from=None, date_to=None
+        )
 
     def test_orchestrator_constructed_with_http_client_first(self) -> None:
-        # First positional constructor arg must be the shared httpx.AsyncClient.
         ca_cls, ls_cls, rs_cls = (
             _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
         )
@@ -208,36 +210,6 @@ class TestAsyncMainOrchestration:
         ca_cls.assert_called_once()
         client_arg = ca_cls.call_args.args[0]
         assert isinstance(client_arg, httpx.AsyncClient)
-
-    def test_date_override_forwarded_to_ls_as_date_from(self) -> None:
-        ca_cls, ls_cls, rs_cls = (
-            _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
-        )
-        _patched_main(
-            ["--source", "ls", "--date-override", "2014-05-01"],
-            ca_cls, ls_cls, rs_cls,
-        )
-        ls_cls.assert_called_once()
-        # date_from is the ISO string, passed straight through to the providers.
-        assert ls_cls.call_args.kwargs["date_from"] == "2014-05-01"
-
-    def test_date_override_forwarded_to_rs_as_date_from(self) -> None:
-        ca_cls, ls_cls, rs_cls = (
-            _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
-        )
-        _patched_main(
-            ["--source", "rs", "--date-override", "2016-02-29"],
-            ca_cls, ls_cls, rs_cls,
-        )
-        rs_cls.assert_called_once()
-        assert rs_cls.call_args.kwargs["date_from"] == "2016-02-29"
-
-    def test_no_date_override_passes_none_date_from(self) -> None:
-        ca_cls, ls_cls, rs_cls = (
-            _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
-        )
-        _patched_main(["--source", "ls"], ca_cls, ls_cls, rs_cls)
-        assert ls_cls.call_args.kwargs["date_from"] is None
 
     def test_update_index_status_called_on_completion(self) -> None:
         ca_cls, ls_cls, rs_cls = (
@@ -260,7 +232,7 @@ class TestAsyncMainOrchestration:
             _patched_main(["--source", "ca"], ca_cls, ls_cls, rs_cls)
         messages = [r.getMessage() for r in caplog.records]
         assert any("Ingestion complete" in m for m in messages)
-        assert any("Total indexed" in m for m in messages)
+        assert any("Stage 2" in m or "records indexed" in m.lower() for m in messages)
         assert any("Errors" in m for m in messages)
 
 
@@ -285,6 +257,6 @@ class TestReindexFromDb:
         indexer_inst.reindex_from_db.assert_called_once()
         # Reindex path must not touch scraping infrastructure.
         cp_cls.assert_not_called()
-        ca_cls.return_value.run.assert_not_called()
-        ls_cls.return_value.run.assert_not_called()
-        rs_cls.return_value.run.assert_not_called()
+        ca_cls.return_value.run_stage1.assert_not_called()
+        ls_cls.return_value.run_stage1.assert_not_called()
+        rs_cls.return_value.run_stage1.assert_not_called()

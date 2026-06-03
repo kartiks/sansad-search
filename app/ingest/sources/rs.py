@@ -41,6 +41,14 @@ from ingest.sources.providers.sansad_rs_html import SansadRsHtmlProvider
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_stage1_fields(raw_record: dict) -> tuple[Optional[str], dict]:
+    """Split parser output into (extracted_text, metadata_json) for Stage 1 write."""
+    extracted_text = raw_record.get("raw_text")
+    metadata = {k: v for k, v in raw_record.items() if k not in ("raw_text", "raw_html")}
+    return extracted_text, metadata
+
+
 RS_SCOPE_FROM: date = date(2014, 1, 1)
 RS_INDEX_URL: str = "https://rajyasabha.gov.in/rsnew/business/parlamentary_business.asp"
 
@@ -191,6 +199,11 @@ class RSOrchestrator:
     RS corpus orchestrator — provider chain:
     [SansadRsHtmlProvider, InternetArchiveProvider(RS), RsdebateDspaceProvider].
 
+    Phase 12: split into run_stage1() and run_stage2() for the two-stage pipeline.
+    - Stage 1: provider chain → fetch → parse → write to raw_documents (PK dedup)
+    - Stage 2: read from raw_documents → segment → canonicalize → index
+    run() calls both in sequence for --stage all.
+
     PRD v2.0 change (Phase 10): shared sequence_within_sitting is assigned at
     orchestrator level across all records (speech + Q+A) within each sitting,
     in the order documents are processed from the provider chain.
@@ -210,7 +223,9 @@ class RSOrchestrator:
     set to doc_ref.citation_url. For RS-via-IA this is the rsdebate.nic.in URL
     derived from the DSpace handle (never archive.org — Non-Negotiable #9), or
     None when no handle is derivable (the v1.3 no-handle edge case). This single
-    assignment overrides whatever source_url the parser produced.
+    assignment overrides whatever source_url the parser produced — and is applied
+    before writing to raw_documents in Stage 1 so that metadata_json["source_url"]
+    is already correct for Stage 2 record construction.
     """
 
     def __init__(
@@ -246,37 +261,33 @@ class RSOrchestrator:
     def _sitting_key(self, record: dict) -> str:
         return f"RS_{record.get('date', '')}_{record.get('sitting_number')}"
 
-    async def run(self) -> dict[str, int]:
+    async def run_stage1(self) -> dict[str, int]:
         """
-        Run RS ingestion across the provider chain.
+        Stage 1: discover RS documents across the provider chain, fetch, parse,
+        write to raw_documents.
 
-        Returns stats: indexed, skipped, errors.
+        RS canonical-citation rule applied before writing: metadata_json["source_url"]
+        is always the rsdebate.nic.in / sansad.in/rs URL (never archive.org).
+        Returns stats: fetched, skipped, errors.
         """
-        stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
+        stats: dict[str, int] = {"fetched": 0, "skipped": 0, "errors": 0}
 
         for provider in self._providers:
             doc_refs = await provider.discover()
             logger.info(
-                "rs_orchestrator: provider=%s discovered %d documents",
-                provider.__class__.__name__,
-                len(doc_refs),
+                "rs_stage1: provider=%s discovered %d documents",
+                provider.__class__.__name__, len(doc_refs),
             )
 
             for doc_ref in doc_refs:
-                if self._checkpoint.is_document_processed(doc_ref.canonical_doc_id):
-                    logger.debug(
-                        "rs_orchestrator: already processed doc_id=%s; skipping",
-                        doc_ref.canonical_doc_id,
-                    )
+                if self._indexer.check_raw_document_exists(doc_ref.canonical_doc_id):
+                    logger.debug("rs_stage1: already fetched %s; skipping", doc_ref.canonical_doc_id)
                     stats["skipped"] += 1
                     continue
 
                 content = await provider.fetch(doc_ref)
                 if content is None:
-                    logger.warning(
-                        "rs_orchestrator: fetch failed for %s; skipping",
-                        doc_ref.canonical_doc_id,
-                    )
+                    logger.warning("rs_stage1: fetch failed for %s; skipping", doc_ref.canonical_doc_id)
                     stats["errors"] += 1
                     continue
 
@@ -285,40 +296,95 @@ class RSOrchestrator:
                     stats["errors"] += 1
                     continue
 
-                records = self._segment(raw_record)
-                for record in records:
-                    if record.get("record_type") == "speech":
-                        canon_name, unresolved = canonicalize_name(
-                            record.get("speaker_name"), self._names_dict
-                        )
-                        record["speaker_name"] = canon_name
-                        record["speaker_name_unresolved"] = unresolved
-                    record["session_name"] = canonicalize_session(
-                        record.get("session_name"), source="RS"
-                    )
+                extracted_text, metadata = _extract_stage1_fields(raw_record)
 
-                    # Assign shared sitting-level sequence at orchestrator level
-                    record["sequence_within_sitting"] = self._next_seq(
-                        self._sitting_key(record)
-                    )
-
-                    if self._indexer.index_record(record, self._checkpoint):
-                        stats["indexed"] += 1
-
-                self._checkpoint.mark_document_processed(
-                    doc_ref.canonical_doc_id,
+                self._indexer.write_raw_document(
+                    canonical_doc_id=doc_ref.canonical_doc_id,
                     corpus="RS",
+                    date=raw_record.get("date"),
                     provider=doc_ref.provider,
+                    format=doc_ref.format,
+                    extracted_text=extracted_text,
+                    metadata_json=metadata,
                     fetch_url=doc_ref.fetch_url,
+                    citation_url=doc_ref.citation_url,
                 )
+                stats["fetched"] += 1
 
         logger.info(
-            "rs_orchestrator: done — indexed=%d skipped=%d errors=%d",
-            stats["indexed"],
-            stats["skipped"],
-            stats["errors"],
+            "rs_stage1: done — fetched=%d skipped=%d errors=%d",
+            stats["fetched"], stats["skipped"], stats["errors"],
         )
         return stats
+
+    async def run_stage2(
+        self,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> dict[str, int]:
+        """
+        Stage 2: read raw_documents for RS, segment, canonicalize, index.
+
+        source_url is already correct in metadata_json (set in Stage 1 from
+        doc_ref.citation_url per the RS canonical-citation rule).
+        Returns stats: indexed, skipped, errors.
+        """
+        stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
+
+        rows = list(self._indexer.read_raw_documents_for_scope("RS", date_from, date_to))
+        logger.info("rs_stage2: %d raw_documents rows to process", len(rows))
+
+        for row in rows:
+            canonical_doc_id = row["canonical_doc_id"]
+            if self._checkpoint.is_document_processed(canonical_doc_id):
+                logger.debug("rs_stage2: already processed %s; skipping", canonical_doc_id)
+                stats["skipped"] += 1
+                continue
+
+            raw_record = dict(row["metadata_json"])
+            if row["extracted_text"] is not None:
+                raw_record["raw_text"] = row["extracted_text"]
+
+            records = self._segment(raw_record)
+            for record in records:
+                if record.get("record_type") == "speech":
+                    canon_name, unresolved = canonicalize_name(
+                        record.get("speaker_name"), self._names_dict
+                    )
+                    record["speaker_name"] = canon_name
+                    record["speaker_name_unresolved"] = unresolved
+                record["session_name"] = canonicalize_session(
+                    record.get("session_name"), source="RS"
+                )
+                record["sequence_within_sitting"] = self._next_seq(
+                    self._sitting_key(record)
+                )
+
+                if self._indexer.index_record(record, self._checkpoint):
+                    stats["indexed"] += 1
+
+            self._checkpoint.mark_document_processed(
+                canonical_doc_id,
+                corpus="RS",
+                provider=row["provider"],
+                fetch_url=row["fetch_url"],
+            )
+
+        logger.info(
+            "rs_stage2: done — indexed=%d skipped=%d errors=%d",
+            stats["indexed"], stats["skipped"], stats["errors"],
+        )
+        return stats
+
+    async def run(self) -> dict[str, int]:
+        """Run full RS ingestion (--stage all): Stage 1 then Stage 2."""
+        s1 = await self.run_stage1()
+        s2 = await self.run_stage2()
+        return {
+            "indexed": s2["indexed"],
+            "skipped": s2["skipped"],
+            "errors": s1["errors"] + s2["errors"],
+        }
 
     def _parse(self, content: str | bytes, doc_ref: DocumentRef) -> dict | None:
         """Dispatch to the correct parser based on doc_ref.format.
@@ -362,6 +428,7 @@ class RSOrchestrator:
 
         if raw_record is not None:
             # Enforce the RS canonical-citation rule (PRD v1.3) — authoritative.
+            # Applied here (Stage 1) so metadata_json["source_url"] is already correct.
             raw_record["source_url"] = doc_ref.citation_url
         return raw_record
 

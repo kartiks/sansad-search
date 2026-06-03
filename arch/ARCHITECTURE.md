@@ -1,7 +1,7 @@
 # Architecture — SansadSearch
 
 **PRD version:** v2.0
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules); updated 2026-06-03 (§5 CA Date: document all three URL slug formats — DD-MMM-YYYY, DD-MMMM-YYYY, YYYY-MM-DD)
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules); updated 2026-06-03 (§5 CA Date: document all three URL slug formats — DD-MMM-YYYY, DD-MMMM-YYYY, YYYY-MM-DD); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table; two-stage pipeline split via `--stage fetch|process|all`; dual-signal checkpoint — `raw_documents` PK = Stage 1 complete, SQLite `processed_documents` = Stage 2 complete)
 
 ---
 
@@ -9,7 +9,7 @@
 
 SansadSearch is a two-subsystem application:
 
-- **Ingestion pipeline** — local CLI that discovers, fetches, parses, segments, canonicalizes, and indexes parliamentary records across three corpora (CA, LS, RS). Each corpus is served by an ordered chain of providers (government sites plus the Internet Archive mirror); URLs are discovered at runtime from listing/browse pages, never hardcoded. Writes canonical records to PostgreSQL (primary record store) and pushes a derived search index to Meilisearch Cloud.
+- **Ingestion pipeline** — local CLI that runs a two-stage pipeline across three corpora (CA, LS, RS). **Stage 1 (fetch + parse):** discovers source documents via an ordered provider chain (government sites plus the Internet Archive mirror); URLs discovered at runtime from listing/browse pages, never hardcoded; writes extracted text and document-level metadata to `raw_documents` (PostgreSQL). **Stage 2 (segment + index):** reads from `raw_documents`, segments and canonicalizes records, writes to `speeches`/`qa_exchanges` (PostgreSQL), and pushes a derived search index to Meilisearch Cloud. Both stages are independently invokable.
 - **Web application** — FastAPI backend + React SPA serving search, filtering, sorting, result display, and a single-record detail view (F09). Read-only. No authentication.
 
 The two subsystems share no runtime coupling. Ingestion runs offline on the operator's machine. The web application is a stateless read interface over the populated stores.
@@ -68,7 +68,9 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
       db.py                      # asyncpg connection pool init and teardown
 
   ingest/
-    main.py                      # CLI entry (--source ca|ls|rs|all, --date-override)
+    main.py                      # CLI entry: --source ca|ls|rs|all; --stage fetch|process|all
+                             # (default all); Stage 2 accepts --date-from/--date-to for
+                             # selective re-processing of a date range from raw_documents
     sources/
       _http.py                   # Shared HTTP utility: USER_AGENT, RobotsChecker,
                                  # fetch_with_retry with 4xx/5xx/429 error handling per F01 spec
@@ -118,8 +120,10 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
     checkpoints/
       store.py                   # SQLite-backed processed-document log (keyed on canonical
                                  # doc id N / coi day-URL) and record-level dedup key store
-    indexer.py                   # PostgreSQL writer + Meilisearch document pusher
-                                 # + index_status table update on run completion
+    indexer.py                   # PostgreSQL writer for both stages: Stage 1 writes
+                                 # extracted text + metadata to raw_documents; Stage 2 writes
+                                 # segmented records to speeches/qa_exchanges + pushes to
+                                 # Meilisearch + updates index_status on run completion
     setup_meilisearch.py         # One-time/deploy-time: push synonyms.json to
                                  # Meilisearch synonyms API; configure index settings
 
@@ -170,8 +174,8 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
 
   db/
     schema.sql                   # CREATE TABLE + index statements for speeches,
-                                 # qa_exchanges, and index_status; run once against
-                                 # Railway PostgreSQL before first ingestion
+                                 # qa_exchanges, raw_documents, and index_status;
+                                 # run once against Railway PostgreSQL before first ingestion
 
   data/
     synonyms.json                # Synonym dictionary — sole source for Meilisearch synonyms
@@ -196,7 +200,8 @@ The Coding Agent updates this table after any change to API routes or core lib f
 | **Index status (F07)** | Browser → `GET /api/status` → asyncpg query on `index_status` table (most recent row) → Browser. Both F07 surfaces share this one flow: the homepage strip (`Home.jsx`, condensed — counts + last-updated) and the full panel (`IndexingStatusPage.jsx`, detailed — total + per-source counts + per-source date coverage + last-updated) render different subsets of the same response. No separate endpoint. |
 | **Record detail (F09)** | Browser → `GET /api/record/{id}` → `services/record.py`: (1) asyncpg fetch by id — `speeches WHERE id` UNION ALL `qa_exchanges WHERE id`; 404 if neither matches. (2) adjacent-neighbour query over the same sitting (`source` + `date` + `sitting_number IS NOT DISTINCT FROM`), both tables unioned, ordered by `sequence_within_sitting`; resolves `prev_id`/`next_id` (null at boundaries) and `sitting_total` → Browser. **Detail is served from PostgreSQL, not Meilisearch** (the canonical store holds every display field, incl. `session_number`, `has_untranslated_content`, `page_reference`, `word_count`). Search remains Meilisearch-only. |
 | **Search history (F08)** | Browser ↔ Browser cookies only — no server involvement |
-| **Bulk ingestion** | Operator CLI → corpus orchestrator → provider chain `discover()` (HTML listing crawl / DSpace browse / IA `advancedsearch`; document-level dedup on canonical doc id `N`) → httpx fetcher (rate-limited, robots.txt compliant) → parser by format: HTML (`html_parser`) / IA pre-OCR text (`ia_text_parser`) / PDF (`pdf_parser`, embedded-text only) → segmenter → canonicalizer → PostgreSQL writer → Meilisearch document pusher → `index_status` table updated on completion |
+| **Stage 1 ingestion (fetch + parse)** | Operator CLI (`--stage fetch`) → corpus orchestrator → provider chain `discover()` (HTML listing crawl / DSpace browse / IA `advancedsearch`; document-level dedup: `raw_documents` PK lookup on `canonical_doc_id` — if row exists, skip fetch) → httpx fetcher (rate-limited, robots.txt compliant) → parser by format: HTML (`html_parser`) / IA pre-OCR text (`ia_text_parser`) / PDF (`pdf_parser`, embedded-text only) → `indexer.py` writes extracted text + metadata to `raw_documents` (PostgreSQL) |
+| **Stage 2 ingestion (segment + index)** | Operator CLI (`--stage process`) → reads `raw_documents` for scope (filtered by `--source`, optionally `--date-from`/`--date-to`) → segmenter → canonicalizer → `indexer.py` writes to `speeches`/`qa_exchanges` (PostgreSQL); SQLite `processed_documents` entry written → Meilisearch document pusher → `index_status` table updated on completion |
 | **Re-indexing** | `SELECT * FROM speeches UNION ALL SELECT * FROM qa_exchanges` → `indexer.py` → Meilisearch Cloud (no re-scraping) |
 | **Synonym deploy** | `data/synonyms.json` → `ingest/setup_meilisearch.py` → Meilisearch synonyms API |
 
@@ -226,7 +231,7 @@ No custom scoring functions are implemented. This approximation is acceptable fo
 - **LS:** `[internet_archive, eparlib_dspace]` — IA pre-OCR text preferred; direct DSpace PDF only for items absent from the mirror.
 - **RS:** `[sansad_rs_html, internet_archive, rsdebate_dspace]` — recent in-scope sessions via sansad.in/rs HTML; IA pre-OCR text next; rsdebate.nic.in DSpace PDF last.
 
-**Cross-source document identity.** The DSpace handle number `N` is the canonical document identity for LS/RS. The Internet Archive identifier `eparlib.nic.in.{N}` maps to DSpace handle `123456789/{N}` — `N` is the cross-provider join key. The checkpoint store dedupes at the **document level** on this canonical id so a document available from more than one provider is fetched and parsed once; the record-level `dedup_key` (DATA-MODELS §1.4) remains the final guard against duplicate records.
+**Cross-source document identity.** The DSpace handle number `N` is the canonical document identity for LS/RS. The Internet Archive identifier `eparlib.nic.in.{N}` maps to DSpace handle `123456789/{N}` — `N` is the cross-provider join key. The checkpoint store dedupes at the **document level** on this canonical id so a document available from more than one provider is fetched and parsed once; the record-level `dedup_key` (DATA-MODELS §1.5) remains the final guard against duplicate records.
 
 **Internet Archive pre-OCR text path.** LS/RS bulk ingestion prefers the IA mirror, which serves `{identifier}_djvu.txt` (OCR already extracted by IA) plus a metadata JSON carrying `eparlib_*` fields (`eparlib_title`, `eparlib_date`, `eparlib_lok_sabha_number`, `eparlib_session_number`, `eparlib_document_url`). `ia_text_parser.py` consumes the text and maps the metadata. The pipeline runs no OCR of its own. A **single `InternetArchiveProvider` serves both corpora** (dual-corpus, selected by a `corpus` constructor parameter); citation derivation dispatches on the corpus:
 - **LS:** `source_url` is set to the canonical `eparlib_document_url`.
@@ -238,13 +243,24 @@ In neither case is the archive.org mirror URL ever used as `source_url` (Non-Neg
 
 **HTML-preferred parsing.** Where a corpus offers HTML (CA via coi; recent RS via sansad.in/rs), HTML is parsed in preference to PDF, consistent with the PRD HTML-over-PDF deduplication rule.
 
-**Local checkpoint store (ingestion only).** A SQLite database (`data/ingestion_checkpoints.db`) on the operator's machine tracks processed source documents (by canonical doc id, for resumability and cross-provider dedup) and inserted record-level deduplication keys (for fast duplicate detection without querying PostgreSQL). This file is never deployed to production and is in `.gitignore`.
+**Two-stage ingestion pipeline (deferred processing).** The ingestion pipeline is split into two independently invokable stages via `--stage fetch|process|all` (default `all`):
+- **Stage 1 (fetch + parse):** Corpus orchestrators discover and fetch source documents, run format-specific parsers, and write extracted text plus document-level metadata to `raw_documents` in PostgreSQL. Once a row exists in `raw_documents` for a `canonical_doc_id`, Stage 1 will not re-fetch that document (PK dedup guard).
+- **Stage 2 (segment + index):** Reads from `raw_documents` (optionally scoped by `--date-from`/`--date-to`), runs segmenters and canonicalizers, writes to `speeches`/`qa_exchanges`, and pushes to Meilisearch. The Stage 1 scraping cost is not paid again on a Stage 2 re-run.
+
+This decoupling serves two purposes: (1) segmentation logic and index schema can be iterated without re-scraping source websites; (2) Stage 2 can be selectively re-run over a date range without a full reindex. See DEPLOYMENT.md §6.4 for the selective re-processing runbook.
+
+**Checkpoint store — dual signal.** The two-stage pipeline uses two independent checkpoint signals:
+- **Stage 1 complete:** A row in the `raw_documents` PostgreSQL table keyed on `canonical_doc_id`. Corpus orchestrators query this PK before fetching — if the row exists, the document is skipped. No separate SQLite entry is written for Stage 1 completion.
+- **Stage 2 complete:** An entry in the SQLite `processed_documents` table (`data/ingestion_checkpoints.db`). Written after all records from a raw document have been segmented, canonicalized, and written to `speeches`/`qa_exchanges`. Guards against re-segmentation on Stage 2 resume.
+- **Record-level guard:** The SQLite `inserted_dedup_keys` table mirrors the PostgreSQL `UNIQUE` constraint on `dedup_key`, providing fast local duplicate detection without a round-trip to PostgreSQL. Unchanged.
+
+The SQLite checkpoint file is local to the operator's machine, never deployed, and in `.gitignore`.
 
 **Pre-computed index status.** The ingestion pipeline writes a row to the `index_status` PostgreSQL table on successful completion. The `GET /api/status` endpoint reads the most recent row. The status panel never issues a Meilisearch document count query at request time.
 
 **Record detail served from PostgreSQL (F09).** The detail page reads from PostgreSQL, not Meilisearch. PostgreSQL is the canonical store and already holds every field the detail page shows — including fields deliberately excluded from the Meilisearch document (`session_number`, `has_untranslated_content`, `page_reference`, `word_count`). `GET /api/record/{id}` fetches one record (`speeches` UNION ALL `qa_exchanges` by `id`) and runs one adjacent-neighbour query over the same sitting. This is the **only** record-serving Postgres read path; search continues to run exclusively against Meilisearch. The split is deliberate: search needs ranking/typo/synonym behaviour (Meilisearch); detail needs the complete record with no document-size pressure (Postgres). PERF-2 (≤500ms p95) is met by the `id` primary-key lookup plus a composite sitting index (DATA-MODELS §1.1/§1.2).
 
-**Unified sitting-level sequence assignment.** `sequence_within_sitting` is a single 1-based ordering **shared** across speech and Q+A records within one sitting (a Q+A exchange and a speech never share a number). It is assigned at the corpus-orchestrator level by walking the sitting's parsed proceedings in document order across both record types — not independently inside `segmenters/speech.py` and `segmenters/qa.py`. This shared space is what makes F09 adjacent navigation (prev = seq−1, next = seq+1) traverse speeches and questions in true document order. `sequence_within_sitting` is **not** part of the Q+A `dedup_key` (DATA-MODELS §1.4).
+**Unified sitting-level sequence assignment.** `sequence_within_sitting` is a single 1-based ordering **shared** across speech and Q+A records within one sitting (a Q+A exchange and a speech never share a number). It is assigned at the corpus-orchestrator level by walking the sitting's parsed proceedings in document order across both record types — not independently inside `segmenters/speech.py` and `segmenters/qa.py`. This shared space is what makes F09 adjacent navigation (prev = seq−1, next = seq+1) traverse speeches and questions in true document order. `sequence_within_sitting` is **not** part of the Q+A `dedup_key` (DATA-MODELS §1.5).
 
 **CA field-level parsing (F01).** Two CA-only rules in the CA parse path (`providers/coi_html.py` → `parsers/html_parser.py`):
 - **Date** — the constitutionofindia.net URL slug is the *authoritative* date source. The parser derives `date` from the slug and **discards** any date found in the HTML body, even when present. (Supersedes the prior URL-as-fallback-only behaviour.) A CA record's date is missing only if the slug itself fails to parse. Three slug formats are handled (all observed on the live site):
@@ -262,7 +278,7 @@ In neither case is the archive.org mirror URL ever used as `source_url` (Non-Neg
 | Meilisearch Cloud | Read (search) | API (`meilisearch_client.py`) | Search-only API key used at runtime |
 | Meilisearch Cloud | Write (index, settings) | Ingestion pipeline | Master key used for document push and index config; never exposed to API at runtime |
 | PostgreSQL (Railway) | Read | API (`db.py`) | Two read paths: `index_status` table for the F07 status endpoint, and `speeches`/`qa_exchanges` for the F09 record-detail endpoint (`GET /api/record/{id}` — single record + adjacent navigation). Search records are **not** served from Postgres (search runs on Meilisearch) |
-| PostgreSQL (Railway) | Write | Ingestion pipeline | All speech and Q+A records; `index_status` on completion |
+| PostgreSQL (Railway) | Write | Ingestion pipeline | Stage 1: extracted text + metadata to `raw_documents`. Stage 2: segmented records to `speeches`/`qa_exchanges`; `index_status` on completion |
 | constitutionofindia.net (CLPR) | Read (HTTP) | Ingestion `providers/coi_html.py` | CA primary & only; clean semantic HTML, one page per sitting; rate-limited; robots.txt compliant |
 | archive.org (Internet Archive) | Read (HTTP) | Ingestion `providers/internet_archive.py` | **Preferred LS/RS bulk path**; pre-OCR `_djvu.txt` + metadata JSON via `advancedsearch.php` / `metadata`; identifier `eparlib.nic.in.{N}` ↔ DSpace handle `123456789/{N}` |
 | eparlib.sansad.in (DSpace) | Read (HTTP) | Ingestion `providers/eparlib_dspace.py` | LS fallback (IA-missing items), collection handle `/7`; bitstream URL read from item page, **never constructed**; CA-Legislative collection `/4` excluded; migrated from `eparlib.nic.in` (item IDs preserved) |
@@ -293,6 +309,8 @@ Decisions that must not be changed without explicit user approval. Changes to an
 8. **React SPA — no SSR.** The frontend is a static Vite build served from Vercel. No server-side rendering.
 
 9. **IA-sourced records cite the canonical record, not the mirror.** For LS records ingested via the Internet Archive, `source_url` is set to `eparlib_document_url` (the official parliamentary-library URL). For RS records ingested via the Internet Archive, `source_url` is set to the `rsdebate.nic.in` item URL derived from the DSpace handle `N`; when no handle is derivable, `source_url` is null (PRD v1.3 no-handle edge case). The archive.org mirror URL is never cited in either case — the mirror is a fetch path, not a citation.
+
+10. **Stage 2 re-processing requires prior clearing of the target scope.** Before re-running Stage 2 (`--stage process`) for any scope, the operator must delete all existing `speeches`/`qa_exchanges` records for that scope, delete the corresponding Meilisearch documents, and clear the matching `processed_documents` entries from the SQLite checkpoint store. Stage 2 inserts with `ON CONFLICT DO NOTHING` — running it without clearing produces no changes to already-indexed records and silently leaves stale data in place. See DEPLOYMENT.md §6.4 for the full procedure.
 
 ---
 

@@ -37,6 +37,14 @@ from ingest.sources.providers.internet_archive import InternetArchiveProvider
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_stage1_fields(raw_record: dict) -> tuple[Optional[str], dict]:
+    """Split parser output into (extracted_text, metadata_json) for Stage 1 write."""
+    extracted_text = raw_record.get("raw_text")
+    metadata = {k: v for k, v in raw_record.items() if k not in ("raw_text", "raw_html")}
+    return extracted_text, metadata
+
+
 LS_SCOPE_FROM: date = date(2014, 1, 1)
 LS_INDEX_URL: str = "https://sansad.in/ls/business/debatesandquestions"
 
@@ -196,6 +204,11 @@ class LSOrchestrator:
     """
     LS corpus orchestrator — provider chain: [InternetArchiveProvider, EparlibDspaceProvider].
 
+    Phase 12: split into run_stage1() and run_stage2() for the two-stage pipeline.
+    - Stage 1: provider chain → fetch → parse → write to raw_documents (PK dedup)
+    - Stage 2: read from raw_documents → segment → canonicalize → index
+    run() calls both in sequence for --stage all.
+
     PRD v2.0 change (Phase 10): shared sequence_within_sitting is assigned at
     orchestrator level across all records (speech + Q+A) within each sitting,
     in the order documents are processed from the provider chain.
@@ -244,37 +257,33 @@ class LSOrchestrator:
     def _sitting_key(self, record: dict) -> str:
         return f"LS_{record.get('date', '')}_{record.get('sitting_number')}"
 
-    async def run(self) -> dict[str, int]:
+    async def run_stage1(self) -> dict[str, int]:
         """
-        Run LS ingestion across the provider chain.
+        Stage 1: discover LS documents across the provider chain, fetch, parse,
+        write to raw_documents.
 
-        Returns stats: indexed, skipped, errors.
+        Dedup guard: indexer.check_raw_document_exists() (PK lookup).
+        No SQLite checkpoint writes in Stage 1.
+        Returns stats: fetched, skipped, errors.
         """
-        stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
+        stats: dict[str, int] = {"fetched": 0, "skipped": 0, "errors": 0}
 
         for provider in self._providers:
             doc_refs = await provider.discover()
             logger.info(
-                "ls_orchestrator: provider=%s discovered %d documents",
-                provider.__class__.__name__,
-                len(doc_refs),
+                "ls_stage1: provider=%s discovered %d documents",
+                provider.__class__.__name__, len(doc_refs),
             )
 
             for doc_ref in doc_refs:
-                if self._checkpoint.is_document_processed(doc_ref.canonical_doc_id):
-                    logger.debug(
-                        "ls_orchestrator: already processed doc_id=%s; skipping",
-                        doc_ref.canonical_doc_id,
-                    )
+                if self._indexer.check_raw_document_exists(doc_ref.canonical_doc_id):
+                    logger.debug("ls_stage1: already fetched %s; skipping", doc_ref.canonical_doc_id)
                     stats["skipped"] += 1
                     continue
 
                 content = await provider.fetch(doc_ref)
                 if content is None:
-                    logger.warning(
-                        "ls_orchestrator: fetch failed for %s; skipping",
-                        doc_ref.canonical_doc_id,
-                    )
+                    logger.warning("ls_stage1: fetch failed for %s; skipping", doc_ref.canonical_doc_id)
                     stats["errors"] += 1
                     continue
 
@@ -283,40 +292,94 @@ class LSOrchestrator:
                     stats["errors"] += 1
                     continue
 
-                records = self._segment(raw_record)
-                for record in records:
-                    if record.get("record_type") == "speech":
-                        canon_name, unresolved = canonicalize_name(
-                            record.get("speaker_name"), self._names_dict
-                        )
-                        record["speaker_name"] = canon_name
-                        record["speaker_name_unresolved"] = unresolved
-                    record["session_name"] = canonicalize_session(
-                        record.get("session_name"), source="LS"
-                    )
+                extracted_text, metadata = _extract_stage1_fields(raw_record)
 
-                    # Assign shared sitting-level sequence at orchestrator level
-                    record["sequence_within_sitting"] = self._next_seq(
-                        self._sitting_key(record)
-                    )
-
-                    if self._indexer.index_record(record, self._checkpoint):
-                        stats["indexed"] += 1
-
-                self._checkpoint.mark_document_processed(
-                    doc_ref.canonical_doc_id,
+                self._indexer.write_raw_document(
+                    canonical_doc_id=doc_ref.canonical_doc_id,
                     corpus="LS",
+                    date=raw_record.get("date"),
                     provider=doc_ref.provider,
+                    format=doc_ref.format,
+                    extracted_text=extracted_text,
+                    metadata_json=metadata,
                     fetch_url=doc_ref.fetch_url,
+                    citation_url=doc_ref.citation_url,
                 )
+                stats["fetched"] += 1
 
         logger.info(
-            "ls_orchestrator: done — indexed=%d skipped=%d errors=%d",
-            stats["indexed"],
-            stats["skipped"],
-            stats["errors"],
+            "ls_stage1: done — fetched=%d skipped=%d errors=%d",
+            stats["fetched"], stats["skipped"], stats["errors"],
         )
         return stats
+
+    async def run_stage2(
+        self,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> dict[str, int]:
+        """
+        Stage 2: read raw_documents for LS, segment, canonicalize, index.
+
+        Resumability: SQLite processed_documents checkpoint guards re-runs.
+        Returns stats: indexed, skipped, errors.
+        """
+        stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
+
+        rows = list(self._indexer.read_raw_documents_for_scope("LS", date_from, date_to))
+        logger.info("ls_stage2: %d raw_documents rows to process", len(rows))
+
+        for row in rows:
+            canonical_doc_id = row["canonical_doc_id"]
+            if self._checkpoint.is_document_processed(canonical_doc_id):
+                logger.debug("ls_stage2: already processed %s; skipping", canonical_doc_id)
+                stats["skipped"] += 1
+                continue
+
+            raw_record = dict(row["metadata_json"])
+            if row["extracted_text"] is not None:
+                raw_record["raw_text"] = row["extracted_text"]
+
+            records = self._segment(raw_record)
+            for record in records:
+                if record.get("record_type") == "speech":
+                    canon_name, unresolved = canonicalize_name(
+                        record.get("speaker_name"), self._names_dict
+                    )
+                    record["speaker_name"] = canon_name
+                    record["speaker_name_unresolved"] = unresolved
+                record["session_name"] = canonicalize_session(
+                    record.get("session_name"), source="LS"
+                )
+                record["sequence_within_sitting"] = self._next_seq(
+                    self._sitting_key(record)
+                )
+
+                if self._indexer.index_record(record, self._checkpoint):
+                    stats["indexed"] += 1
+
+            self._checkpoint.mark_document_processed(
+                canonical_doc_id,
+                corpus="LS",
+                provider=row["provider"],
+                fetch_url=row["fetch_url"],
+            )
+
+        logger.info(
+            "ls_stage2: done — indexed=%d skipped=%d errors=%d",
+            stats["indexed"], stats["skipped"], stats["errors"],
+        )
+        return stats
+
+    async def run(self) -> dict[str, int]:
+        """Run full LS ingestion (--stage all): Stage 1 then Stage 2."""
+        s1 = await self.run_stage1()
+        s2 = await self.run_stage2()
+        return {
+            "indexed": s2["indexed"],
+            "skipped": s2["skipped"],
+            "errors": s1["errors"] + s2["errors"],
+        }
 
     def _parse(self, content: str | bytes, doc_ref) -> dict | None:
         """Dispatch to the correct parser based on doc_ref.format."""

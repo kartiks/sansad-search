@@ -1,7 +1,7 @@
 # Deployment — SansadSearch
 
 **PRD version:** v2.0
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks); updated 2026-06-01 for PRD v2.0 — §6.3 schema migration for F01 new columns/indexes + re-ingestion; no new env vars, dependencies, or infrastructure (F09 detail endpoint reuses the existing Railway Postgres pool)
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks); updated 2026-06-01 for PRD v2.0 — §6.3 schema migration for F01 new columns/indexes + re-ingestion; no new env vars, dependencies, or infrastructure (F09 detail endpoint reuses the existing Railway Postgres pool); updated 2026-06-03 — raw document store: §3.3/§3.5/§6.1 updated for `raw_documents`; §6.4 selective re-processing runbook added; no new env vars, dependencies, or infrastructure
 
 ---
 
@@ -89,7 +89,7 @@ Run once against the Railway PostgreSQL instance before the first ingestion:
 psql $DATABASE_URL -f app/db/schema.sql
 ```
 
-`app/db/schema.sql` contains the `CREATE TABLE` statements for `speeches`, `qa_exchanges`, and `index_status` with all indexes.
+`app/db/schema.sql` contains the `CREATE TABLE` statements for `speeches`, `qa_exchanges`, `raw_documents`, and `index_status` with all indexes.
 
 ### 3.4 Meilisearch setup (one-time, and on synonym updates)
 
@@ -111,12 +111,22 @@ Requires `MEILISEARCH_URL` and `MEILISEARCH_MASTER_KEY` in the local environment
 
 ```bash
 cd app
+# Run both stages end-to-end (default — fetch, parse, segment, index):
 python -m ingest.main --source all
+
+# Run Stage 1 only (fetch + parse → raw_documents):
+python -m ingest.main --source all --stage fetch
+
+# Run Stage 2 only (segment + index from raw_documents):
+python -m ingest.main --source all --stage process
+
+# Stage 2 for a date range (selective re-processing — requires prior Stage 1 for that scope):
+python -m ingest.main --source ls --stage process --date-from 2024-01-01 --date-to 2024-12-31
 ```
 
-Source selector options: `ca`, `ls`, `rs`, `all`. Optionally pass `--date-override` to override the end date for LS/RS fetching.
+`--source` options: `ca`, `ls`, `rs`, `all`. Applies to both stages. `--stage` options: `fetch`, `process`, `all` (default `all`). `--date-from`/`--date-to` apply to Stage 2 only — they scope which rows are read from `raw_documents`; Stage 1 ignores them.
 
-The pipeline writes to both Railway PostgreSQL (over the network) and Meilisearch Cloud (over the network). The local `data/ingestion_checkpoints.db` SQLite file tracks progress for resumability. Re-running the same command resumes from the last checkpoint.
+Stage 1 writes to Railway PostgreSQL (`raw_documents` table) and the Meilisearch index is not touched until Stage 2. Stage 2 reads from `raw_documents`, writes to `speeches`/`qa_exchanges`, and pushes to Meilisearch Cloud. The local `data/ingestion_checkpoints.db` SQLite file tracks Stage 2 progress for resumability. Re-running resumes from the last checkpoint.
 
 Ingestion duration is unbounded (PRD INF-P1). The operator does not need to supervise; real-time progress is logged to stdout.
 
@@ -236,10 +246,10 @@ This SQLite file is local to the operator's machine. Deleting it forces the pipe
 **Step 2 — Truncate PostgreSQL tables**
 
 ```bash
-psql $DATABASE_URL -c "TRUNCATE TABLE speeches, qa_exchanges, index_status RESTART IDENTITY CASCADE;"
+psql $DATABASE_URL -c "TRUNCATE TABLE speeches, qa_exchanges, raw_documents, index_status RESTART IDENTITY CASCADE;"
 ```
 
-All three tables must be truncated together. `RESTART IDENTITY` resets primary-key sequences. `CASCADE` handles any foreign-key constraints.
+All four tables must be truncated together. `raw_documents` holds the Stage 1 checkpoint — truncating it forces Stage 1 to re-fetch every source document. `RESTART IDENTITY` resets primary-key sequences. `CASCADE` handles any foreign-key constraints.
 
 **Step 3 — Delete all documents from the Meilisearch index**
 
@@ -277,6 +287,62 @@ If the Meilisearch index settings need to be re-applied first (e.g. after deleti
 ---
 
 ### 6.3 PRD v2.0 migration (F01 new fields + F09)
+
+---
+
+### 6.4 Selective re-processing (Stage 2 only)
+
+Use when `raw_documents` contains fetched content but the segmented output in `speeches`/`qa_exchanges` needs to be regenerated for a scope — without re-fetching source documents. Typical scenarios: segmentation logic changed; a parser fix applies to a date range; an indexer schema change affects a subset of records.
+
+**Clearing is mandatory before re-running Stage 2.** Stage 2 inserts with `ON CONFLICT DO NOTHING`. Running Stage 2 without clearing first produces no changes to already-indexed records.
+
+**Step 1 — Delete records from PostgreSQL for the scope**
+
+```sql
+-- Example: re-process all LS records for 2024
+DELETE FROM speeches   WHERE source = 'LS' AND date BETWEEN '2024-01-01' AND '2024-12-31';
+DELETE FROM qa_exchanges WHERE source = 'LS' AND date BETWEEN '2024-01-01' AND '2024-12-31';
+```
+
+Match the `source` and date range to the `--source`/`--date-from`/`--date-to` values you will use in Step 4.
+
+**Step 2 — Delete Meilisearch documents for the scope**
+
+```bash
+curl -X POST "$MEILISEARCH_URL/indexes/parliamentary_records/documents/delete" \
+  -H "Authorization: Bearer $MEILISEARCH_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"filter": "source = \"LS\" AND date >= \"2024-01-01\" AND date <= \"2024-12-31\""}'
+```
+
+Wait for the task to complete before proceeding (poll `$MEILISEARCH_URL/tasks/{taskUid}` or check the Meilisearch Cloud dashboard).
+
+**Step 3 — Delete SQLite `processed_documents` entries for the scope**
+
+```python
+import sqlite3
+db = sqlite3.connect('data/ingestion_checkpoints.db')
+# Scope to corpus + processed_at date range matching the records you cleared above:
+db.execute("""
+    DELETE FROM processed_documents
+    WHERE corpus = 'LS'
+    AND processed_at >= '2024-01-01'
+    AND processed_at < '2025-01-01'
+""")
+db.commit()
+db.close()
+```
+
+To clear a full corpus: `DELETE FROM processed_documents WHERE corpus = 'LS';`
+
+**Step 4 — Re-run Stage 2**
+
+```bash
+cd app
+python -m ingest.main --source ls --stage process --date-from 2024-01-01 --date-to 2024-12-31
+```
+
+Stage 2 reads from `raw_documents` for the given scope, re-segments, re-canonicalizes, and re-indexes. Stage 1 fetch cost is not paid again.
 
 PRD v2.0 adds columns to both record tables (`lang_original`, `time_of_day`, `word_count` on both; `sequence_within_sitting` on `qa_exchanges`) plus two composite sitting indexes for F09 adjacent navigation. The new field values are **not derivable from stored data** — they require re-parsing the source documents — so applying v2.0 means a schema migration **followed by a full re-ingestion**.
 

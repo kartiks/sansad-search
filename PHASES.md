@@ -1,7 +1,7 @@
 # SansadSearch — Phase Plan
 
 PRD version: v2.0
-Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes); updated 2026-06-02 (Phases 10–11 added — PRD v2.0: new ingestion fields, CA parsing rules, shared sequence, F05 badge changes, F09 record detail page; merge-conflict marker in header resolved)
+Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes); updated 2026-06-02 (Phases 10–11 added — PRD v2.0: new ingestion fields, CA parsing rules, shared sequence, F05 badge changes, F09 record detail page; merge-conflict marker in header resolved); updated 2026-06-03 (Phase 12 added — two-stage pipeline + raw_documents table per ARCH 2026-06-03 update)
 
 ---
 
@@ -236,5 +236,26 @@ Implement:
 - `app/ui/src/main.jsx` — add `/record/:id` route pointing to RecordDetail.jsx
 
 Stop when: GET /api/record/{id} returns correct full response for a fixture speech record and a fixture Q+A record (including adjacent nav, sitting_total, proceeding_type_label, date_display); 404 returned and rendered correctly when id does not exist in either table; SpeechCard and QACard render `lang_original` badge correctly for all three values (`hi`, `mixed`, `en`/absent) and render `time_of_day` when present, silent when null; ResultCard links correctly to /record/:id; RecordDetail.jsx renders full text, all metadata, prev/next controls (disabled at boundaries), position indicator, and correct back-nav for both in-app and direct-URL entry; all tests pass.
-Do not implement anything beyond Phase 11.
+Do not implement anything from Phase 12 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 12 — Two-Stage Pipeline & Raw Document Store
+
+PRD sections: F01 (two-stage pipeline; raw document store)
+UI sections: none
+ARCH sections: ARCHITECTURE.md §1/§4/§5, DATA-MODELS.md §1.4, DEPLOYMENT.md §3.5/§6.1/§6.4
+
+Implement:
+- `app/db/schema.sql` — add `raw_documents` table per DATA-MODELS §1.4: PK `canonical_doc_id TEXT`, `corpus VARCHAR(2) NOT NULL CHECK IN ('CA','LS','RS')`, `date DATE`, `provider VARCHAR(50) NOT NULL`, `format VARCHAR(10) NOT NULL CHECK IN ('html','ia_text','pdf')`, `extracted_text TEXT`, `metadata_json JSONB NOT NULL DEFAULT '{}'`, `fetch_url TEXT`, `citation_url TEXT`, `fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`; create `idx_raw_documents_corpus_date ON raw_documents(corpus, date)`
+- `app/ingest/indexer.py` — add Stage 1 write path: `write_raw_document(canonical_doc_id, corpus, date, provider, format, extracted_text, metadata_json, fetch_url, citation_url)` inserts into `raw_documents` (no-op on PK conflict); `check_raw_document_exists(canonical_doc_id) → bool` (Stage 1 PK dedup guard — corpus orchestrators call this before fetching); `read_raw_documents_for_scope(corpus, date_from=None, date_to=None)` → iterator of `raw_documents` rows for Stage 2 to consume; existing `reindex_from_db()` and `update_index_status()` unchanged; `index_status` update remains Stage 2 completion only
+- `app/ingest/main.py` — add `--stage fetch|process|all` argument (default `all`); add `--date-from YYYY-MM-DD` and `--date-to YYYY-MM-DD` for Stage 2 scope (scope which `raw_documents` rows are read; Stage 1 ignores them); routing: `--stage fetch` → call each orchestrator's `run_stage1()` only; `--stage process` → call each orchestrator's `run_stage2()` only, passing `date_from`/`date_to`; `--stage all` → `run_stage1()` then `run_stage2()` for each source sequentially; remove `--date-override` (replaced by `--date-from`); update progress logging and completion summary to distinguish Stage 1 (documents written to `raw_documents`) from Stage 2 (records written to `speeches`/`qa_exchanges`)
+- `app/ingest/checkpoints/store.py` — `processed_documents` semantics are Stage 2 complete signal only per ARCHITECTURE §5; remove any Stage 1 checkpoint writes (Stage 1 dedup is `raw_documents` PK lookup in PostgreSQL); `inserted_dedup_keys` unchanged
+- `app/ingest/sources/ca.py` — split orchestrator into `run_stage1()` (discover → `coi_html` provider chain → `html_parser` → `indexer.write_raw_document()` per document; skip if `indexer.check_raw_document_exists(canonical_doc_id)` returns True) and `run_stage2(date_from=None, date_to=None)` (reads `raw_documents` rows via `indexer.read_raw_documents_for_scope('CA', date_from, date_to)` → segmenters → canonicalizers → `indexer.index_record()` → checkpoint); `run()` calls `run_stage1()` then `run_stage2()` for `--stage all`
+- `app/ingest/sources/ls.py` — same Stage 1/2 split as CA; Stage 1 checks `raw_documents` PK before any fetch; Stage 2 reads from `raw_documents` for scope
+- `app/ingest/sources/rs.py` — same Stage 1/2 split as CA; Stage 1 checks `raw_documents` PK before any fetch; Stage 2 reads from `raw_documents` for scope
+
+Stop when: `schema.sql` creates the `raw_documents` table and `idx_raw_documents_corpus_date` index without error on a clean PostgreSQL instance; `indexer.write_raw_document()` inserts a row and is a no-op on PK conflict; `indexer.check_raw_document_exists()` returns True for an existing `canonical_doc_id` and False for an absent one; `--stage fetch` against mocked providers writes exactly one `raw_documents` row per document; `--stage process` against mocked `raw_documents` rows produces correct `speeches`/`qa_exchanges` records; Stage 1 re-run against an already-fetched corpus writes zero new rows (PK dedup skips all); Stage 2 re-run after interruption resumes from SQLite `processed_documents` checkpoint, skipping already-processed docs; `--stage process --date-from 2024-01-01 --date-to 2024-12-31` reads only the matching date range from `raw_documents` and writes no records outside that range; `--stage all` produces identical final `speeches`/`qa_exchanges` state to running `--stage fetch` then `--stage process` separately; all existing Phase 1–11 tests pass without modification.
+Do not implement anything beyond Phase 12.
 Tests: write and run tests for all items above before finishing.

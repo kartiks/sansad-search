@@ -2,26 +2,24 @@
 Ingestion pipeline CLI entry point.
 
 Usage:
-    python -m ingest.main --source ca|ls|rs|all [--date-override YYYY-MM-DD]
+    python -m ingest.main --source ca|ls|rs|all [--stage fetch|process|all]
+    python -m ingest.main --source all --stage process --date-from 2024-01-01 --date-to 2024-12-31
     python -m ingest.main --source all --reindex-from-db
 
 Options:
     --source         Which source(s) to ingest: ca, ls, rs, or all
-    --date-override  Scope LS/RS ingestion to documents on/after this date
-                     (YYYY-MM-DD). Forwarded to the orchestrators as date_from.
+    --stage          Pipeline stage to run (default: all)
+                       fetch   — Stage 1 only: discover + fetch + parse → raw_documents
+                       process — Stage 2 only: segment + index from raw_documents
+                       all     — Stage 1 then Stage 2
+    --date-from      Stage 2 scope: only process raw_documents rows on/after this date
+    --date-to        Stage 2 scope: only process raw_documents rows on/before this date
     --reindex-from-db  Skip scraping; re-push all PostgreSQL records to Meilisearch
 
 Environment variables required:
     DATABASE_URL        PostgreSQL connection string (psycopg2 DSN)
     MEILISEARCH_URL     Meilisearch Cloud base URL
     MEILISEARCH_MASTER_KEY  Meilisearch master key (for document push)
-
-Each source is handled by a dedicated orchestrator (Phase 8/9). The
-orchestrators own discovery, fetching, parsing, segmentation,
-canonicalization, indexing, and their own per-document checkpoint
-interactions (keyed by canonical_doc_id). This entry point only selects the
-orchestrator(s), drives them with a shared HTTP client, and aggregates the
-stats they return.
 """
 from __future__ import annotations
 
@@ -83,10 +81,22 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Source to ingest (ca | ls | rs | all)",
     )
     parser.add_argument(
-        "--date-override",
+        "--stage",
+        choices=["fetch", "process", "all"],
+        default="all",
+        help="Pipeline stage: fetch (Stage 1 only), process (Stage 2 only), or all (default)",
+    )
+    parser.add_argument(
+        "--date-from",
         metavar="YYYY-MM-DD",
         default=None,
-        help="Scope LS/RS ingestion to documents on/after this date (optional)",
+        help="Stage 2 scope: process raw_documents rows on/after this date (optional)",
+    )
+    parser.add_argument(
+        "--date-to",
+        metavar="YYYY-MM-DD",
+        default=None,
+        help="Stage 2 scope: process raw_documents rows on/before this date (optional)",
     )
     parser.add_argument(
         "--reindex-from-db",
@@ -103,25 +113,14 @@ def _make_orchestrator(
     checkpoint: CheckpointStore,
     indexer: Indexer,
     names_dict: dict[str, str],
-    date_override: Optional[str],
 ) -> Any:
-    """Build the orchestrator for one source.
-
-    The shared HTTP client is injected at construction. ``--date-override`` is
-    wired into LS and RS via their ``date_from`` constructor parameter (which
-    forwards it to the date-filterable providers); CA has no date-scoped
-    enumeration so it ignores the override.
-    """
+    """Build the orchestrator for one source."""
     if source_name == "ca":
         return CAOrchestrator(client, checkpoint, indexer, names_dict)
     if source_name == "ls":
-        return LSOrchestrator(
-            client, checkpoint, indexer, names_dict, date_from=date_override
-        )
+        return LSOrchestrator(client, checkpoint, indexer, names_dict)
     if source_name == "rs":
-        return RSOrchestrator(
-            client, checkpoint, indexer, names_dict, date_from=date_override
-        )
+        return RSOrchestrator(client, checkpoint, indexer, names_dict)
     raise ValueError(f"Unknown source: {source_name}")
 
 
@@ -142,60 +141,81 @@ async def _async_main(args: argparse.Namespace) -> int:
         pg_conn.close()
         return 0
 
-    # ── Normal ingestion ───────────────────────────────────────────────────────
-    # date_override is the ISO YYYY-MM-DD string passed straight through to the
-    # orchestrators (and on to their date-scoped providers, which consume the
-    # string form). Validate the format here so a malformed value fails fast.
-    date_override: Optional[str] = None
-    if args.date_override:
-        date.fromisoformat(args.date_override)  # raises ValueError on bad input
-        date_override = args.date_override
+    # ── Validate date args ────────────────────────────────────────────────────
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    if args.date_from:
+        date.fromisoformat(args.date_from)  # raises ValueError on bad input
+        date_from = args.date_from
+    if args.date_to:
+        date.fromisoformat(args.date_to)
+        date_to = args.date_to
 
-    sources = (
-        ["ca", "ls", "rs"] if args.source == "all" else [args.source]
-    )
+    sources = ["ca", "ls", "rs"] if args.source == "all" else [args.source]
+    stage = args.stage
 
-    stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
+    stage1_stats: dict[str, int] = {"fetched": 0, "skipped": 0, "errors": 0}
+    stage2_stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
 
     http_headers = {"User-Agent": USER_AGENT}
     with CheckpointStore(CHECKPOINT_DB) as checkpoint:
-        async with httpx.AsyncClient(
-            headers=http_headers, timeout=60.0
-        ) as client:
+        async with httpx.AsyncClient(headers=http_headers, timeout=60.0) as client:
             for source_name in sources:
                 logger.info("=== Starting source: %s ===", source_name.upper())
                 orchestrator = _make_orchestrator(
-                    source_name, client, checkpoint, indexer, names_dict,
-                    date_override,
+                    source_name, client, checkpoint, indexer, names_dict
                 )
-                source_stats = await orchestrator.run()
-                for key in stats:
-                    stats[key] += source_stats.get(key, 0)
 
-    # Flush any remaining buffered Meilisearch documents
-    indexer.flush()
+                if stage in ("fetch", "all"):
+                    logger.info("--- Stage 1 (fetch): %s ---", source_name.upper())
+                    s1 = await orchestrator.run_stage1()
+                    for k in stage1_stats:
+                        stage1_stats[k] += s1.get(k, 0)
 
-    # Update index_status table
-    try:
-        indexer.update_index_status()
-    except Exception as exc:
-        logger.error("Could not update index_status: %s", exc)
+                if stage in ("process", "all"):
+                    logger.info("--- Stage 2 (process): %s ---", source_name.upper())
+                    s2 = await orchestrator.run_stage2(
+                        date_from=date_from, date_to=date_to
+                    )
+                    for k in stage2_stats:
+                        stage2_stats[k] += s2.get(k, 0)
+
+    # Flush any remaining buffered Meilisearch documents (Stage 2 only)
+    if stage in ("process", "all"):
+        indexer.flush()
+        try:
+            indexer.update_index_status()
+        except Exception as exc:
+            logger.error("Could not update index_status: %s", exc)
 
     pg_conn.close()
 
     # Completion summary
-    total = sum(indexer.counts.values())
     logger.info("=== Ingestion complete ===")
-    logger.info(
-        "  Total indexed: %d  (CA=%d  LS=%d  RS=%d)",
-        total,
-        indexer.counts.get("CA", 0),
-        indexer.counts.get("LS", 0),
-        indexer.counts.get("RS", 0),
-    )
-    logger.info("  Records indexed (this run): %d", stats["indexed"])
-    logger.info("  Records skipped (duplicates/pre-existing): %d", stats["skipped"])
-    logger.info("  Errors: %d", stats["errors"])
+    if stage in ("fetch", "all"):
+        logger.info(
+            "  Stage 1 (fetch) — documents written to raw_documents: %d  "
+            "(skipped=%d  errors=%d)",
+            stage1_stats["fetched"],
+            stage1_stats["skipped"],
+            stage1_stats["errors"],
+        )
+    if stage in ("process", "all"):
+        total = sum(indexer.counts.values())
+        logger.info(
+            "  Stage 2 (process) — records indexed: %d  (CA=%d  LS=%d  RS=%d)",
+            total,
+            indexer.counts.get("CA", 0),
+            indexer.counts.get("LS", 0),
+            indexer.counts.get("RS", 0),
+        )
+        logger.info(
+            "  Records indexed (this run): %d", stage2_stats["indexed"]
+        )
+        logger.info(
+            "  Records skipped (already processed): %d", stage2_stats["skipped"]
+        )
+        logger.info("  Errors: %d", stage2_stats["errors"])
 
     return 0
 
