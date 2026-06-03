@@ -1,7 +1,7 @@
 # Project Tracker
 
 PRD version at last update: v2.0
-Last updated: 2026-06-03 (/resume — Phase 12 marked ✓ complete; all 12 phases complete)
+Last updated: 2026-06-03 (post-build bug fixes: back-button navigation + Meilisearch sort ranking rules)
 
 ## Lifecycle Status
 

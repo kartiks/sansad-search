@@ -124,7 +124,7 @@ class TestIndexConfiguration:
         assert "sequence_within_sitting" in SORTABLE_ATTRIBUTES
 
     def test_ranking_rules_order(self):
-        expected = ["words", "typo", "proximity", "attribute", "sort", "exactness"]
+        expected = ["sort", "words", "typo", "proximity", "attribute", "exactness"]
         assert RANKING_RULES == expected
 
     def test_pagination_max_total_hits(self):
@@ -159,8 +159,10 @@ class TestExpansionWeightOrdering:
     rank above spell-correction matches.
 
     Meilisearch enforces this through the ranking rules ordering:
-    - "words" is the first rule: records matching the most query words rank
-      highest. Both exact-term and synonym-term hits count as 'words' matches.
+    - "sort" is first: when no sort parameter is provided (relevance mode),
+      Meilisearch skips this rule entirely, so it has no effect on relevance.
+    - "words" follows sort: records matching the most query words rank highest.
+      Both exact-term and synonym-term hits count as 'words' matches.
     - "typos" follows "words": typo-corrected hits rank below words matches.
     - Within the "words" class, Meilisearch's exactness rule further separates
       exact matches from synonym matches: "exactness" is included in the rules.
@@ -228,7 +230,7 @@ class TestDataModelsExactConstants:
         )
 
     def test_ranking_rules_exact_match_data_models(self):
-        expected = ["words", "typo", "proximity", "attribute", "sort", "exactness"]
+        expected = ["sort", "words", "typo", "proximity", "attribute", "exactness"]
         assert RANKING_RULES == expected, (
             f"RANKING_RULES must exactly match DATA-MODELS.md §2.3. "
             f"Expected {expected}, got {RANKING_RULES}"

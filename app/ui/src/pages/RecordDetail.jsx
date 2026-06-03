@@ -34,6 +34,7 @@ export default function RecordDetail() {
   const { data, error, loading, notFound, retry } = useRecord(id)
 
   const fromSearch = location.state?.from === 'search'
+  const resultsPath = location.state?.resultsPath
 
   if (loading) {
     return (
@@ -96,7 +97,7 @@ export default function RecordDetail() {
             <button
               className="record-back-btn"
               data-testid="back-to-results"
-              onClick={() => navigate(-1)}
+              onClick={() => navigate(resultsPath || '/')}
             >
               ← Back to results
             </button>

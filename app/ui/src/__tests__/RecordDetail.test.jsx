@@ -35,6 +35,7 @@ function renderDetailWithNav(id = 'speech-1', state = null) {
       <Routes>
         <Route path="/record/:id" element={<RecordDetail />} />
         <Route path="/" element={<div data-testid="home-page">Home</div>} />
+        <Route path="/results" element={<div data-testid="results-page">Results</div>} />
       </Routes>
     </MemoryRouter>
   )
@@ -342,6 +343,32 @@ describe('RecordDetail — back navigation', () => {
     renderDetail('speech-1', null)
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
     expect(screen.getByTestId('back-to-search')).toHaveAttribute('href', '/')
+  })
+
+  it('clicking "Back to results" navigates to resultsPath, not just one step back', async () => {
+    mockFetch(makeRecordDetail())
+    renderDetailWithNav('speech-1', { from: 'search', resultsPath: '/results?q=water' })
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('back-to-results'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location-display')).toHaveTextContent('/results')
+    )
+    expect(screen.getByTestId('results-page')).toBeInTheDocument()
+  })
+
+  it('falling back to "/" when resultsPath is absent', async () => {
+    mockFetch(makeRecordDetail())
+    renderDetailWithNav('speech-1', { from: 'search' })
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('back-to-results'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location-display')).toHaveTextContent('/')
+    )
+    expect(screen.getByTestId('home-page')).toBeInTheDocument()
   })
 })
 
