@@ -4,10 +4,12 @@ Internet Archive provider for LS corpus (Phase 8) and RS corpus (Phase 9).
 Discovery:
   advancedsearch.php enumerate eparlib.nic.in.{N} identifiers →
   metadata JSON fetch per identifier (https://archive.org/metadata/{id}) →
+  locate DjVuTXT entry in top-level `files` array (format == "DjVuTXT") →
+  build fetch_url as https://{server}{dir}/{name} →
   DocumentRef(format=ia_text, canonical_doc_id=N, citation_url=eparlib_document_url)
 
 Fetch:
-  GET https://archive.org/download/{identifier}/{identifier}_djvu.txt
+  GET https://{server}{dir}/{name}  (DjVuTXT file served from IA content server)
   Returns str (IA _djvu.txt text content).
 
 Non-Negotiable #9: citation_url is NEVER an archive.org URL. For LS,
@@ -33,7 +35,6 @@ logger = logging.getLogger(__name__)
 _IDENTIFIER_RE = re.compile(r"eparlib\.nic\.in\.(\d+)$", re.IGNORECASE)
 
 _IA_METADATA_BASE = "https://archive.org/metadata"
-_IA_DJVU_PATTERN = "https://archive.org/download/{id}/{id}_djvu.txt"
 
 # rsdebate.nic.in is the canonical RS citation host (DSpace). The handle number N
 # extracted from the IA identifier is the same DSpace handle used on rsdebate.
@@ -133,12 +134,26 @@ class InternetArchiveProvider(Provider):
                     identifier,
                 )
 
-            meta = await self._fetch_ia_metadata(str(identifier))
-            if meta is None:
+            full_data = await self._fetch_ia_metadata(str(identifier))
+            if full_data is None:
                 continue
 
+            files = full_data.get("files", [])
+            djvu_entry = next(
+                (f for f in files if f.get("format") == "DjVuTXT"), None
+            )
+            if djvu_entry is None:
+                logger.warning(
+                    "IA item %r has no DjVuTXT file; skipping", identifier
+                )
+                continue
+
+            server = full_data.get("server", "")
+            dir_ = full_data.get("dir", "")
+            djvu_url = f"https://{server}{dir_}/{djvu_entry['name']}"
+
+            meta = full_data.get("metadata", {})
             citation_url = self._build_citation_url(meta, handle_n)
-            djvu_url = _IA_DJVU_PATTERN.format(id=identifier)
             # When no DSpace handle is derivable (RS edge case), fall back to the
             # IA identifier as the checkpoint/dedup key so the item is still
             # tracked for resumability.
@@ -192,7 +207,7 @@ class InternetArchiveProvider(Provider):
         return RSDEBATE_ITEM_PATTERN.format(handle=handle_n)
 
     async def _fetch_ia_metadata(self, identifier: str) -> dict[str, Any] | None:
-        """Fetch IA metadata JSON for one identifier. Returns the metadata sub-dict."""
+        """Fetch IA metadata JSON for one identifier. Returns the full top-level JSON dict."""
         meta_url = f"{_IA_METADATA_BASE}/{identifier}"
         resp = await fetch_with_retry(self._client, meta_url)
         if resp is None:
@@ -208,7 +223,7 @@ class InternetArchiveProvider(Provider):
             logger.error("IA metadata JSON parse error for %s: %s", identifier, exc)
             return None
 
-        return data.get("metadata", {})
+        return data
 
     async def fetch(self, doc_ref: DocumentRef) -> str | None:
         """Fetch the _djvu.txt content for a single IA document."""

@@ -1,7 +1,7 @@
 # Architecture — SansadSearch
 
 **PRD version:** v2.0
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules); updated 2026-06-03 (§5 CA Date: document all three URL slug formats — DD-MMM-YYYY, DD-MMMM-YYYY, YYYY-MM-DD); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table; two-stage pipeline split via `--stage fetch|process|all`; dual-signal checkpoint — `raw_documents` PK = Stage 1 complete, SQLite `processed_documents` = Stage 2 complete)
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules); updated 2026-06-03 (§5 CA Date: document all three URL slug formats — DD-MMM-YYYY, DD-MMMM-YYYY, YYYY-MM-DD); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table; two-stage pipeline split via `--stage fetch|process|all`; dual-signal checkpoint — `raw_documents` PK = Stage 1 complete, SQLite `processed_documents` = Stage 2 complete); updated 2026-06-04 (§1/§3/§5/§6 stale `{identifier}_djvu.txt` URL construction references replaced with dynamic DjVuTXT URL discovery from IA metadata `files` array)
 
 ---
 
@@ -27,7 +27,7 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
 | HTTP client (ingestion) | httpx (async) | Rate-limited fetching from government sites, the Internet Archive, and DSpace repositories; also used for IA `advancedsearch.php` / `metadata` JSON (no IA SDK) |
 | HTML parsing | BeautifulSoup4 | CA (constitutionofindia.net) and recent RS (sansad.in/rs) record parsing; also DSpace item-page parsing to resolve the real PDF bitstream URL |
 | PDF text extraction | PyMuPDF (fitz) | **Embedded-text only** — direct DSpace PDFs (LS/RS) not present on the Internet Archive mirror. No OCR: a PDF with no text layer is logged and skipped per the F01 "unparseable document → skip" edge case (2014+ DSpace PDFs are digital-born) |
-| Pre-OCR'd bulk text | Internet Archive (`{id}_djvu.txt`) | Preferred LS/RS path: OCR text already extracted by IA; the pipeline runs no OCR of its own |
+| Pre-OCR'd bulk text | Internet Archive (DjVuTXT file — URL discovered dynamically from IA metadata `files` array) | Preferred LS/RS path: OCR text already extracted by IA; the pipeline runs no OCR of its own; items with no DjVuTXT entry in the `files` array are logged and skipped |
 | PostgreSQL client | asyncpg (API) / psycopg2 (ingestion) | asyncpg for async API reads; psycopg2 for bulk ingestion writes |
 | Meilisearch Python client | meilisearch-python | Document push, index configuration |
 | Frontend routing | React Router v6 | Homepage ↔ Results page; query params encode search state |
@@ -90,7 +90,7 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
         coi_html.py              # constitutionofindia.net (CA, primary & only): volume index
                                  # → per-volume → per-day discovery; HTML main-content fetch
         internet_archive.py      # archive.org (LS/RS, preferred bulk): advancedsearch enumerate
-                                 # eparlib.nic.in.{N}; metadata JSON; _djvu.txt download; maps
+                                 # eparlib.nic.in.{N}; metadata JSON; DjVuTXT URL discovered
                                  # eparlib_* custom fields. Dual-corpus: single provider serves
                                  # both LS and RS via a `corpus` constructor param; citation_url
                                  # dispatches on corpus = eparlib_document_url (LS) |
@@ -109,8 +109,9 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
       pdf_parser.py              # PyMuPDF embedded-text extraction for direct DSpace PDFs
                                  # (LS/RS) not on the IA mirror; no OCR — text-less PDFs
                                  # logged and skipped
-      ia_text_parser.py          # Internet Archive _djvu.txt OCR text + IA metadata JSON
-                                 # → raw record dicts; no local OCR
+      ia_text_parser.py          # Internet Archive DjVuTXT text (URL discovered from IA
+                                 # metadata files array) + IA metadata JSON → raw record
+                                 # dicts; no local OCR
     segmenters/
       speech.py                  # Raw text/markup → Speech unit dicts
       qa.py                      # Raw text/markup → Q+A exchange unit dicts
@@ -233,7 +234,7 @@ No custom scoring functions are implemented. This approximation is acceptable fo
 
 **Cross-source document identity.** The DSpace handle number `N` is the canonical document identity for LS/RS. The Internet Archive identifier `eparlib.nic.in.{N}` maps to DSpace handle `123456789/{N}` — `N` is the cross-provider join key. The checkpoint store dedupes at the **document level** on this canonical id so a document available from more than one provider is fetched and parsed once; the record-level `dedup_key` (DATA-MODELS §1.5) remains the final guard against duplicate records.
 
-**Internet Archive pre-OCR text path.** LS/RS bulk ingestion prefers the IA mirror, which serves `{identifier}_djvu.txt` (OCR already extracted by IA) plus a metadata JSON carrying `eparlib_*` fields (`eparlib_title`, `eparlib_date`, `eparlib_lok_sabha_number`, `eparlib_session_number`, `eparlib_document_url`). `ia_text_parser.py` consumes the text and maps the metadata. The pipeline runs no OCR of its own. A **single `InternetArchiveProvider` serves both corpora** (dual-corpus, selected by a `corpus` constructor parameter); citation derivation dispatches on the corpus:
+**Internet Archive pre-OCR text path.** LS/RS bulk ingestion prefers the IA mirror. For each item, `internet_archive.py` fetches the IA metadata JSON and locates the entry with `"format" == "DjVuTXT"` in the top-level `files` array; the DjVuTXT URL is assembled from `server + dir + name` fields of that entry. Items where no DjVuTXT entry exists in the `files` array are logged and skipped — the URL is never constructed by guessing a filename pattern. The metadata JSON also carries `eparlib_*` fields (`eparlib_title`, `eparlib_date`, `eparlib_lok_sabha_number`, `eparlib_session_number`, `eparlib_document_url`). `ia_text_parser.py` consumes the text and maps the metadata. The pipeline runs no OCR of its own. A **single `InternetArchiveProvider` serves both corpora** (dual-corpus, selected by a `corpus` constructor parameter); citation derivation dispatches on the corpus:
 - **LS:** `source_url` is set to the canonical `eparlib_document_url`.
 - **RS:** `source_url` is set to the `rsdebate.nic.in` item URL derived from the DSpace handle `N` (the IA identifier `eparlib.nic.in.{N}` ↔ handle `123456789/{N}`); when no handle is derivable from the IA record, `source_url` is null, a warning is logged, and the item is still ingested (PRD v1.3 no-handle edge case).
 
@@ -280,7 +281,7 @@ The SQLite checkpoint file is local to the operator's machine, never deployed, a
 | PostgreSQL (Railway) | Read | API (`db.py`) | Two read paths: `index_status` table for the F07 status endpoint, and `speeches`/`qa_exchanges` for the F09 record-detail endpoint (`GET /api/record/{id}` — single record + adjacent navigation). Search records are **not** served from Postgres (search runs on Meilisearch) |
 | PostgreSQL (Railway) | Write | Ingestion pipeline | Stage 1: extracted text + metadata to `raw_documents`. Stage 2: segmented records to `speeches`/`qa_exchanges`; `index_status` on completion |
 | constitutionofindia.net (CLPR) | Read (HTTP) | Ingestion `providers/coi_html.py` | CA primary & only; clean semantic HTML, one page per sitting; rate-limited; robots.txt compliant |
-| archive.org (Internet Archive) | Read (HTTP) | Ingestion `providers/internet_archive.py` | **Preferred LS/RS bulk path**; pre-OCR `_djvu.txt` + metadata JSON via `advancedsearch.php` / `metadata`; identifier `eparlib.nic.in.{N}` ↔ DSpace handle `123456789/{N}` |
+| archive.org (Internet Archive) | Read (HTTP) | Ingestion `providers/internet_archive.py` | **Preferred LS/RS bulk path**; pre-OCR DjVuTXT (URL discovered dynamically from metadata `files` array — entry with `format == "DjVuTXT"`; items with no such entry are skipped) + metadata JSON via `advancedsearch.php` / `metadata`; identifier `eparlib.nic.in.{N}` ↔ DSpace handle `123456789/{N}` |
 | eparlib.sansad.in (DSpace) | Read (HTTP) | Ingestion `providers/eparlib_dspace.py` | LS fallback (IA-missing items), collection handle `/7`; bitstream URL read from item page, **never constructed**; CA-Legislative collection `/4` excluded; migrated from `eparlib.nic.in` (item IDs preserved) |
 | rsdebate.nic.in (DSpace) | Read (HTTP) | Ingestion `providers/rsdebate_dspace.py` | RS fallback; browse `?type=dateissued`; bitstream URL read from item page, **never constructed** |
 | sansad.in (/rs) | Read (HTTP) | Ingestion `providers/sansad_rs_html.py` | RS recent in-scope sessions; HTML front end `/rs/debates/officials`; rate-limited; robots.txt compliant |

@@ -12,7 +12,6 @@ from ingest.sources.providers.internet_archive import (
     InternetArchiveProvider,
     RSDEBATE_BASE,
     RSDEBATE_ITEM_PATTERN,
-    _IA_DJVU_PATTERN,
     _extract_handle_number,
     _get_meta,
 )
@@ -34,9 +33,14 @@ def _ia_search_response(identifiers: list[str]) -> MagicMock:
 
 
 def _ia_metadata_response(identifier: str, document_url: str, date: str = "2023-03-15") -> MagicMock:
-    """Fake IA metadata API JSON response for one identifier."""
+    """Fake IA metadata API JSON response for one identifier (includes DjVuTXT file entry)."""
     resp = MagicMock(status_code=200)
     resp.json.return_value = {
+        "server": "ia801205.us.archive.org",
+        "dir": f"/5/items/{identifier}",
+        "files": [
+            {"name": "LSD_17_09_08_djvu.txt", "format": "DjVuTXT"},
+        ],
         "metadata": {
             "identifier": identifier,
             "eparlib_document_url": document_url,
@@ -45,7 +49,7 @@ def _ia_metadata_response(identifier: str, document_url: str, date: str = "2023-
             "eparlib_session_number": "8",
             "eparlib_title": "Lok Sabha Debates",
             "title": identifier,
-        }
+        },
     }
     return resp
 
@@ -170,7 +174,7 @@ class TestInternetArchiveProviderDiscover:
         assert doc_refs[0].canonical_doc_id == "12345"
 
     async def test_fetch_url_is_djvu_txt(self):
-        """fetch_url must be the _djvu.txt URL (format=ia_text)."""
+        """fetch_url must be assembled from server+dir+name of the DjVuTXT file entry."""
         search_resp_1 = _ia_search_response(["eparlib.nic.in.12345"])
         meta_resp = _ia_metadata_response(
             "eparlib.nic.in.12345",
@@ -186,9 +190,38 @@ class TestInternetArchiveProviderDiscover:
 
         ref = doc_refs[0]
         assert ref.format == "ia_text"
-        expected_url = _IA_DJVU_PATTERN.format(id="eparlib.nic.in.12345")
+        expected_url = (
+            "https://ia801205.us.archive.org"
+            "/5/items/eparlib.nic.in.12345"
+            "/LSD_17_09_08_djvu.txt"
+        )
         assert ref.fetch_url == expected_url
-        assert "archive.org/download" in ref.fetch_url
+        assert "archive.org/download" not in ref.fetch_url
+
+    async def test_no_djvu_txt_file_skips_document(self):
+        """If IA metadata has no DjVuTXT entry in files, the item is skipped."""
+        search_resp_1 = _ia_search_response(["eparlib.nic.in.12345"])
+        meta_no_djvu = MagicMock(status_code=200)
+        meta_no_djvu.json.return_value = {
+            "server": "ia801205.us.archive.org",
+            "dir": "/5/items/eparlib.nic.in.12345",
+            "files": [
+                {"name": "eparlib.nic.in.12345.pdf", "format": "Text PDF"},
+            ],
+            "metadata": {
+                "identifier": "eparlib.nic.in.12345",
+                "eparlib_document_url": "https://eparlib.sansad.in/handle/123456789/12345",
+            },
+        }
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [search_resp_1, meta_no_djvu]
+
+        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
+            provider = InternetArchiveProvider(client, corpus="LS", rate_delay=0.0)
+            doc_refs = await provider.discover()
+
+        assert len(doc_refs) == 0
 
     async def test_doc_ref_metadata_contains_eparlib_fields(self):
         """doc_ref.metadata must carry all eparlib_* fields from the IA metadata JSON."""
@@ -252,10 +285,13 @@ class TestInternetArchiveProviderDiscover:
         search_resp_1 = _ia_search_response(["eparlib.nic.in.12345"])
         meta_no_url = MagicMock(status_code=200)
         meta_no_url.json.return_value = {
+            "server": "ia801205.us.archive.org",
+            "dir": "/5/items/eparlib.nic.in.12345",
+            "files": [{"name": "LSD_djvu.txt", "format": "DjVuTXT"}],
             "metadata": {
                 "identifier": "eparlib.nic.in.12345",
                 "eparlib_date": "2023-03-15",
-            }
+            },
         }
 
         client = AsyncMock(spec=httpx.AsyncClient)
@@ -298,11 +334,14 @@ class TestInternetArchiveProviderDiscoverRS:
         # RS items have no eparlib_document_url; the URL is derived from handle N.
         meta_resp = MagicMock(status_code=200)
         meta_resp.json.return_value = {
+            "server": "ia801205.us.archive.org",
+            "dir": "/5/items/eparlib.nic.in.55501",
+            "files": [{"name": "RS_20_02_12_djvu.txt", "format": "DjVuTXT"}],
             "metadata": {
                 "identifier": "eparlib.nic.in.55501",
                 "eparlib_date": "2020-02-12",
                 "title": "Rajya Sabha Debates",
-            }
+            },
         }
 
         client = AsyncMock(spec=httpx.AsyncClient)
@@ -327,11 +366,14 @@ class TestInternetArchiveProviderDiscoverRS:
         search_resp_1 = _ia_search_response(["rs_misc_item_no_handle"])
         meta_resp = MagicMock(status_code=200)
         meta_resp.json.return_value = {
+            "server": "ia801205.us.archive.org",
+            "dir": "/5/items/rs_misc_item_no_handle",
+            "files": [{"name": "RS_19_07_22_djvu.txt", "format": "DjVuTXT"}],
             "metadata": {
                 "identifier": "rs_misc_item_no_handle",
                 "eparlib_date": "2019-07-22",
                 "title": "Rajya Sabha Debates (untagged)",
-            }
+            },
         }
 
         client = AsyncMock(spec=httpx.AsyncClient)
@@ -357,7 +399,10 @@ class TestInternetArchiveProviderDiscoverRS:
         search_resp = _ia_search_response(["weird_identifier_42"])
         meta_resp = MagicMock(status_code=200)
         meta_resp.json.return_value = {
-            "metadata": {"identifier": "weird_identifier_42", "title": "X"}
+            "server": "ia801205.us.archive.org",
+            "dir": "/5/items/weird_identifier_42",
+            "files": [{"name": "weird_djvu.txt", "format": "DjVuTXT"}],
+            "metadata": {"identifier": "weird_identifier_42", "title": "X"},
         }
 
         # RS run: retained
@@ -386,7 +431,7 @@ class TestInternetArchiveProviderFetch:
             corpus="LS",
             provider="internet_archive",
             format="ia_text",
-            fetch_url=_IA_DJVU_PATTERN.format(id=identifier),
+            fetch_url=f"https://ia801205.us.archive.org/5/items/{identifier}/LSD_djvu.txt",
             canonical_doc_id=handle_n,
             citation_url=f"https://eparlib.sansad.in/handle/123456789/{handle_n}",
             metadata={"identifier": identifier},
