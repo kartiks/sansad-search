@@ -31,9 +31,9 @@ from ingest.segmenters.speech import (
 
 # ── Q+A structural markers ────────────────────────────────────────────────────
 
-# Question number header patterns (e.g. "1.", "Q. No. 5", "STARRED QUESTION NO. 42")
+# Issue 4: NO[\.:\s]* matches NO. / NO: / NO<space> prefixes (e.g. "NO:458")
 _QUESTION_NUM_RE = re.compile(
-    r"(?:STARRED\s+QUESTION\s+NO\.?\s*|UNSTARRED\s+QUESTION\s+NO\.?\s*|Q\.?\s*NO\.?\s*)(\d+)",
+    r"(?:STARRED\s+QUESTION\s+NO[\.:\s]*|UNSTARRED\s+QUESTION\s+NO[\.:\s]*|Q\.?\s*NO[\.:\s]*)(\d+)",
     re.IGNORECASE,
 )
 
@@ -62,6 +62,15 @@ _WRITTEN_ANSWER_RE = re.compile(
     r"\bWRITTEN\s+ANSWER\b|\bANSWER\b",
     re.IGNORECASE,
 )
+
+# Issue 5: fallback minister detection (first line contains 'Minister' but no trailing colon)
+_MINISTER_CONTAINS_RE = re.compile(r"\bminister\b", re.IGNORECASE)
+
+# Issue 6: questioner fallback — stop scanning at "Will the Minister" line
+_WILL_THE_MINISTER_RE = re.compile(r"\bwill\s+the\s+minister\b", re.IGNORECASE)
+
+# Issue 6: questioner fallback — skip sub-question part markers like (a), (b), 1., 2.
+_QUESTION_PART_RE = re.compile(r"^\([a-zA-Z]\)|^\d+\.")
 
 
 def _extract_question_number(text: str) -> int | None:
@@ -154,12 +163,14 @@ def _parse_single_qa(
 ) -> dict[str, Any] | None:
     """Parse a set of text blocks into one Q+A exchange record."""
 
-    question_number: int | None = None
+    # Issue 8: seed from raw_record metadata as defaults; text loop may add to
+    # questioner_names (supplementary questioners for starred questions)
+    question_number: int | None = raw_record.get("question_number")
     subject: str | None = raw_record.get("subject")
-    questioner_names: list[str] = []
+    questioner_names: list[str] = list(raw_record.get("questioner_names") or [])
     questioner_party: str | None = None
     minister_name: str | None = None
-    ministry: str | None = None
+    ministry: str | None = raw_record.get("ministry")
 
     text_parts: list[str] = []
     current_attribution: str | None = None
@@ -183,6 +194,16 @@ def _parse_single_qa(
         if m:
             minister_name = m.group(1).strip()
             in_answer = True
+            if rest_content:
+                text_parts.append(rest_content)
+                if not is_starred and _WRITTEN_ANSWER_RE.search(rest_content):
+                    break
+            continue
+
+        # Issue 5: fallback — first line contains 'Minister' but no trailing colon
+        if not in_answer and _MINISTER_CONTAINS_RE.search(first_line) and not first_line.endswith(":"):
+            in_answer = True
+            minister_name = first_line.strip()
             if rest_content:
                 text_parts.append(rest_content)
                 if not is_starred and _WRITTEN_ANSWER_RE.search(rest_content):
@@ -214,6 +235,39 @@ def _parse_single_qa(
     full_text_en, is_translated, has_untranslated = _detect_language_handling(combined_text)
     lang_original = _compute_lang_original(combined_text)
     word_count = _count_words(full_text_en)
+
+    # Issue 6: fallback questioner extraction for IA text format where questioner
+    # names appear as mixed-case lines without a trailing colon (no attribution match).
+    # Scan from the question-number block to the first "Will the Minister" line.
+    if not questioner_names:
+        found_qnum_block = False
+        for blk in blocks:
+            bl_lines = blk.splitlines()
+            bl_first = bl_lines[0].strip() if bl_lines else ""
+            if not found_qnum_block:
+                if _QUESTION_NUM_RE.search(bl_first):
+                    found_qnum_block = True
+                continue
+            # Stop scanning once we reach the minister's block
+            if _MINISTER_RE.match(bl_first) or _MINISTER_CONTAINS_RE.search(bl_first):
+                break
+            for ln in bl_lines:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                # Stop at "Will the Minister" or any minister marker within the block
+                if _WILL_THE_MINISTER_RE.search(ln) or _MINISTER_CONTAINS_RE.search(ln):
+                    break
+                # Name candidate: mixed case (not all-caps), not a question-number
+                # marker, not a sub-question part like (a)/(b) or 1./2.
+                if (len(ln) >= 3 and
+                        not ln.isupper() and
+                        not _QUESTION_NUM_RE.search(ln) and
+                        not _QUESTION_PART_RE.match(ln)):
+                    questioner_names.append(ln)
+                    break
+            if questioner_names:
+                break
 
     # Ensure at least one questioner
     if not questioner_names:

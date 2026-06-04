@@ -140,7 +140,7 @@ class TestParseIaText:
         assert result["session_number"] == 261
 
     def test_invalid_date_format_ignored(self):
-        """Non-ISO eparlib_date must be silently ignored (date=None)."""
+        """Unrecognised date format (not ISO, not D-Mon-YYYY) must return date=None."""
         meta = _meta(eparlib_date="March 15, 2023")
         result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
         assert result is not None
@@ -201,3 +201,180 @@ class TestParseIaText:
         result = parse_ia_text(_SAMPLE_TEXT, _meta(), "LS")
         assert result is not None
         assert result["time_of_day"] is None
+
+
+# ── Issue 1: eparlib_date 'D-Month-YYYY' parsing ─────────────────────────────
+
+class TestEparlibDateParsing:
+    def test_date_abbreviated_month(self):
+        """'15-Mar-2023' must convert to ISO '2023-03-15'."""
+        meta = _meta(eparlib_date="15-Mar-2023")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["date"] == "2023-03-15"
+
+    def test_date_full_month_name(self):
+        """'15-March-2023' must convert to ISO '2023-03-15'."""
+        meta = _meta(eparlib_date="15-March-2023")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["date"] == "2023-03-15"
+
+    def test_date_iso_passthrough(self):
+        """ISO '2023-03-15' must be returned unchanged."""
+        meta = _meta(eparlib_date="2023-03-15")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["date"] == "2023-03-15"
+
+    def test_date_single_digit_day(self):
+        """'1-Jan-2020' (single-digit day) must convert to ISO '2020-01-01'."""
+        meta = _meta(eparlib_date="1-Jan-2020")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["date"] == "2020-01-01"
+
+    def test_unrecognised_date_format_returns_none(self):
+        """'March 15, 2023' is not a recognised format; date must be None."""
+        meta = _meta(eparlib_date="March 15, 2023")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["date"] is None
+
+
+# ── Issue 2: Roman numeral session_number ────────────────────────────────────
+
+class TestRomanNumeralSessionNumber:
+    def test_roman_viii(self):
+        """'VIII' must convert to session_number=8."""
+        meta = _meta(eparlib_session_number="VIII")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["session_number"] == 8
+
+    def test_roman_i(self):
+        meta = _meta(eparlib_session_number="I")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["session_number"] == 1
+
+    def test_roman_xvii(self):
+        meta = _meta(eparlib_session_number="XVII")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["session_number"] == 17
+
+    def test_roman_lowercase(self):
+        """Roman numeral lookup is case-insensitive."""
+        meta = _meta(eparlib_session_number="viii")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["session_number"] == 8
+
+    def test_numeric_string_still_works(self):
+        meta = _meta(eparlib_session_number="261")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["session_number"] == 261
+
+    def test_unrecognised_session_number_returns_none(self):
+        """An unrecognised Roman numeral (e.g. 'XXX') returns None."""
+        meta = _meta(eparlib_session_number="XXX")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["session_number"] is None
+
+
+# ── Issue 3: eparlib_question_type → proceeding_type ─────────────────────────
+
+class TestEparlibQuestionType:
+    def test_unstarred_type_field(self):
+        """eparlib_question_type='Unstarred' → 'unstarred_question'."""
+        meta = _meta(eparlib_question_type="Unstarred", eparlib_title="Lok Sabha Debates")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["proceeding_type"] == "unstarred_question"
+
+    def test_starred_type_field(self):
+        """eparlib_question_type='Starred' → 'starred_question'."""
+        meta = _meta(eparlib_question_type="Starred", eparlib_title="Lok Sabha Debates")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["proceeding_type"] == "starred_question"
+
+    def test_eparlib_type_takes_precedence_over_title(self):
+        """When eparlib_question_type is set it overrides the title-based inference."""
+        meta = _meta(eparlib_question_type="Starred", eparlib_title="Unstarred Questions")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["proceeding_type"] == "starred_question"
+
+    def test_title_fallback_when_no_type_field(self):
+        """Without eparlib_question_type, title inference is used as fallback."""
+        meta = _meta(eparlib_title="Starred Questions")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["proceeding_type"] == "starred_question"
+
+    def test_type_field_case_insensitive(self):
+        """'unstarred' and 'UNSTARRED' both map correctly."""
+        meta = _meta(eparlib_question_type="UNSTARRED")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["proceeding_type"] == "unstarred_question"
+
+
+# ── Issue 7: question_number, questioner_names, ministry ─────────────────────
+
+class TestEparlibQAMetadataFields:
+    def test_question_number_from_metadata(self):
+        """eparlib_question_number='42' → question_number=42 (int)."""
+        meta = _meta(eparlib_question_number="42")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["question_number"] == 42
+        assert isinstance(result["question_number"], int)
+
+    def test_question_number_absent_is_none(self):
+        result = parse_ia_text(_SAMPLE_TEXT, _meta(), "LS")
+        assert result is not None
+        assert result["question_number"] is None
+
+    def test_questioner_names_from_comma_string(self):
+        """eparlib_members as comma-separated string → list of names."""
+        meta = _meta(eparlib_members="Shri A Kumar, Shri B Singh")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["questioner_names"] == ["Shri A Kumar", "Shri B Singh"]
+
+    def test_questioner_names_from_list(self):
+        """eparlib_members as list → all elements returned."""
+        meta = _meta(eparlib_members=["Shri A Kumar", "Shri B Singh", "Shri C Rao"])
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["questioner_names"] == ["Shri A Kumar", "Shri B Singh", "Shri C Rao"]
+
+    def test_questioner_names_single_member(self):
+        """Single member string (no comma) → list with one element."""
+        meta = _meta(eparlib_members="Shri Ram Kumar")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["questioner_names"] == ["Shri Ram Kumar"]
+
+    def test_questioner_names_empty_when_absent(self):
+        """Without eparlib_members, questioner_names is an empty list."""
+        result = parse_ia_text(_SAMPLE_TEXT, _meta(), "LS")
+        assert result is not None
+        assert result["questioner_names"] == []
+
+    def test_ministry_from_metadata(self):
+        """eparlib_relation_ministry is propagated as 'ministry'."""
+        meta = _meta(eparlib_relation_ministry="Ministry of Finance")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["ministry"] == "Ministry of Finance"
+
+    def test_ministry_absent_is_none(self):
+        result = parse_ia_text(_SAMPLE_TEXT, _meta(), "LS")
+        assert result is not None
+        assert result["ministry"] is None

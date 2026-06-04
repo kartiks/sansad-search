@@ -363,3 +363,127 @@ class TestCoidHtmlProviderFetch:
         )
         result = await provider.fetch(self._make_doc_ref())
         assert result is None
+
+
+# ── Date filtering in discover() ─────────────────────────────────────────────
+
+class TestCoidHtmlProviderDateFilter:
+    """date_from / date_to constructor params filter day URLs in discover()."""
+
+    def _make_single_volume_client(self, day_urls: list[str]) -> AsyncMock:
+        """Build a client that returns a one-volume index and a volume page with the given day URLs."""
+        vol_url = f"{COI_BASE}/debates/volume-1/"
+        index_html = f'<html><body><a href="{vol_url}">Vol 1</a></body></html>'
+        day_links = "".join(f'<a href="{u}">Day</a>' for u in day_urls)
+        volume_html = f"<html><body>{day_links}</body></html>"
+        index_resp = MagicMock(status_code=200, text=index_html)
+        volume_resp = MagicMock(status_code=200, text=volume_html)
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [index_resp, volume_resp]
+        return client
+
+    async def test_date_from_excludes_urls_before_bound(self):
+        """discover() with date_from excludes day URLs whose date is before the bound."""
+        day_urls = [
+            f"{COI_BASE}/debates/09-dec-1946/",   # 1946-12-09 — before bound
+            f"{COI_BASE}/debates/14-aug-1947/",   # 1947-08-14 — on/after bound
+        ]
+        client = self._make_single_volume_client(day_urls)
+        robots = RobotsChecker()
+        robots._cache[COI_BASE] = _allow_all_robots()
+
+        def vol_filter(url):
+            return "volume" in url.lower() and COI_BASE in url
+
+        provider = CoidHtmlProvider(
+            client, rate_delay=0.0, robots_checker=robots,
+            index_url=f"{COI_BASE}/historical-constitution/debates",
+            volume_url_filter=vol_filter,
+            date_from="1947-01-01",
+        )
+        doc_refs = await provider.discover()
+
+        urls = {ref.fetch_url for ref in doc_refs}
+        assert f"{COI_BASE}/debates/09-dec-1946/" not in urls, "pre-date_from URL must be excluded"
+        assert f"{COI_BASE}/debates/14-aug-1947/" in urls, "on/after date_from URL must be included"
+
+    async def test_date_to_excludes_urls_after_bound(self):
+        """discover() with date_to excludes day URLs whose date is after the bound."""
+        day_urls = [
+            f"{COI_BASE}/debates/09-dec-1946/",   # 1946-12-09 — before bound
+            f"{COI_BASE}/debates/05-nov-1948/",   # 1948-11-05 — after bound
+        ]
+        client = self._make_single_volume_client(day_urls)
+        robots = RobotsChecker()
+        robots._cache[COI_BASE] = _allow_all_robots()
+
+        def vol_filter(url):
+            return "volume" in url.lower() and COI_BASE in url
+
+        provider = CoidHtmlProvider(
+            client, rate_delay=0.0, robots_checker=robots,
+            index_url=f"{COI_BASE}/historical-constitution/debates",
+            volume_url_filter=vol_filter,
+            date_to="1947-12-31",
+        )
+        doc_refs = await provider.discover()
+
+        urls = {ref.fetch_url for ref in doc_refs}
+        assert f"{COI_BASE}/debates/09-dec-1946/" in urls, "pre-date_to URL must be included"
+        assert f"{COI_BASE}/debates/05-nov-1948/" not in urls, "post-date_to URL must be excluded"
+
+    async def test_date_window_keeps_only_in_range_urls(self):
+        """discover() with both date_from and date_to includes only in-window URLs."""
+        day_urls = [
+            f"{COI_BASE}/debates/09-dec-1946/",   # 1946-12-09 — before window
+            f"{COI_BASE}/debates/14-aug-1947/",   # 1947-08-14 — in window
+            f"{COI_BASE}/debates/05-nov-1948/",   # 1948-11-05 — after window
+        ]
+        client = self._make_single_volume_client(day_urls)
+        robots = RobotsChecker()
+        robots._cache[COI_BASE] = _allow_all_robots()
+
+        def vol_filter(url):
+            return "volume" in url.lower() and COI_BASE in url
+
+        provider = CoidHtmlProvider(
+            client, rate_delay=0.0, robots_checker=robots,
+            index_url=f"{COI_BASE}/historical-constitution/debates",
+            volume_url_filter=vol_filter,
+            date_from="1947-01-01",
+            date_to="1947-12-31",
+        )
+        doc_refs = await provider.discover()
+
+        urls = {ref.fetch_url for ref in doc_refs}
+        assert f"{COI_BASE}/debates/09-dec-1946/" not in urls
+        assert f"{COI_BASE}/debates/14-aug-1947/" in urls
+        assert f"{COI_BASE}/debates/05-nov-1948/" not in urls
+
+    async def test_url_with_no_parseable_date_included_failsafe(self):
+        """A day URL with no parseable date slug is always included (fail-safe)."""
+        day_urls = [
+            f"{COI_BASE}/debates/opening-session/",  # no date slug
+        ]
+        client = self._make_single_volume_client(day_urls)
+        robots = RobotsChecker()
+        robots._cache[COI_BASE] = _allow_all_robots()
+
+        def vol_filter(url):
+            return "volume" in url.lower() and COI_BASE in url
+
+        def day_filter(url):
+            return "opening-session" in url
+
+        provider = CoidHtmlProvider(
+            client, rate_delay=0.0, robots_checker=robots,
+            index_url=f"{COI_BASE}/historical-constitution/debates",
+            volume_url_filter=vol_filter,
+            day_url_filter=day_filter,
+            date_from="1947-01-01",
+            date_to="1947-12-31",
+        )
+        doc_refs = await provider.discover()
+
+        urls = {ref.fetch_url for ref in doc_refs}
+        assert f"{COI_BASE}/debates/opening-session/" in urls, "no-date URL must pass through (fail-safe)"

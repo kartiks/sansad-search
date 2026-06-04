@@ -848,19 +848,19 @@ class TestMakeOrchestrator:
         client, checkpoint, indexer, names = self._commons()
         with patch.object(main_mod, "CAOrchestrator") as ca_cls:
             main_mod._make_orchestrator("ca", client, checkpoint, indexer, names)
-        ca_cls.assert_called_once_with(client, checkpoint, indexer, names)
+        ca_cls.assert_called_once_with(client, checkpoint, indexer, names, date_from=None, date_to=None)
 
     def test_ls_builds_ls_orchestrator(self):
         client, checkpoint, indexer, names = self._commons()
         with patch.object(main_mod, "LSOrchestrator") as ls_cls:
             main_mod._make_orchestrator("ls", client, checkpoint, indexer, names)
-        ls_cls.assert_called_once_with(client, checkpoint, indexer, names)
+        ls_cls.assert_called_once_with(client, checkpoint, indexer, names, date_from=None, date_to=None)
 
     def test_rs_builds_rs_orchestrator(self):
         client, checkpoint, indexer, names = self._commons()
         with patch.object(main_mod, "RSOrchestrator") as rs_cls:
             main_mod._make_orchestrator("rs", client, checkpoint, indexer, names)
-        rs_cls.assert_called_once_with(client, checkpoint, indexer, names)
+        rs_cls.assert_called_once_with(client, checkpoint, indexer, names, date_from=None, date_to=None)
 
     def test_unknown_source_raises(self):
         client, checkpoint, indexer, names = self._commons()
@@ -961,15 +961,16 @@ class TestMainStageRouting:
             date_from="2024-01-01", date_to="2024-12-31"
         )
 
-    def test_date_from_not_passed_to_run_stage1(self):
-        """--date-from only scopes Stage 2; Stage 1 ignores it."""
+    def test_date_from_passed_to_run_stage1(self):
+        """--date-from is forwarded to run_stage1 (both-stage scope fix)."""
         ca_cls, ls_cls, rs_cls = _make_stage_mock(), _make_stage_mock(), _make_stage_mock()
         _patched_stage_main(
             ["--source", "ca", "--stage", "all", "--date-from", "2024-01-01"],
             ca_cls, ls_cls, rs_cls,
         )
-        # run_stage1 takes no date args
-        ca_cls.return_value.run_stage1.assert_awaited_once_with()
+        ca_cls.return_value.run_stage1.assert_awaited_once_with(
+            date_from="2024-01-01", date_to=None
+        )
 
     def test_source_all_runs_all_three_in_order(self):
         ca_cls, ls_cls, rs_cls = _make_stage_mock(), _make_stage_mock(), _make_stage_mock()

@@ -77,19 +77,27 @@ class TestMakeOrchestrator:
         client, checkpoint, indexer, names = self._commons()
         with patch.object(main_mod, "CAOrchestrator") as ca_cls:
             main_mod._make_orchestrator("ca", client, checkpoint, indexer, names)
-        ca_cls.assert_called_once_with(client, checkpoint, indexer, names)
+        ca_cls.assert_called_once_with(client, checkpoint, indexer, names, date_from=None, date_to=None)
+
+    def test_ca_builds_ca_orchestrator_with_date_params(self) -> None:
+        client, checkpoint, indexer, names = self._commons()
+        with patch.object(main_mod, "CAOrchestrator") as ca_cls:
+            main_mod._make_orchestrator("ca", client, checkpoint, indexer, names,
+                                        date_from="2024-01-01", date_to="2024-03-31")
+        ca_cls.assert_called_once_with(client, checkpoint, indexer, names,
+                                       date_from="2024-01-01", date_to="2024-03-31")
 
     def test_ls_builds_ls_orchestrator(self) -> None:
         client, checkpoint, indexer, names = self._commons()
         with patch.object(main_mod, "LSOrchestrator") as ls_cls:
             main_mod._make_orchestrator("ls", client, checkpoint, indexer, names)
-        ls_cls.assert_called_once_with(client, checkpoint, indexer, names)
+        ls_cls.assert_called_once_with(client, checkpoint, indexer, names, date_from=None, date_to=None)
 
     def test_rs_builds_rs_orchestrator(self) -> None:
         client, checkpoint, indexer, names = self._commons()
         with patch.object(main_mod, "RSOrchestrator") as rs_cls:
             main_mod._make_orchestrator("rs", client, checkpoint, indexer, names)
-        rs_cls.assert_called_once_with(client, checkpoint, indexer, names)
+        rs_cls.assert_called_once_with(client, checkpoint, indexer, names, date_from=None, date_to=None)
 
     def test_unknown_source_raises(self) -> None:
         client, checkpoint, indexer, names = self._commons()
@@ -186,12 +194,15 @@ class TestAsyncMainOrchestration:
         ls_cls.return_value.run_stage1.assert_awaited_once()
         rs_cls.return_value.run_stage1.assert_awaited_once()
 
-    def test_stage1_called_with_no_arguments(self) -> None:
+    def test_stage1_called_with_date_params_none_by_default(self) -> None:
+        """run_stage1 always receives date_from and date_to (None when not specified)."""
         ca_cls, ls_cls, rs_cls = (
             _orchestrator_mock(), _orchestrator_mock(), _orchestrator_mock()
         )
         _patched_main(["--source", "ca"], ca_cls, ls_cls, rs_cls)
-        ca_cls.return_value.run_stage1.assert_awaited_once_with()
+        ca_cls.return_value.run_stage1.assert_awaited_once_with(
+            date_from=None, date_to=None
+        )
 
     def test_stage2_called_with_date_from_none_by_default(self) -> None:
         ca_cls, ls_cls, rs_cls = (

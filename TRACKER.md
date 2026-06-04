@@ -1,7 +1,7 @@
 # Project Tracker
 
 PRD version at last update: v2.0
-Last updated: 2026-06-03 (post-build bug fixes: back-button navigation + Meilisearch sort ranking rules)
+Last updated: 2026-06-04 (ad-hoc fix: date_from/date_to filtering in Stage 1 — both flags now scope Stage 1 and Stage 2; date_to threaded into provider discovery; 35 new tests; 1000 passing)
 
 ## Lifecycle Status
 

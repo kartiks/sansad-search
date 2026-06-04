@@ -383,3 +383,164 @@ class TestEnumerateIaSearch:
         doc_url = results[0].get("eparlib_document_url", "")
         assert "archive.org" not in doc_url
         assert "eparlib.sansad.in" in doc_url
+
+    @pytest.mark.asyncio
+    async def test_date_to_only_appends_upper_bound_to_query(self):
+        """date_to alone appends AND date:[* TO {date_to}] to the Lucene query."""
+        captured_url: list[str] = []
+
+        async def fetch_mock(client_, url, **kwargs):
+            captured_url.append(url)
+            return _mock_json_response({"response": {"docs": []}})
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("ingest.sources._discovery.fetch_with_retry", fetch_mock)
+            await enumerate_ia_search(
+                client, "identifier:(eparlib.nic.in*)", date_to="2024-03-31"
+            )
+
+        assert captured_url, "no request was made"
+        assert "date:%5B*+TO+2024-03-31%5D" in captured_url[0] or "date:[* TO 2024-03-31]" in captured_url[0], (
+            f"expected date_to in query, got URL: {captured_url[0]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_date_from_and_date_to_combined_in_query(self):
+        """Both date_from and date_to produce AND date:[{from} TO {to}] in the Lucene query."""
+        captured_url: list[str] = []
+
+        async def fetch_mock(client_, url, **kwargs):
+            captured_url.append(url)
+            return _mock_json_response({"response": {"docs": []}})
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("ingest.sources._discovery.fetch_with_retry", fetch_mock)
+            await enumerate_ia_search(
+                client,
+                "identifier:(eparlib.nic.in*)",
+                date_from="2024-01-01",
+                date_to="2024-03-31",
+            )
+
+        assert captured_url, "no request was made"
+        url = captured_url[0]
+        # The Lucene clause should use a closed range [from TO to], not open [from TO *]
+        assert "TO+*" not in url and "TO *" not in url, (
+            f"expected closed range, but got open range in URL: {url}"
+        )
+        assert "2024-01-01" in url and "2024-03-31" in url, (
+            f"expected both dates in query URL: {url}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_date_to_excludes_items_past_bound(self):
+        """paginate_dspace_browse with date_to must exclude items dated after the bound."""
+        html = """
+        <html><body>
+          <table>
+            <tr>
+              <td><a href="/handle/123456789/100">Item Jan 2024</a></td>
+              <td>2024-01-15</td>
+            </tr>
+            <tr>
+              <td><a href="/handle/123456789/200">Item May 2024</a></td>
+              <td>2024-05-20</td>
+            </tr>
+          </table>
+        </body></html>
+        """
+        client = AsyncMock(spec=httpx.AsyncClient)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("ingest.sources._discovery.fetch_with_retry",
+                       AsyncMock(return_value=_mock_response(html)))
+            urls = await paginate_dspace_browse(
+                client,
+                "https://eparlib.sansad.in/browse",
+                date_to="2024-03-31",
+                rpp=20,
+            )
+        assert any("/100" in u for u in urls), "in-scope Jan item must be included"
+        assert not any("/200" in u for u in urls), "May item past date_to must be excluded"
+
+    @pytest.mark.asyncio
+    async def test_date_to_pagination_breaks_early_when_all_items_past_bound(self):
+        """When every item on a page exceeds date_to, pagination stops without fetching more pages."""
+        # All items on the page are past date_to=2024-03-31
+        html_page1 = """
+        <html><body>
+          <table>
+            <tr><td><a href="/handle/123456789/10">Item A</a></td><td>2024-05-01</td></tr>
+            <tr><td><a href="/handle/123456789/11">Item B</a></td><td>2024-06-01</td></tr>
+          </table>
+        </body></html>
+        """
+        html_page2 = """
+        <html><body>
+          <table>
+            <tr><td><a href="/handle/123456789/20">Item C</a></td><td>2024-07-01</td></tr>
+            <tr><td><a href="/handle/123456789/21">Item D</a></td><td>2024-08-01</td></tr>
+          </table>
+        </body></html>
+        """
+        call_count = 0
+
+        async def fetch_mock(client_, url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _mock_response(html_page1 if call_count == 1 else html_page2)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("ingest.sources._discovery.fetch_with_retry", fetch_mock)
+            urls = await paginate_dspace_browse(
+                client,
+                "https://eparlib.sansad.in/browse",
+                date_to="2024-03-31",
+                rpp=2,
+            )
+
+        assert call_count == 1, "should stop after first page when all items exceed date_to"
+        assert urls == [], "no items should be returned when all are past date_to"
+
+    @pytest.mark.asyncio
+    async def test_date_to_does_not_break_early_when_page_has_mixed_dates(self):
+        """Pagination continues when a page has both in-scope and post-scope items."""
+        html_page1 = """
+        <html><body>
+          <table>
+            <tr><td><a href="/handle/123456789/1">In scope</a></td><td>2024-02-01</td></tr>
+            <tr><td><a href="/handle/123456789/2">Post scope</a></td><td>2024-05-01</td></tr>
+          </table>
+        </body></html>
+        """
+        # Page 2 returns fewer than rpp items, triggering normal stop
+        html_page2 = """
+        <html><body>
+          <table>
+            <tr><td><a href="/handle/123456789/3">Also in scope</a></td><td>2024-03-01</td></tr>
+          </table>
+        </body></html>
+        """
+        call_count = 0
+
+        async def fetch_mock(client_, url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _mock_response(html_page1 if call_count == 1 else html_page2)
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("ingest.sources._discovery.fetch_with_retry", fetch_mock)
+            urls = await paginate_dspace_browse(
+                client,
+                "https://eparlib.sansad.in/browse",
+                date_to="2024-03-31",
+                rpp=2,
+            )
+
+        assert call_count == 2, "should continue paginating when page has mixed dates"
+        assert any("/1" in u for u in urls), "in-scope item must be included"
+        assert not any("/2" in u for u in urls), "post-scope item must be excluded"
+        assert any("/3" in u for u in urls), "page 2 in-scope item must be included"

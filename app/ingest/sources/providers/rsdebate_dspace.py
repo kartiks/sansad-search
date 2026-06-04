@@ -87,11 +87,13 @@ class RsdebateDspaceProvider(Provider):
         *,
         browse_url: str = RSDEBATE_BROWSE_URL,
         date_from: str = RS_DATE_FROM,
+        date_to: str | None = None,
         rate_delay: float = DEFAULT_RATE_DELAY,
     ) -> None:
         self._client = client
         self._browse_url = browse_url
         self._date_from = date_from
+        self._date_to = date_to
         self._rate_delay = rate_delay
 
     async def discover(self) -> list[DocumentRef]:
@@ -107,6 +109,7 @@ class RsdebateDspaceProvider(Provider):
             self._client,
             self._browse_url,
             date_from=self._date_from,
+            date_to=self._date_to,
         )
 
         doc_refs: list[DocumentRef] = []

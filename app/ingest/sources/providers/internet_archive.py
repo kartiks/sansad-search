@@ -81,6 +81,7 @@ class InternetArchiveProvider(Provider):
         corpus: str = "LS",
         *,
         date_from: str = "2014-01-01",
+        date_to: str | None = None,
         rate_delay: float = DEFAULT_RATE_DELAY,
         ia_query: str | None = None,
     ) -> None:
@@ -89,6 +90,7 @@ class InternetArchiveProvider(Provider):
         self._client = client
         self._corpus = corpus
         self._date_from = date_from
+        self._date_to = date_to
         self._rate_delay = rate_delay
         self._query = ia_query or self.IA_QUERY
 
@@ -105,6 +107,7 @@ class InternetArchiveProvider(Provider):
             self._query,
             fields=_IA_SEARCH_FIELDS,
             date_from=self._date_from,
+            date_to=self._date_to,
         )
 
         doc_refs: list[DocumentRef] = []
@@ -156,6 +159,10 @@ class InternetArchiveProvider(Provider):
                         "eparlib_lok_sabha_number": _get_meta(meta, "eparlib_lok_sabha_number"),
                         "eparlib_session_number": _get_meta(meta, "eparlib_session_number"),
                         "eparlib_title": _get_meta(meta, "eparlib_title"),
+                        "eparlib_question_type": _get_meta(meta, "eparlib_question_type"),
+                        "eparlib_question_number": _get_meta(meta, "eparlib_question_number"),
+                        "eparlib_members": meta.get("eparlib_members"),  # may be a list
+                        "eparlib_relation_ministry": _get_meta(meta, "eparlib_relation_ministry"),
                         "title": _get_meta(meta, "title"),
                     },
                 )

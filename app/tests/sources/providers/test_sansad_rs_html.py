@@ -239,3 +239,56 @@ class TestDateBoundary:
         assert "2014-01-01" in dates
         assert "2013-12-31" not in dates
         assert len(doc_refs) == 1
+
+
+class TestDateToFilter:
+    """date_to constructor param excludes sittings dated after the upper bound."""
+
+    async def test_date_to_excludes_urls_past_bound(self):
+        """discover() with date_to excludes sitting URLs dated after the bound."""
+        html = (
+            "<!DOCTYPE html><html><body>"
+            '<a href="/rs/debates/officials/2024/02/15">Feb 2024</a>'
+            '<a href="/rs/debates/officials/2024/05/20">May 2024</a>'
+            "</body></html>"
+        )
+        listing_resp = MagicMock(status_code=200, text=html)
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = listing_resp
+
+        provider = SansadRsHtmlProvider(
+            client, rate_delay=0.0, robots_checker=_allow_all_robots(),
+            date_to="2024-03-31",
+        )
+        doc_refs = await provider.discover()
+
+        dates = {ref.metadata["sitting_date"] for ref in doc_refs}
+        assert "2024-02-15" in dates, "Feb sitting (before date_to) must be included"
+        assert "2024-05-20" not in dates, "May sitting (after date_to) must be excluded"
+
+    async def test_date_to_stored_as_date_object(self):
+        """date_to is stored as a datetime.date internally."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        provider = SansadRsHtmlProvider(client, date_to="2024-03-31")
+        assert provider._date_to == date(2024, 3, 31)
+
+    async def test_no_date_to_includes_all_in_scope_urls(self):
+        """Without date_to, all in-scope (post-2014) URLs are included."""
+        html = (
+            "<!DOCTYPE html><html><body>"
+            '<a href="/rs/debates/officials/2024/02/15">Feb 2024</a>'
+            '<a href="/rs/debates/officials/2025/10/01">Oct 2025</a>'
+            "</body></html>"
+        )
+        listing_resp = MagicMock(status_code=200, text=html)
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = listing_resp
+
+        provider = SansadRsHtmlProvider(
+            client, rate_delay=0.0, robots_checker=_allow_all_robots()
+        )
+        doc_refs = await provider.discover()
+
+        dates = {ref.metadata["sitting_date"] for ref in doc_refs}
+        assert "2024-02-15" in dates
+        assert "2025-10-01" in dates

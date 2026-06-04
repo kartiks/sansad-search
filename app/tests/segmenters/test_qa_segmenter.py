@@ -402,3 +402,158 @@ class TestQATimeOfDay:
         result = segment_qa(record, "LS", "starred_question")
         assert len(result) >= 1
         assert result[0]["time_of_day"] is None
+
+
+# ── IA text format fixes (issues 4–6, 8) ─────────────────────────────────────
+
+class TestIATextFormatQA:
+    """Tests for IA _djvu.txt Q&A parsing fixes."""
+
+    # Issue 4: NO:nnnn format
+    def test_question_num_no_colon_unstarred(self):
+        """'UNSTARRED QUESTION NO:458' must parse question_number=458."""
+        text = (
+            "UNSTARRED QUESTION NO:458\n\n"
+            "SHRI TEST MEMBER :\n"
+            "What is the status of MGNREGA implementation?\n\n"
+            "SHRI GIRIRAJ SINGH MINISTER OF RURAL DEVELOPMENT :\n"
+            "WRITTEN ANSWER\nMGNREGA is functioning well.\n"
+        )
+        record = _raw_record(text, proceeding_type="unstarred_question")
+        result = segment_qa(record, "LS", "unstarred_question")
+        assert len(result) >= 1
+        assert result[0]["question_number"] == 458
+
+    def test_question_num_no_colon_starred(self):
+        """'STARRED QUESTION NO:12' must parse question_number=12."""
+        text = (
+            "STARRED QUESTION NO:12\n\n"
+            "SHRI A :\nWhat is the policy on roads?\n\n"
+            "SHRI NITIN GADKARI MINISTER OF ROAD TRANSPORT :\nAnswer.\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0]["question_number"] == 12
+
+    def test_question_num_no_separator(self):
+        """'STARRED QUESTION NO42' (no separator) must still match via [.:\\s]*."""
+        text = "STARRED QUESTION NO42\n\nSHRI A :\nQ.\n\nSHRI B MINISTER :\nA.\n"
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0]["question_number"] == 42
+
+    # Issue 5: minister fallback — no trailing colon
+    def test_minister_fallback_no_trailing_colon(self):
+        """Minister line without trailing ':' must still set in_answer=True."""
+        text = (
+            "STARRED QUESTION NO. 10\n\n"
+            "SHRI QUESTIONER :\nWhat is the policy on roads?\n\n"
+            "SHRI NITIN GADKARI MINISTER OF ROAD TRANSPORT AND HIGHWAYS\n"
+            "Roads have been built across the country.\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        full_text = result[0]["full_text_en"] or ""
+        assert "roads have been built" in full_text.lower()
+
+    def test_minister_fallback_answer_text_captured(self):
+        """Text after a no-colon minister line must appear in full_text_en."""
+        text = (
+            "UNSTARRED QUESTION NO. 7\n\n"
+            "SHRI A :\nWhat is the status of health schemes?\n\n"
+            "DR MANSUKH MANDAVIYA MINISTER OF HEALTH AND FAMILY WELFARE\n"
+            "WRITTEN ANSWER\n"
+            "The government has expanded health coverage nationwide.\n"
+        )
+        record = _raw_record(text, proceeding_type="unstarred_question")
+        result = segment_qa(record, "LS", "unstarred_question")
+        assert len(result) >= 1
+        full_text = result[0]["full_text_en"] or ""
+        assert "health coverage" in full_text.lower()
+
+    # Issue 6: questioner fallback — mixed-case name without colon
+    def test_questioner_fallback_mixed_case_name(self):
+        """Mixed-case questioner name without colon is extracted via fallback."""
+        text = (
+            "UNSTARRED QUESTION NO:2345\n\n"
+            "Shri Ram Kumar\n"
+            "Will the Minister of Finance be pleased to state:\n"
+            "(a) whether the government has undertaken steps?\n\n"
+            "SHRI NIRMALA SITHARAMAN MINISTER OF FINANCE :\n"
+            "WRITTEN ANSWER\nThe government has taken steps.\n"
+        )
+        record = _raw_record(text, proceeding_type="unstarred_question")
+        result = segment_qa(record, "LS", "unstarred_question")
+        assert len(result) >= 1
+        assert "Shri Ram Kumar" in result[0]["questioner_names"]
+
+    def test_questioner_fallback_not_triggered_when_attribution_found(self):
+        """Fallback must not run when attribution colon pattern already found a name."""
+        text = (
+            "STARRED QUESTION NO. 3\n\n"
+            "SHRI PRIYANKA CHATURVEDI :\nQuestion text.\n\n"
+            "SHRI GADKARI MINISTER :\nAnswer.\n"
+        )
+        record = _raw_record(text)
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert "SHRI PRIYANKA CHATURVEDI" in result[0]["questioner_names"]
+        # Fallback must not introduce extra spurious names
+        assert "Unknown" not in result[0]["questioner_names"]
+
+    # Issue 8: seed from raw_record metadata
+    def test_seed_question_number_from_raw_record(self):
+        """question_number from raw_record is the default when text has none."""
+        text = "Some parliamentary text without a standard question marker."
+        record = _raw_record(text, question_number=99, proceeding_type="unstarred_question")
+        result = segment_qa(record, "LS", "unstarred_question")
+        assert len(result) >= 1
+        assert result[0]["question_number"] == 99
+
+    def test_seed_ministry_from_raw_record(self):
+        """ministry from raw_record is propagated to the Q+A record."""
+        text = (
+            "STARRED QUESTION NO. 5\n\n"
+            "SHRI A :\nQuestion about roads.\n\n"
+            "SHRI B MINISTER OF ROAD TRANSPORT :\nAnswer.\n"
+        )
+        record = _raw_record(text, ministry="Ministry of Road Transport and Highways")
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0]["ministry"] == "Ministry of Road Transport and Highways"
+
+    def test_seed_questioner_names_from_raw_record(self):
+        """questioner_names from raw_record is preserved in the Q+A record.
+
+        In real IA data eparlib_members and eparlib_question_number arrive
+        together, so both are seeded here to produce a non-None result.
+        """
+        text = "Some proceedings text without any attribution formatting."
+        record = _raw_record(
+            text,
+            questioner_names=["Shri Test Member"],
+            question_number=5,
+        )
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        assert result[0] is not None
+        assert "Shri Test Member" in result[0]["questioner_names"]
+
+    def test_seed_questioner_names_supplementary_added(self):
+        """Text-found supplementary questioners are appended to the seeded list."""
+        text = (
+            "STARRED QUESTION NO. 8\n\n"
+            "SHRI A :\nMain question.\n\n"
+            "SHRI B MINISTER :\nMain answer.\n\n"
+            "SHRI C :\nSupplementary question.\n\n"
+            "SHRI B MINISTER :\nSupplementary answer.\n"
+        )
+        record = _raw_record(text, questioner_names=["Shri A"])
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) >= 1
+        # Both the seeded name and the supplementary questioner should appear
+        names = result[0]["questioner_names"]
+        assert "Shri A" in names

@@ -9,35 +9,44 @@ Consumes:
     (the top-level "metadata" dict is passed in directly)
 
 Maps IA custom eparlib_* fields:
-  eparlib_document_url → source_url (canonical citation; never archive.org)
-  eparlib_date         → date
-  eparlib_session_number → session_number
+  eparlib_document_url     → source_url (canonical citation; never archive.org)
+  eparlib_date             → date (ISO; also parses 'D-Month-YYYY' / 'D-Mon-YYYY')
+  eparlib_session_number   → session_number (int or Roman numeral I–XVII)
+  eparlib_question_type    → proceeding_type ('Starred'/'Unstarred' → typed string)
+  eparlib_question_number  → question_number (int)
+  eparlib_members          → questioner_names (list; string split on comma or list)
+  eparlib_relation_ministry → ministry
   eparlib_lok_sabha_number → (ignored here; used by corpus orchestrator)
-  eparlib_title / title → subject
+  eparlib_title / title    → subject; also used for proceeding_type fallback
 
 IA metadata fields may be strings or single-element lists; _get() handles both.
+eparlib_members may be a list of strings; _get_list() returns all elements.
 
 Returns None when djvu_text has no usable content.
 
 Returned dict shape:
 {
-    "source":          "LS" | "RS",
-    "proceeding_type": str | None,
-    "date":            "YYYY-MM-DD" | None,
-    "session_name":    str | None,
-    "session_number":  int | None,
-    "sitting_number":  int | None,
-    "subject":         str | None,
-    "source_url":      str | None,   # eparlib_document_url; never archive.org
-    "page_reference":  None,         # not applicable for IA text
-    "volume":          None,         # not applicable for LS/RS
-    "raw_text":        str,
+    "source":           "LS" | "RS",
+    "proceeding_type":  str | None,
+    "date":             "YYYY-MM-DD" | None,
+    "session_name":     str | None,
+    "session_number":   int | None,
+    "sitting_number":   int | None,
+    "question_number":  int | None,
+    "questioner_names": list[str],
+    "ministry":         str | None,
+    "subject":          str | None,
+    "source_url":       str | None,   # eparlib_document_url; never archive.org
+    "page_reference":   None,         # not applicable for IA text
+    "volume":           None,         # not applicable for LS/RS
+    "raw_text":         str,
 }
 """
 from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -47,6 +56,20 @@ _PAGE_BREAK_RE = re.compile(r"(?m)\x0c|^-{4,}\s*$")
 
 # ISO date validation
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Roman numeral → integer lookup (session numbers I–XVII)
+_ROMAN_NUMERALS: dict[str, int] = {
+    "I": 1, "II": 2, "III": 3, "IV": 4, "V": 5,
+    "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10,
+    "XI": 11, "XII": 12, "XIII": 13, "XIV": 14, "XV": 15,
+    "XVI": 16, "XVII": 17,
+}
+
+# eparlib_question_type → proceeding_type
+_QUESTION_TYPE_MAP: dict[str, str] = {
+    "unstarred": "unstarred_question",
+    "starred": "starred_question",
+}
 
 # Proceeding type hints from IA/eparlib titles
 _TITLE_TYPE_MAP: list[tuple[re.Pattern, str]] = [
@@ -70,6 +93,49 @@ def _get(metadata: dict[str, Any], key: str) -> str | None:
     if isinstance(val, list):
         return val[0] if val else None
     return str(val)
+
+
+def _get_list(metadata: dict[str, Any], key: str) -> list[str]:
+    """Extract a metadata value as a list of strings.
+
+    If the value is already a list, return all non-empty elements.
+    If a string, split on comma.
+    """
+    val = metadata.get(key)
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return [str(item).strip() for item in val if str(item).strip()]
+    raw = str(val).strip()
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _parse_eparlib_date(date_str: str) -> str | None:
+    """Parse eparlib_date to ISO YYYY-MM-DD.
+
+    Accepts ISO format directly, or 'D-Mon-YYYY' / 'D-Month-YYYY' (e.g.
+    '15-Mar-2023', '15-March-2023'). Returns None for unrecognised formats.
+    """
+    if _ISO_DATE_RE.match(date_str):
+        return date_str
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
+        try:
+            return datetime.strptime(date_str.strip(), fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    logger.warning(
+        "IA metadata eparlib_date %r is not a recognised format; ignoring", date_str
+    )
+    return None
+
+
+def _infer_proceeding_type_from_type_field(question_type: str | None) -> str | None:
+    """Map eparlib_question_type to proceeding_type. None if absent or unrecognised."""
+    if not question_type:
+        return None
+    return _QUESTION_TYPE_MAP.get(question_type.strip().lower())
 
 
 def _infer_proceeding_type(title: str | None) -> str | None:
@@ -124,33 +190,53 @@ def parse_ia_text(
 
     source_url = _get(metadata, "eparlib_document_url")
 
-    date_str = _get(metadata, "eparlib_date")
-    if date_str and not _ISO_DATE_RE.match(date_str):
-        logger.warning("IA metadata eparlib_date %r is not ISO format; ignoring", date_str)
-        date_str = None
+    # Issue 1: parse 'D-Mon-YYYY' / 'D-Month-YYYY' in addition to ISO
+    date_raw = _get(metadata, "eparlib_date")
+    date_str = _parse_eparlib_date(date_raw) if date_raw else None
 
+    # Issue 2: session_number may be a Roman numeral (e.g. 'VIII')
     session_number_raw = _get(metadata, "eparlib_session_number")
     session_number: int | None = None
     if session_number_raw is not None:
         try:
             session_number = int(session_number_raw)
         except (ValueError, TypeError):
-            pass
+            session_number = _ROMAN_NUMERALS.get(session_number_raw.strip().upper())
 
     title = _get(metadata, "eparlib_title") or _get(metadata, "title")
-    proceeding_type = _infer_proceeding_type(title)
+
+    # Issue 3: eparlib_question_type takes precedence over title inference
+    question_type = _get(metadata, "eparlib_question_type")
+    proceeding_type = _infer_proceeding_type_from_type_field(question_type)
+    if proceeding_type is None:
+        proceeding_type = _infer_proceeding_type(title)
+
+    # Issue 7: extract Q&A-specific eparlib fields
+    question_number_raw = _get(metadata, "eparlib_question_number")
+    question_number: int | None = None
+    if question_number_raw is not None:
+        try:
+            question_number = int(question_number_raw)
+        except (ValueError, TypeError):
+            pass
+
+    questioner_names: list[str] = _get_list(metadata, "eparlib_members")
+    ministry: str | None = _get(metadata, "eparlib_relation_ministry")
 
     return {
         "source": source,
         "proceeding_type": proceeding_type,
         "date": date_str,
-        "session_name": None,    # resolved later by sessions.py canonicalizer
+        "session_name": None,       # resolved later by sessions.py canonicalizer
         "session_number": session_number,
-        "sitting_number": None,  # not available in IA metadata
+        "sitting_number": None,     # not available in IA metadata
+        "question_number": question_number,
+        "questioner_names": questioner_names,
+        "ministry": ministry,
         "subject": title[:500] if title else None,
         "source_url": source_url,
-        "page_reference": None,  # IA text has no page numbers
+        "page_reference": None,     # IA text has no page numbers
         "volume": None,
-        "time_of_day": None,     # IA pre-OCR text has no sitting start time
+        "time_of_day": None,        # IA pre-OCR text has no sitting start time
         "raw_text": raw_text,
     }

@@ -237,6 +237,7 @@ class RSOrchestrator:
         rate_delay: float = DEFAULT_RATE_DELAY,
         providers: Optional[list[Provider]] = None,
         date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
     ) -> None:
         self._client = client
         self._checkpoint = checkpoint
@@ -244,7 +245,12 @@ class RSOrchestrator:
         self._names_dict = names_dict or {}
         self._rate_delay = rate_delay
         self._date_from = date_from
-        _df = {"date_from": date_from} if date_from is not None else {}
+        self._date_to = date_to
+        _df: dict = {}
+        if date_from is not None:
+            _df["date_from"] = date_from
+        if date_to is not None:
+            _df["date_to"] = date_to
         self._providers: list[Provider] = providers or [
             SansadRsHtmlProvider(client, rate_delay=rate_delay, **_df),
             InternetArchiveProvider(client, corpus="RS", rate_delay=rate_delay, **_df),
@@ -261,13 +267,19 @@ class RSOrchestrator:
     def _sitting_key(self, record: dict) -> str:
         return f"RS_{record.get('date', '')}_{record.get('sitting_number')}"
 
-    async def run_stage1(self) -> dict[str, int]:
+    async def run_stage1(
+        self,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> dict[str, int]:
         """
         Stage 1: discover RS documents across the provider chain, fetch, parse,
         write to raw_documents.
 
         RS canonical-citation rule applied before writing: metadata_json["source_url"]
         is always the rsdebate.nic.in / sansad.in/rs URL (never archive.org).
+        date_from/date_to: post-parse date gate — documents outside the window
+        are counted as skipped and not written to raw_documents.
         Returns stats: fetched, skipped, errors.
         """
         stats: dict[str, int] = {"fetched": 0, "skipped": 0, "errors": 0}
@@ -294,6 +306,14 @@ class RSOrchestrator:
                 raw_record = self._parse(content, doc_ref)
                 if raw_record is None:
                     stats["errors"] += 1
+                    continue
+
+                doc_date = raw_record.get("date")
+                if date_from and doc_date and doc_date < date_from:
+                    stats["skipped"] += 1
+                    continue
+                if date_to and doc_date and doc_date > date_to:
+                    stats["skipped"] += 1
                     continue
 
                 extracted_text, metadata = _extract_stage1_fields(raw_record)
@@ -376,10 +396,14 @@ class RSOrchestrator:
         )
         return stats
 
-    async def run(self) -> dict[str, int]:
+    async def run(
+        self,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> dict[str, int]:
         """Run full RS ingestion (--stage all): Stage 1 then Stage 2."""
-        s1 = await self.run_stage1()
-        s2 = await self.run_stage2()
+        s1 = await self.run_stage1(date_from=date_from, date_to=date_to)
+        s2 = await self.run_stage2(date_from=date_from, date_to=date_to)
         return {
             "indexed": s2["indexed"],
             "skipped": s2["skipped"],

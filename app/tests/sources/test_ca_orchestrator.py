@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -545,3 +545,82 @@ class TestExtractCADateFromUrl:
 
     def test_no_trailing_slash_handled(self):
         assert self._call("https://www.constitutionofindia.net/debates/09-dec-1946") == "1946-12-09"
+
+
+# ── Stage 1 date filtering ────────────────────────────────────────────────────
+
+class TestCAStage1DateFilter:
+    """run_stage1(date_from, date_to) post-parse gate skips out-of-window docs."""
+
+    def _make_ca_ref(self, slug: str, volume: int = 1) -> DocumentRef:
+        url = f"https://www.constitutionofindia.net/debates/{slug}/"
+        return DocumentRef(
+            corpus="CA", provider="coi_html", format="html",
+            fetch_url=url, canonical_doc_id=url, citation_url=url,
+            metadata={"volume": volume},
+        )
+
+    async def test_run_stage1_skips_document_before_date_from(self):
+        """Doc whose URL-derived date < date_from is counted as skipped, not written."""
+        ref = self._make_ca_ref("09-dec-1946")  # 1946-12-09
+        provider = StubProvider([ref], {ref.fetch_url: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        stats = await orchestrator.run_stage1(date_from="1947-01-01")
+
+        try:
+            assert ref.canonical_doc_id not in indexer._raw_docs, "pre-date_from doc must not be written"
+            assert stats["fetched"] == 0
+            assert stats["skipped"] == 1
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_skips_document_after_date_to(self):
+        """Doc whose URL-derived date > date_to is counted as skipped, not written."""
+        ref = self._make_ca_ref("05-nov-1948")  # 1948-11-05
+        provider = StubProvider([ref], {ref.fetch_url: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        stats = await orchestrator.run_stage1(date_to="1947-12-31")
+
+        try:
+            assert ref.canonical_doc_id not in indexer._raw_docs, "post-date_to doc must not be written"
+            assert stats["fetched"] == 0
+            assert stats["skipped"] == 1
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_writes_in_window_skips_out_of_window(self):
+        """In-window doc is written; out-of-window doc is skipped."""
+        in_ref = self._make_ca_ref("09-dec-1946")   # 1946-12-09 — in scope
+        out_ref = self._make_ca_ref("05-nov-1948")  # 1948-11-05 — out of scope
+        provider = StubProvider(
+            [in_ref, out_ref],
+            {in_ref.fetch_url: COI_DAY_HTML, out_ref.fetch_url: COI_DAY_HTML},
+        )
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        stats = await orchestrator.run_stage1(date_from="1946-01-01", date_to="1947-06-30")
+
+        try:
+            assert in_ref.canonical_doc_id in indexer._raw_docs, "in-window doc must be written"
+            assert out_ref.canonical_doc_id not in indexer._raw_docs, "out-of-window doc must be skipped"
+            assert stats["fetched"] == 1
+            assert stats["skipped"] == 1
+        finally:
+            checkpoint.close()

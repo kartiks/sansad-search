@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from datetime import date
 from typing import Callable
 
 import httpx
@@ -29,6 +31,45 @@ COI_BASE = "https://www.constitutionofindia.net"
 #COI_INDEX_URL = f"{COI_BASE}/historical-constitution/debates"
 COI_INDEX_URL = f"{COI_BASE}/constitution-assembly-debates/"
 COI_DAY_URL_PREFIX = f"{COI_BASE}/debates/"
+
+# CA URL slug date parsing — replicated from ca.py (no shared import to avoid circular dep).
+_CA_URL_SLUG_DMY_RE = re.compile(r"^(\d{1,2})-([a-z]{3,9})-(\d{4})$", re.IGNORECASE)
+_CA_URL_SLUG_ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_CA_MONTH_ABBR = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}
+
+
+def _extract_date_from_day_url(day_url: str) -> str | None:
+    """Extract ISO date string (YYYY-MM-DD) from a constitutionofindia.net day URL slug."""
+    slug = day_url.rstrip("/").rsplit("/", 1)[-1]
+    m = _CA_URL_SLUG_DMY_RE.match(slug)
+    if m:
+        month = _CA_MONTH_ABBR.get(m.group(2).lower())
+        if month:
+            try:
+                return date(int(m.group(3)), month, int(m.group(1))).isoformat()
+            except ValueError:
+                pass
+    m = _CA_URL_SLUG_ISO_RE.match(slug)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+        except ValueError:
+            pass
+    return None
+
 
 def _default_volume_filter(url: str) -> bool:
     """Return True for volume-level pages on constitutionofindia.net."""
@@ -56,6 +97,8 @@ class CoidHtmlProvider(Provider):
         index_url: str = COI_INDEX_URL,
         volume_url_filter: Callable[[str], bool] | None = None,
         day_url_filter: Callable[[str], bool] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> None:
         self._client = client
         self._rate_delay = rate_delay
@@ -63,6 +106,8 @@ class CoidHtmlProvider(Provider):
         self._index_url = index_url
         self._volume_filter = volume_url_filter if volume_url_filter is not None else _default_volume_filter
         self._day_filter = day_url_filter if day_url_filter is not None else _default_day_filter
+        self._date_from = date.fromisoformat(date_from) if date_from else None
+        self._date_to = date.fromisoformat(date_to) if date_to else None
 
     async def discover(self) -> list[DocumentRef]:
         """
@@ -100,6 +145,15 @@ class CoidHtmlProvider(Provider):
                 if day_url in seen:
                     continue
                 seen.add(day_url)
+
+                if self._date_from or self._date_to:
+                    day_date_str = _extract_date_from_day_url(day_url)
+                    if day_date_str:
+                        if self._date_from and day_date_str < self._date_from.isoformat():
+                            continue
+                        if self._date_to and day_date_str > self._date_to.isoformat():
+                            continue
+
                 doc_refs.append(
                     DocumentRef(
                         corpus="CA",

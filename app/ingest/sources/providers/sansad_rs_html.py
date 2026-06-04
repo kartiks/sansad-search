@@ -78,6 +78,7 @@ class SansadRsHtmlProvider(Provider):
         robots_checker: RobotsChecker | None = None,
         listing_url: str = SANSAD_RS_LISTING_URL,
         date_from: str = RS_DATE_FROM,
+        date_to: str | None = None,
         sitting_url_filter: Callable[[str], bool] | None = None,
     ) -> None:
         self._client = client
@@ -85,6 +86,7 @@ class SansadRsHtmlProvider(Provider):
         self._robots = robots_checker or RobotsChecker()
         self._listing_url = listing_url
         self._date_from = date.fromisoformat(date_from)
+        self._date_to = date.fromisoformat(date_to) if date_to else None
         self._sitting_filter = (
             sitting_url_filter
             if sitting_url_filter is not None
@@ -120,7 +122,9 @@ class SansadRsHtmlProvider(Provider):
 
             doc_date = _date_from_url(url)
             if doc_date is not None and doc_date < self._date_from:
-                continue  # out of scope (pre-2014)
+                continue  # out of scope (pre-date_from)
+            if self._date_to is not None and doc_date is not None and doc_date > self._date_to:
+                continue  # out of scope (post-date_to)
 
             doc_refs.append(
                 DocumentRef(

@@ -12,8 +12,8 @@ Options:
                        fetch   — Stage 1 only: discover + fetch + parse → raw_documents
                        process — Stage 2 only: segment + index from raw_documents
                        all     — Stage 1 then Stage 2
-    --date-from      Stage 2 scope: only process raw_documents rows on/after this date
-    --date-to        Stage 2 scope: only process raw_documents rows on/before this date
+    --date-from      Both-stage scope: only fetch/process raw_documents rows on/after this date
+    --date-to        Both-stage scope: only fetch/process raw_documents rows on/before this date
     --reindex-from-db  Skip scraping; re-push all PostgreSQL records to Meilisearch
 
 Environment variables required:
@@ -90,13 +90,13 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--date-from",
         metavar="YYYY-MM-DD",
         default=None,
-        help="Stage 2 scope: process raw_documents rows on/after this date (optional)",
+        help="Both-stage scope: fetch/process raw_documents rows on/after this date (optional)",
     )
     parser.add_argument(
         "--date-to",
         metavar="YYYY-MM-DD",
         default=None,
-        help="Stage 2 scope: process raw_documents rows on/before this date (optional)",
+        help="Both-stage scope: fetch/process raw_documents rows on/before this date (optional)",
     )
     parser.add_argument(
         "--reindex-from-db",
@@ -113,14 +113,16 @@ def _make_orchestrator(
     checkpoint: CheckpointStore,
     indexer: Indexer,
     names_dict: dict[str, str],
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> Any:
     """Build the orchestrator for one source."""
     if source_name == "ca":
-        return CAOrchestrator(client, checkpoint, indexer, names_dict)
+        return CAOrchestrator(client, checkpoint, indexer, names_dict, date_from=date_from, date_to=date_to)
     if source_name == "ls":
-        return LSOrchestrator(client, checkpoint, indexer, names_dict)
+        return LSOrchestrator(client, checkpoint, indexer, names_dict, date_from=date_from, date_to=date_to)
     if source_name == "rs":
-        return RSOrchestrator(client, checkpoint, indexer, names_dict)
+        return RSOrchestrator(client, checkpoint, indexer, names_dict, date_from=date_from, date_to=date_to)
     raise ValueError(f"Unknown source: {source_name}")
 
 
@@ -163,12 +165,13 @@ async def _async_main(args: argparse.Namespace) -> int:
             for source_name in sources:
                 logger.info("=== Starting source: %s ===", source_name.upper())
                 orchestrator = _make_orchestrator(
-                    source_name, client, checkpoint, indexer, names_dict
+                    source_name, client, checkpoint, indexer, names_dict,
+                    date_from=date_from, date_to=date_to,
                 )
 
                 if stage in ("fetch", "all"):
                     logger.info("--- Stage 1 (fetch): %s ---", source_name.upper())
-                    s1 = await orchestrator.run_stage1()
+                    s1 = await orchestrator.run_stage1(date_from=date_from, date_to=date_to)
                     for k in stage1_stats:
                         stage1_stats[k] += s1.get(k, 0)
 

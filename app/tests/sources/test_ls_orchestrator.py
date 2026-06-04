@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -724,5 +724,108 @@ class TestLSSharedSequence:
             for record in indexer.indexed_records:
                 assert "lang_original" in record
                 assert record["lang_original"] in ("en", "hi", "mixed")
+        finally:
+            checkpoint.close()
+
+
+# ── Stage 1 date filtering ────────────────────────────────────────────────────
+
+class TestLSStage1DateFilter:
+    """run_stage1(date_from, date_to) post-parse gate skips out-of-window docs."""
+
+    async def test_run_stage1_skips_document_before_date_from(self):
+        """Document whose parsed date < date_from is counted as skipped, not written."""
+        early_ref = _make_ia_doc_ref("11111", date="2023-06-01")
+        provider = StubProvider([early_ref], {"11111": IA_DJVU_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        with patch.object(LSOrchestrator, "_parse", return_value={"date": "2023-06-01", "source": "LS", "proceeding_type": "debate"}):
+            orchestrator = LSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orchestrator.run_stage1(date_from="2024-01-01")
+
+        try:
+            assert "11111" not in indexer._raw_docs, "pre-date_from doc must not be written"
+            assert stats["fetched"] == 0
+            assert stats["skipped"] == 1
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_skips_document_after_date_to(self):
+        """Document whose parsed date > date_to is counted as skipped, not written."""
+        late_ref = _make_ia_doc_ref("22222", date="2024-05-01")
+        provider = StubProvider([late_ref], {"22222": IA_DJVU_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        with patch.object(LSOrchestrator, "_parse", return_value={"date": "2024-05-01", "source": "LS", "proceeding_type": "debate"}):
+            orchestrator = LSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orchestrator.run_stage1(date_to="2024-03-31")
+
+        try:
+            assert "22222" not in indexer._raw_docs, "post-date_to doc must not be written"
+            assert stats["fetched"] == 0
+            assert stats["skipped"] == 1
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_writes_in_window_and_skips_out_of_window(self):
+        """With a date window, only in-window docs are written; out-of-window are skipped."""
+        in_ref = _make_ia_doc_ref("33333", date="2024-02-15")
+        out_ref = _make_ia_doc_ref("44444", date="2024-07-01")
+        provider = StubProvider(
+            [in_ref, out_ref],
+            {"33333": IA_DJVU_TEXT, "44444": IA_DJVU_TEXT},
+            name="ia",
+        )
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        def _parse_side(content, doc_ref):
+            date_map = {"33333": "2024-02-15", "44444": "2024-07-01"}
+            return {"date": date_map[doc_ref.canonical_doc_id], "source": "LS", "proceeding_type": "debate"}
+
+        with patch.object(LSOrchestrator, "_parse", side_effect=_parse_side):
+            orchestrator = LSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orchestrator.run_stage1(date_from="2024-01-01", date_to="2024-03-31")
+
+        try:
+            assert "33333" in indexer._raw_docs, "in-window doc must be written"
+            assert "44444" not in indexer._raw_docs, "out-of-window doc must be skipped"
+            assert stats["fetched"] == 1
+            assert stats["skipped"] == 1
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_no_filter_writes_all(self):
+        """Without date_from/date_to, all documents are written regardless of date."""
+        ref = _make_ia_doc_ref("55555", date="2024-01-15")
+        provider = StubProvider([ref], {"55555": IA_DJVU_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        with patch.object(LSOrchestrator, "_parse", return_value={"date": "2024-01-15", "source": "LS", "proceeding_type": "debate"}):
+            orchestrator = LSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orchestrator.run_stage1()
+
+        try:
+            assert "55555" in indexer._raw_docs, "doc must be written when no date filter"
+            assert stats["fetched"] == 1
         finally:
             checkpoint.close()

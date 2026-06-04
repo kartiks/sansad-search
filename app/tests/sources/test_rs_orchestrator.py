@@ -570,3 +570,88 @@ class TestRSSharedSequence:
                 assert record["lang_original"] in ("en", "hi", "mixed")
         finally:
             checkpoint.close()
+
+
+# ── Stage 1 date filtering ────────────────────────────────────────────────────
+
+class TestRSStage1DateFilter:
+    """run_stage1(date_from, date_to) post-parse gate skips out-of-window docs."""
+
+    async def test_run_stage1_skips_document_before_date_from(self):
+        """Document whose parsed date < date_from is skipped, not written to raw_documents."""
+        ref = _make_ia_doc_ref("11111")
+        provider = StubProvider([ref], {"11111": _SPEECH_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        with patch("ingest.sources.rs.RSOrchestrator._parse",
+                   return_value={"date": "2023-06-01", "source": "RS", "proceeding_type": "debate", "source_url": None}):
+            orc = RSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orc.run_stage1(date_from="2024-01-01")
+
+        try:
+            assert "11111" not in indexer._raw_docs
+            assert stats["skipped"] == 1
+            assert stats["fetched"] == 0
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_skips_document_after_date_to(self):
+        """Document whose parsed date > date_to is skipped, not written to raw_documents."""
+        ref = _make_ia_doc_ref("22222")
+        provider = StubProvider([ref], {"22222": _SPEECH_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        with patch("ingest.sources.rs.RSOrchestrator._parse",
+                   return_value={"date": "2024-07-01", "source": "RS", "proceeding_type": "debate", "source_url": None}):
+            orc = RSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orc.run_stage1(date_to="2024-03-31")
+
+        try:
+            assert "22222" not in indexer._raw_docs
+            assert stats["skipped"] == 1
+            assert stats["fetched"] == 0
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_writes_in_window_skips_out_of_window(self):
+        """With a date window, in-window docs are written and out-of-window are skipped."""
+        in_ref = _make_ia_doc_ref("33333")
+        out_ref = _make_ia_doc_ref("44444")
+        provider = StubProvider(
+            [in_ref, out_ref],
+            {"33333": _SPEECH_TEXT, "44444": _SPEECH_TEXT},
+            name="ia",
+        )
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        def _parse_side(content, doc_ref):
+            date_map = {"33333": "2024-02-15", "44444": "2024-07-01"}
+            return {"date": date_map[doc_ref.canonical_doc_id], "source": "RS",
+                    "proceeding_type": "debate", "source_url": doc_ref.citation_url}
+
+        with patch("ingest.sources.rs.RSOrchestrator._parse", side_effect=_parse_side):
+            orc = RSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orc.run_stage1(date_from="2024-01-01", date_to="2024-03-31")
+
+        try:
+            assert "33333" in indexer._raw_docs
+            assert "44444" not in indexer._raw_docs
+            assert stats["fetched"] == 1
+            assert stats["skipped"] == 1
+        finally:
+            checkpoint.close()

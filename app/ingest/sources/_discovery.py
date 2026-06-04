@@ -88,6 +88,7 @@ async def paginate_dspace_browse(
     browse_base_url: str,
     *,
     date_from: str | None = None,
+    date_to: str | None = None,
     rpp: int = 20,
 ) -> list[str]:
     """
@@ -96,7 +97,8 @@ async def paginate_dspace_browse(
     DSpace browse URLs follow the pattern:
       {browse_base_url}?type=dateissued&order=ASC&rpp={rpp}&offset={offset}
 
-    Pagination continues until a page returns fewer items than rpp (last page).
+    Pagination continues until a page returns fewer items than rpp (last page),
+    or until every item on a page exceeds date_to (early-break, ASC order).
 
     Args:
         client:          httpx.AsyncClient.
@@ -105,6 +107,10 @@ async def paginate_dspace_browse(
         date_from:       Optional ISO date string (YYYY-MM-DD). Item URLs
                          for items with a metadata date before this are
                          excluded (best-effort, based on page-level date text).
+        date_to:         Optional ISO date string (YYYY-MM-DD). Item URLs
+                         for items with a metadata date after this are excluded.
+                         When all items on a page exceed this bound, pagination
+                         stops early (DSpace browse is ordered ASC by date).
         rpp:             Results per page (default 20).
 
     Returns a list of absolute item-page URLs.
@@ -130,24 +136,44 @@ async def paginate_dspace_browse(
 
         # found_on_page tracks ALL items for the pagination-stop criterion;
         # accepted_on_page is the date-filtered subset added to results.
+        # all_items_past_date_to: True until an item that is NOT past date_to is found;
+        # used for the early-break optimization (DSpace browse is ASC by date).
         found_on_page: list[str] = []
         accepted_on_page: list[str] = []
+        all_items_past_date_to = True
+
         for tag in soup.find_all("a", href=True):
             href = tag["href"]
             if "/handle/" in href:
                 absolute = urljoin(base, href)
                 if absolute not in item_urls and absolute not in found_on_page:
                     found_on_page.append(absolute)
-                    if date_from is not None:
+
+                    # Compute row_date once for both filters
+                    row_date: str | None = None
+                    if date_from is not None or date_to is not None:
                         row_date = _extract_row_date(tag)
-                        # Fail-safe: include when date is absent or unparseable.
-                        if row_date is not None and row_date < date_from:
-                            continue  # pre-scope item; count for pagination but skip
+
+                    if date_from is not None and row_date is not None and row_date < date_from:
+                        # Pre-scope: count for pagination but skip; not past date_to.
+                        all_items_past_date_to = False
+                        continue
+
+                    if date_to is not None and row_date is not None and row_date > date_to:
+                        # Post-scope: skip; item is past date_to (flag stays True).
+                        continue
+                    else:
+                        # In-scope or no parseable date (fail-safe): include.
+                        all_items_past_date_to = False
+
                     accepted_on_page.append(absolute)
 
         item_urls.extend(accepted_on_page)
 
         if len(found_on_page) < rpp:
+            break
+        # Early break: all items on this page exceeded date_to; no later page can match.
+        if date_to is not None and found_on_page and all_items_past_date_to:
             break
         offset += rpp
 
@@ -161,6 +187,7 @@ async def enumerate_ia_search(
     fields: list[str] | None = None,
     rows: int = 100,
     date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[dict]:
     """
     Enumerate all results from archive.org advancedsearch.php.
@@ -170,16 +197,22 @@ async def enumerate_ia_search(
         query:     Lucene query string, e.g. "identifier:(eparlib.nic.in*)".
         fields:    Metadata fields to return (fl[]). Defaults to ["identifier"].
         rows:      Results per page (default 100; IA maximum is 10,000).
-        date_from: Optional ISO date string; filters on IA date metadata
-                   (added to the query as AND date:[{date_from} TO *]).
+        date_from: Optional ISO date string; filters on IA date metadata.
+        date_to:   Optional ISO date string; upper bound for IA date metadata.
+                   Combined with date_from: AND date:[{from} TO {to}].
+                   Alone: AND date:[* TO {date_to}].
 
     Returns a list of result dicts, each containing the requested fields.
     """
     if fields is None:
         fields = ["identifier"]
 
-    if date_from:
+    if date_from and date_to:
+        query = f"{query} AND date:[{date_from} TO {date_to}]"
+    elif date_from:
         query = f"{query} AND date:[{date_from} TO *]"
+    elif date_to:
+        query = f"{query} AND date:[* TO {date_to}]"
 
     all_results: list[dict] = []
     page = 1
