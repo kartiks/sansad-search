@@ -67,6 +67,12 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 - A speech record that follows a new section header in document order must not retain the `subject` value from the previous section header
 - The first speech record in a sitting where no bold section header precedes it must have `subject` set to the text of the first item in the sitting page's TOC `<ul>`; it must not be null, empty, or set to a section header from later in the page
 
+## Stage 1 Date Window Gate
+
+- A document dated exactly on `date_from` must be written to `raw_documents`; a document dated one day before `date_from` must not be written
+- A document dated exactly on `date_to` must be written to `raw_documents`; a document dated one day after `date_to` must not be written
+- When neither `--date-from` nor `--date-to` is specified, Stage 1 must write all discovered documents to `raw_documents` regardless of date
+
 ## Progress Log Integrity
 
 - The completion summary record count must match the actual number of records retrievable from the search index after ingestion completes

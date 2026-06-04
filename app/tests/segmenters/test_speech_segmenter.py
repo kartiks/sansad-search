@@ -210,6 +210,26 @@ class TestSegmentSpeeches:
         assert s["proceeding_type"] == "debate"
         assert s["subject"] == "General Discussion"
 
+    def test_proceeding_type_none_falls_back_to_debate(self):
+        # ia_text_parser sets proceeding_type=None when no type is derivable;
+        # dict.get(key, default) does not fire for None values, so the fallback
+        # must use `or "debate"` to avoid propagating None to the NOT NULL column.
+        text = "SHRI NARENDRA MODI :\nSpeech text.\n"
+        record = _raw_record(text, proceeding_type=None)
+        result = segment_speeches(record, "LS")
+        assert result[0]["proceeding_type"] == "debate"
+
+    def test_proceeding_type_none_falls_back_to_debate_ca_path(self):
+        # Same None guard applies in _segment_ca_speeches (used by CA orchestrator).
+        record = _raw_record(
+            "",
+            source="CA",
+            proceeding_type=None,
+            ca_speech_pairs=[("DR. B. R. AMBEDKAR", "I move the Constitution.", "Constituent Assembly")],
+        )
+        result = segment_speeches(record, "CA")
+        assert result[0]["proceeding_type"] == "debate"
+
     def test_ca_source_preserved(self):
         text = "DR. B. R. AMBEDKAR :\nI move the Constitution.\n"
         record = _raw_record(text, source="CA", volume=1, session_name=None)

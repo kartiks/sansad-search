@@ -4,10 +4,53 @@
 
 The ingestion pipeline fetches, parses, segments, and indexes parliamentary records from three sources: Constituent Assembly debates, Lok Sabha records, and Rajya Sabha records. In v1 it is a one-time bulk operation. It must be resumable: an interrupted run continues from the last successful document checkpoint without reprocessing already-indexed records or creating duplicates.
 
+The pipeline is implemented as a two-stage process. Stage 1 (fetch) downloads source documents and writes raw content to a `raw_documents` store. Stage 2 (process) reads from that store and produces indexed `speeches`/`qa_exchanges` records. The two stages can be run together or independently via the `--stage` flag.
+
+## Two-Stage Pipeline
+
+### Stage control
+
+| `--stage` value | Behavior |
+|-----------------|----------|
+| `fetch` | Stage 1 only: discover and download source documents; write to `raw_documents` |
+| `process` | Stage 2 only: read from `raw_documents`; parse, segment, and index |
+| `all` | Stage 1 then Stage 2 sequentially for each source (default) |
+
+### Stage 1 (fetch) flow
+
+1. Discover documents for the selected corpus(es)
+2. Check `raw_documents` PK for each `canonical_doc_id`; skip if already present
+3. Fetch new documents from source with rate limiting
+4. Extract text and metadata
+5. Apply date-window gate when `--date-from`/`--date-to` are provided: write to `raw_documents` only if the document's date falls within the window; skip out-of-window documents
+6. Write raw content (extracted text + metadata JSON) to `raw_documents`
+
+Stage 1 does not write to `speeches`, `qa_exchanges`, or the SQLite checkpoint store. It does not update `index_status`.
+
+### Stage 2 (process) flow
+
+1. Read `raw_documents` rows for the selected corpus; apply `--date-from`/`--date-to` window if provided
+2. Skip documents already checkpointed as processed in the SQLite `processed_documents` store
+3. Segment each document into speech and Q+A exchange units
+4. Canonicalize speaker names and session names
+5. Index each unit into `speeches`/`qa_exchanges`
+6. Checkpoint the document in `processed_documents` after all its records are successfully indexed
+
+`index_status` is updated only at the end of Stage 2, not at the end of Stage 1.
+
+### Date filtering
+
+`--date-from YYYY-MM-DD` and `--date-to YYYY-MM-DD` scope both stages:
+
+- **Stage 1:** only documents whose parsed date falls within the window are written to `raw_documents`; out-of-window documents are skipped after parsing
+- **Stage 2:** only `raw_documents` rows with dates within the window are read and processed
+
+When neither flag is provided, both stages operate on the full corpus without date restriction.
+
 ## User Flows
 
 **Initial bulk ingestion:**
-1. Operator runs ingestion with a source selector (CA | LS | RS | all) and optional date override
+1. Operator runs ingestion with a source selector (CA | LS | RS | all), `--stage fetch|process|all` (default `all`), and optional `--date-from`/`--date-to` to restrict the date window applied to both stages
 2. System enumerates all records in scope for the specified source(s) — building a list of documents/pages to fetch
 3. System fetches each document with rate limiting and robots.txt compliance
 4. System parses fetched content (HTML or PDF) to extract text and metadata
@@ -182,6 +225,11 @@ When the same proceeding is available as both HTML and PDF from the source site,
 - Re-running ingestion on a fully indexed corpus produces zero new records and zero duplicate records
 - Progress log is written in real time; a completion summary is printed at the end
 - Ingestion can be scoped to a single source (CA only, LS only, RS only) for targeted re-runs
+- `--stage fetch` writes raw content to `raw_documents` without producing any `speeches` or `qa_exchanges` records
+- `--stage process` reads from `raw_documents` and produces indexed records without fetching from source
+- Re-running Stage 1 against an already-fetched corpus writes zero new `raw_documents` rows (PK dedup skips all)
+- `--stage fetch --date-from X --date-to Y` writes only documents with dates within that range to `raw_documents`; documents outside the window are skipped after parsing
+- `--stage all --date-from X --date-to Y` produces `speeches`/`qa_exchanges` records only for dates within the specified range
 
 ## Edge Cases
 

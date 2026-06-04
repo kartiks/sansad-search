@@ -172,6 +172,7 @@ class Indexer:
             logger.warning(
                 "PG insert failed for dedup_key=%s: %s; skipping", dedup_key, exc
             )
+            self._pg.rollback()
             return False
 
         if not inserted:

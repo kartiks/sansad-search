@@ -309,6 +309,54 @@ class TestIndexerIndexRecord:
 
         assert result is True
 
+    def test_pg_insert_failure_calls_rollback(self, tmp_path):
+        # When cursor.execute raises (e.g. NOT NULL constraint from proceeding_type=None
+        # hitting the DB), rollback() must be called so subsequent inserts on the same
+        # connection are not aborted by a lingering failed transaction.
+        cursor = MagicMock()
+        cursor.execute.side_effect = Exception("NOT NULL constraint violation")
+        pg = MagicMock()
+        pg.cursor.return_value = cursor
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record()
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            result = indexer.index_record(record, cp)
+
+        assert result is False
+        pg.rollback.assert_called_once()
+
+    def test_subsequent_insert_succeeds_after_failed_insert(self, tmp_path):
+        # After a failed insert (which triggers rollback), the next record must be
+        # indexed successfully — verifies there is no cascade-abort on the connection.
+        call_count = 0
+
+        def execute_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("simulated constraint error")
+            # subsequent calls succeed (default MagicMock behaviour)
+
+        cursor = MagicMock()
+        cursor.execute.side_effect = execute_side_effect
+        cursor.fetchone.return_value = ("uuid-second",)
+        pg = MagicMock()
+        pg.cursor.return_value = cursor
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+
+        r1 = _make_speech_record(sequence_within_sitting=1)
+        r2 = _make_speech_record(sequence_within_sitting=2)
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            result1 = indexer.index_record(r1, cp)
+            result2 = indexer.index_record(r2, cp)
+
+        assert result1 is False   # first record failed
+        assert result2 is True    # second record indexed despite prior failure
+        pg.rollback.assert_called_once()  # rollback called exactly once (after failure)
 
 
 class TestIndexerFlush:

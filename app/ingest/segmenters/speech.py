@@ -257,7 +257,7 @@ def segment_speeches(
 
         speech: dict[str, Any] = {
             "source": source,
-            "proceeding_type": raw_record.get("proceeding_type", "debate"),
+            "proceeding_type": raw_record.get("proceeding_type") or "debate",
             "date": raw_record.get("date"),
             "session_name": raw_record.get("session_name"),
             "session_number": raw_record.get("session_number"),
@@ -307,7 +307,7 @@ def _segment_ca_speeches(
 
         speech: dict[str, Any] = {
             "source": raw_record.get("source", "CA"),
-            "proceeding_type": raw_record.get("proceeding_type", "debate"),
+            "proceeding_type": raw_record.get("proceeding_type") or "debate",
             "date": raw_record.get("date"),
             "session_name": None,
             "session_number": None,

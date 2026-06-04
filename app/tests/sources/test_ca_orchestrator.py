@@ -624,3 +624,43 @@ class TestCAStage1DateFilter:
             assert stats["skipped"] == 1
         finally:
             checkpoint.close()
+
+    async def test_run_stage1_writes_document_on_exact_date_from(self):
+        """Doc whose URL-derived date == date_from (inclusive lower bound) must be written."""
+        ref = self._make_ca_ref("09-dec-1946")  # 1946-12-09 — exactly date_from
+        provider = StubProvider([ref], {ref.fetch_url: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        stats = await orchestrator.run_stage1(date_from="1946-12-09")
+
+        try:
+            assert ref.canonical_doc_id in indexer._raw_docs, "doc on exact date_from must be written (>= not >)"
+            assert stats["fetched"] == 1
+            assert stats["skipped"] == 0
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_writes_document_on_exact_date_to(self):
+        """Doc whose URL-derived date == date_to (inclusive upper bound) must be written."""
+        ref = self._make_ca_ref("05-nov-1948")  # 1948-11-05 — exactly date_to
+        provider = StubProvider([ref], {ref.fetch_url: COI_DAY_HTML})
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = CAOrchestrator(
+            client=client, checkpoint=checkpoint, indexer=indexer, provider=provider
+        )
+        stats = await orchestrator.run_stage1(date_to="1948-11-05")
+
+        try:
+            assert ref.canonical_doc_id in indexer._raw_docs, "doc on exact date_to must be written (<= not <)"
+            assert stats["fetched"] == 1
+            assert stats["skipped"] == 0
+        finally:
+            checkpoint.close()

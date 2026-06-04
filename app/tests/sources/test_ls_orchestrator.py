@@ -809,6 +809,50 @@ class TestLSStage1DateFilter:
         finally:
             checkpoint.close()
 
+    async def test_run_stage1_writes_document_on_exact_date_from(self):
+        """Doc whose parsed date == date_from (inclusive lower bound) must be written."""
+        ref = _make_ia_doc_ref("66666", date="2024-01-01")
+        provider = StubProvider([ref], {"66666": IA_DJVU_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        with patch.object(LSOrchestrator, "_parse", return_value={"date": "2024-01-01", "source": "LS", "proceeding_type": "debate"}):
+            orchestrator = LSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orchestrator.run_stage1(date_from="2024-01-01")
+
+        try:
+            assert "66666" in indexer._raw_docs, "doc on exact date_from must be written (>= not >)"
+            assert stats["fetched"] == 1
+            assert stats["skipped"] == 0
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_writes_document_on_exact_date_to(self):
+        """Doc whose parsed date == date_to (inclusive upper bound) must be written."""
+        ref = _make_ia_doc_ref("77777", date="2024-03-31")
+        provider = StubProvider([ref], {"77777": IA_DJVU_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        with patch.object(LSOrchestrator, "_parse", return_value={"date": "2024-03-31", "source": "LS", "proceeding_type": "debate"}):
+            orchestrator = LSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orchestrator.run_stage1(date_to="2024-03-31")
+
+        try:
+            assert "77777" in indexer._raw_docs, "doc on exact date_to must be written (<= not <)"
+            assert stats["fetched"] == 1
+            assert stats["skipped"] == 0
+        finally:
+            checkpoint.close()
+
     async def test_run_stage1_no_filter_writes_all(self):
         """Without date_from/date_to, all documents are written regardless of date."""
         ref = _make_ia_doc_ref("55555", date="2024-01-15")

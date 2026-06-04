@@ -655,3 +655,49 @@ class TestRSStage1DateFilter:
             assert stats["skipped"] == 1
         finally:
             checkpoint.close()
+
+    async def test_run_stage1_writes_document_on_exact_date_from(self):
+        """Doc whose parsed date == date_from (inclusive lower bound) must be written."""
+        ref = _make_ia_doc_ref("55555")
+        provider = StubProvider([ref], {"55555": _SPEECH_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        with patch("ingest.sources.rs.RSOrchestrator._parse",
+                   return_value={"date": "2024-01-01", "source": "RS", "proceeding_type": "debate", "source_url": None}):
+            orc = RSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orc.run_stage1(date_from="2024-01-01")
+
+        try:
+            assert "55555" in indexer._raw_docs, "doc on exact date_from must be written (>= not >)"
+            assert stats["fetched"] == 1
+            assert stats["skipped"] == 0
+        finally:
+            checkpoint.close()
+
+    async def test_run_stage1_writes_document_on_exact_date_to(self):
+        """Doc whose parsed date == date_to (inclusive upper bound) must be written."""
+        ref = _make_ia_doc_ref("66666")
+        provider = StubProvider([ref], {"66666": _SPEECH_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        with patch("ingest.sources.rs.RSOrchestrator._parse",
+                   return_value={"date": "2024-03-31", "source": "RS", "proceeding_type": "debate", "source_url": None}):
+            orc = RSOrchestrator(
+                client=client, checkpoint=checkpoint, indexer=indexer, providers=[provider]
+            )
+            stats = await orc.run_stage1(date_to="2024-03-31")
+
+        try:
+            assert "66666" in indexer._raw_docs, "doc on exact date_to must be written (<= not <)"
+            assert stats["fetched"] == 1
+            assert stats["skipped"] == 0
+        finally:
+            checkpoint.close()
