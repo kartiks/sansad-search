@@ -1,5 +1,5 @@
 """
-Provider contract and DocumentRef dataclass for the ingestion pipeline.
+Provider contract, DocumentRef dataclass, and shared pipeline helpers.
 
 Each corpus is served by an ordered chain of providers. The corpus orchestrator
 (ca.py, ls.py, rs.py) tries providers in order and uses the first that yields
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -75,3 +75,15 @@ class Provider(ABC):
             str for HTML documents (format="html") and IA text (format="ia_text")
             None if the fetch fails and the document should be skipped
         """
+
+
+def extract_stage1_fields(raw_record: dict) -> tuple[Optional[str], dict]:
+    """Split a parser-output raw_record into (extracted_text, metadata_json).
+
+    extracted_text is the raw_text field consumed by segmenters in Stage 2.
+    metadata_json contains all other fields needed to reconstruct the raw_record,
+    minus raw_html (large, not used by segmenters).
+    """
+    extracted_text = raw_record.get("raw_text")
+    metadata = {k: v for k, v in raw_record.items() if k not in ("raw_text", "raw_html")}
+    return extracted_text, metadata

@@ -16,15 +16,21 @@ def store(tmp_path):
 
 class TestDocumentTracking:
     def test_document_not_processed_initially(self, store):
-        assert store.is_document_processed("12345") is False
+        assert store.is_document_processed("12345", "LS") is False
 
     def test_document_processed_after_mark(self, store):
         store.mark_document_processed("12345", corpus="LS", provider="internet_archive")
-        assert store.is_document_processed("12345") is True
+        assert store.is_document_processed("12345", "LS") is True
 
     def test_other_document_not_affected(self, store):
         store.mark_document_processed("12345", corpus="LS")
-        assert store.is_document_processed("99999") is False
+        assert store.is_document_processed("99999", "LS") is False
+
+    def test_cross_corpus_isolation(self, store):
+        """LS processing of handle N must not suppress RS processing of the same handle N."""
+        store.mark_document_processed("12345", corpus="LS")
+        assert store.is_document_processed("12345", "LS") is True
+        assert store.is_document_processed("12345", "RS") is False
 
     def test_processed_document_count(self, store):
         store.mark_document_processed("11111", corpus="LS")
@@ -59,15 +65,15 @@ class TestDocumentTracking:
         """CA uses the day-URL as canonical_doc_id (single provider, no handle number)."""
         doc_id = "https://www.constitutionofindia.net/debates/volume1/1946-12-09"
         store.mark_document_processed(doc_id, corpus="CA", provider="coi_html")
-        assert store.is_document_processed(doc_id) is True
+        assert store.is_document_processed(doc_id, "CA") is True
 
     def test_ls_rs_handle_number_as_canonical_doc_id(self, store):
         """LS/RS use the DSpace handle number N as canonical_doc_id."""
         store.mark_document_processed("67890", corpus="LS", provider="eparlib_dspace",
                                        fetch_url="https://eparlib.sansad.in/handle/123456789/67890")
-        assert store.is_document_processed("67890") is True
+        assert store.is_document_processed("67890", "LS") is True
         # A different handle is not affected
-        assert store.is_document_processed("11111") is False
+        assert store.is_document_processed("11111", "LS") is False
 
 
 class TestDedupKeyTracking:
@@ -107,7 +113,7 @@ class TestResumability:
             s.add_dedup_key(key)
 
         with CheckpointStore(db_path) as s:
-            assert s.is_document_processed(doc_id) is True
+            assert s.is_document_processed(doc_id, "LS") is True
             assert s.has_dedup_key(key) is True
 
     def test_checkpoint_used_to_skip_on_resume(self, tmp_path):
@@ -120,12 +126,12 @@ class TestResumability:
         key = "LS_2023_5_debate_test_1"
 
         with CheckpointStore(db_path) as s:
-            assert not s.is_document_processed(doc_id)
+            assert not s.is_document_processed(doc_id, "LS")
             s.add_dedup_key(key)
             s.mark_document_processed(doc_id, corpus="LS", provider="internet_archive")
 
         with CheckpointStore(db_path) as s:
-            assert s.is_document_processed(doc_id) is True
+            assert s.is_document_processed(doc_id, "LS") is True
             assert s.has_dedup_key(key) is True
 
     def test_cross_provider_dedup_via_canonical_doc_id(self, tmp_path):
@@ -145,8 +151,8 @@ class TestResumability:
             )
 
         with CheckpointStore(db_path) as s:
-            # DSpace fallback would use the same canonical_doc_id
-            assert s.is_document_processed(handle_n) is True
+            # DSpace fallback would use the same canonical_doc_id and corpus
+            assert s.is_document_processed(handle_n, "LS") is True
 
 
 class TestContextManager:
@@ -159,4 +165,4 @@ class TestContextManager:
     def test_error_without_open_raises(self, tmp_path):
         store = CheckpointStore(tmp_path / "checkpoints.db")
         with pytest.raises(RuntimeError, match="not open"):
-            store.is_document_processed("any_id")
+            store.is_document_processed("any_id", "LS")

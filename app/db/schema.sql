@@ -88,7 +88,7 @@ CREATE INDEX IF NOT EXISTS idx_qa_sitting          ON qa_exchanges(source, date,
 -- Read by Stage 2 (segment + index). One row per source document.
 
 CREATE TABLE IF NOT EXISTS raw_documents (
-    canonical_doc_id TEXT         PRIMARY KEY,
+    canonical_doc_id TEXT         NOT NULL,
     corpus           VARCHAR(2)   NOT NULL CHECK (corpus IN ('CA','LS','RS')),
     date             DATE,
     provider         VARCHAR(50)  NOT NULL,
@@ -97,7 +97,8 @@ CREATE TABLE IF NOT EXISTS raw_documents (
     metadata_json    JSONB        NOT NULL DEFAULT '{}',
     fetch_url        TEXT,
     citation_url     TEXT,
-    fetched_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    fetched_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (canonical_doc_id, corpus)
 );
 
 CREATE INDEX IF NOT EXISTS idx_raw_documents_corpus_date ON raw_documents(corpus, date);

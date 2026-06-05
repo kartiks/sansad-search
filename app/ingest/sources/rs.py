@@ -34,19 +34,12 @@ from ingest.sources._http import (
     RobotsChecker,
     fetch_with_retry,
 )
-from ingest.sources._provider import DocumentRef, Provider
+from ingest.sources._provider import DocumentRef, Provider, extract_stage1_fields
 from ingest.sources.providers.internet_archive import InternetArchiveProvider
 from ingest.sources.providers.rsdebate_dspace import RsdebateDspaceProvider
 from ingest.sources.providers.sansad_rs_html import SansadRsHtmlProvider
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_stage1_fields(raw_record: dict) -> tuple[Optional[str], dict]:
-    """Split parser output into (extracted_text, metadata_json) for Stage 1 write."""
-    extracted_text = raw_record.get("raw_text")
-    metadata = {k: v for k, v in raw_record.items() if k not in ("raw_text", "raw_html")}
-    return extracted_text, metadata
 
 
 RS_SCOPE_FROM: date = date(2014, 1, 1)
@@ -292,7 +285,7 @@ class RSOrchestrator:
             )
 
             for doc_ref in doc_refs:
-                if self._indexer.check_raw_document_exists(doc_ref.canonical_doc_id):
+                if self._indexer.check_raw_document_exists(doc_ref.canonical_doc_id, "RS"):
                     logger.debug("rs_stage1: already fetched %s; skipping", doc_ref.canonical_doc_id)
                     stats["skipped"] += 1
                     continue
@@ -316,7 +309,7 @@ class RSOrchestrator:
                     stats["skipped"] += 1
                     continue
 
-                extracted_text, metadata = _extract_stage1_fields(raw_record)
+                extracted_text, metadata = extract_stage1_fields(raw_record)
 
                 self._indexer.write_raw_document(
                     canonical_doc_id=doc_ref.canonical_doc_id,
@@ -356,7 +349,7 @@ class RSOrchestrator:
 
         for row in rows:
             canonical_doc_id = row["canonical_doc_id"]
-            if self._checkpoint.is_document_processed(canonical_doc_id):
+            if self._checkpoint.is_document_processed(canonical_doc_id, corpus="RS"):
                 logger.debug("rs_stage2: already processed %s; skipping", canonical_doc_id)
                 stats["skipped"] += 1
                 continue

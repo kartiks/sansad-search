@@ -35,14 +35,14 @@ class MockIndexer:
 
     def __init__(self):
         self.indexed_records: list[dict] = []
-        self._raw_docs: dict[str, dict] = {}  # canonical_doc_id → row
+        self._raw_docs: dict[tuple, dict] = {}  # (canonical_doc_id, corpus) → row
 
     def index_record(self, record: dict, checkpoint: CheckpointStore) -> bool:
         self.indexed_records.append(record)
         return True
 
-    def check_raw_document_exists(self, canonical_doc_id: str) -> bool:
-        return canonical_doc_id in self._raw_docs
+    def check_raw_document_exists(self, canonical_doc_id: str, corpus: str) -> bool:
+        return (canonical_doc_id, corpus) in self._raw_docs
 
     def write_raw_document(
         self,
@@ -56,12 +56,12 @@ class MockIndexer:
         fetch_url,
         citation_url,
     ) -> None:
-        if canonical_doc_id in self._raw_docs:
+        if (canonical_doc_id, corpus) in self._raw_docs:
             return  # no-op on PK conflict
         import json
         # Simulate JSON roundtrip (tuples → lists in metadata)
         meta_serialized = json.loads(json.dumps(metadata_json, default=str))
-        self._raw_docs[canonical_doc_id] = {
+        self._raw_docs[(canonical_doc_id, corpus)] = {
             "canonical_doc_id": canonical_doc_id,
             "corpus": corpus,
             "date": date,
@@ -245,7 +245,7 @@ class TestCAOrchestratorRun:
         await orchestrator.run()
 
         try:
-            assert checkpoint.is_document_processed(COI_DAY_URL)
+            assert checkpoint.is_document_processed(COI_DAY_URL, "CA")
         finally:
             checkpoint.close()
 
@@ -317,8 +317,8 @@ class TestCAOrchestratorRun:
 
         try:
             assert stats["indexed"] >= 2  # At least 1 record per document
-            assert checkpoint.is_document_processed(url1)
-            assert checkpoint.is_document_processed(url2)
+            assert checkpoint.is_document_processed(url1, "CA")
+            assert checkpoint.is_document_processed(url2, "CA")
         finally:
             checkpoint.close()
 
@@ -574,7 +574,7 @@ class TestCAStage1DateFilter:
         stats = await orchestrator.run_stage1(date_from="1947-01-01")
 
         try:
-            assert ref.canonical_doc_id not in indexer._raw_docs, "pre-date_from doc must not be written"
+            assert (ref.canonical_doc_id, "CA") not in indexer._raw_docs, "pre-date_from doc must not be written"
             assert stats["fetched"] == 0
             assert stats["skipped"] == 1
         finally:
@@ -594,7 +594,7 @@ class TestCAStage1DateFilter:
         stats = await orchestrator.run_stage1(date_to="1947-12-31")
 
         try:
-            assert ref.canonical_doc_id not in indexer._raw_docs, "post-date_to doc must not be written"
+            assert (ref.canonical_doc_id, "CA") not in indexer._raw_docs, "post-date_to doc must not be written"
             assert stats["fetched"] == 0
             assert stats["skipped"] == 1
         finally:
@@ -618,8 +618,8 @@ class TestCAStage1DateFilter:
         stats = await orchestrator.run_stage1(date_from="1946-01-01", date_to="1947-06-30")
 
         try:
-            assert in_ref.canonical_doc_id in indexer._raw_docs, "in-window doc must be written"
-            assert out_ref.canonical_doc_id not in indexer._raw_docs, "out-of-window doc must be skipped"
+            assert (in_ref.canonical_doc_id, "CA") in indexer._raw_docs, "in-window doc must be written"
+            assert (out_ref.canonical_doc_id, "CA") not in indexer._raw_docs, "out-of-window doc must be skipped"
             assert stats["fetched"] == 1
             assert stats["skipped"] == 1
         finally:
@@ -639,7 +639,7 @@ class TestCAStage1DateFilter:
         stats = await orchestrator.run_stage1(date_from="1946-12-09")
 
         try:
-            assert ref.canonical_doc_id in indexer._raw_docs, "doc on exact date_from must be written (>= not >)"
+            assert (ref.canonical_doc_id, "CA") in indexer._raw_docs, "doc on exact date_from must be written (>= not >)"
             assert stats["fetched"] == 1
             assert stats["skipped"] == 0
         finally:
@@ -659,7 +659,7 @@ class TestCAStage1DateFilter:
         stats = await orchestrator.run_stage1(date_to="1948-11-05")
 
         try:
-            assert ref.canonical_doc_id in indexer._raw_docs, "doc on exact date_to must be written (<= not <)"
+            assert (ref.canonical_doc_id, "CA") in indexer._raw_docs, "doc on exact date_to must be written (<= not <)"
             assert stats["fetched"] == 1
             assert stats["skipped"] == 0
         finally:

@@ -344,6 +344,79 @@ python -m ingest.main --source ls --stage process --date-from 2024-01-01 --date-
 
 Stage 2 reads from `raw_documents` for the given scope, re-segments, re-canonicalizes, and re-indexes. Stage 1 fetch cost is not paid again.
 
+---
+
+### 6.5 Selective corpus clear (`clear_corpus.py`)
+
+`app/scripts/clear_corpus.py` automates steps 1–3 of §6.4 (and the equivalent clearing steps from §6.1) — deleting data across PG, SQLite, and Meilisearch for a corpus and optional date range before a re-run.
+
+Either `--stage` or `--target` must be given; they are mutually exclusive.
+
+```bash
+cd app
+
+# Dry-run: print counts without deleting anything
+python scripts/clear_corpus.py --corpus ls --stage process --dry-run
+
+# Clear Stage 2 output for LS (leaves raw_documents intact — use before re-running Stage 2)
+python scripts/clear_corpus.py --corpus ls --stage process
+
+# Clear Stage 2 output for LS for a date range only
+python scripts/clear_corpus.py --corpus ls --stage process --date-from 2024-01-01 --date-to 2024-12-31
+
+# Clear all stores including raw_documents (use before re-fetching from source)
+python scripts/clear_corpus.py --corpus ls --stage fetch
+
+# Clear all corpora, Stage 2 output only
+python scripts/clear_corpus.py --corpus all --stage process
+
+# Explicit per-store control: clear only the Meilisearch index for RS
+python scripts/clear_corpus.py --corpus rs --target meili
+```
+
+**`--stage` semantics (recommended for most operations):**
+
+| `--stage` | PG tables cleared | SQLite | Meilisearch | Use when |
+|-----------|-------------------|--------|-------------|----------|
+| `process` | `speeches`, `qa_exchanges` | `processed_documents` | yes | Re-running Stage 2 from existing raw docs |
+| `fetch` | `speeches`, `qa_exchanges`, `raw_documents` | `processed_documents` | yes | Re-fetching from source (both stages re-run) |
+
+**`--target` flag (explicit per-store control):**
+
+| `--target` | What is cleared |
+|------------|----------------|
+| `pg` | `speeches`, `qa_exchanges`, `raw_documents` |
+| `sqlite` | `processed_documents` |
+| `meili` | Meilisearch documents (delete-by-filter) |
+| `all` | All three stores (same as `--stage fetch`) |
+
+**All flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--corpus` | Yes | `ca`, `ls`, `rs`, or `all` |
+| `--stage` | One of these two | `fetch` or `process` — stage-based preset (mutually exclusive with `--target`) |
+| `--target` | One of these two | `pg`, `sqlite`, `meili`, or `all` — explicit per-store control |
+| `--date-from` | No | Clear records from this date (inclusive, YYYY-MM-DD) |
+| `--date-to` | No | Clear records up to this date (inclusive, YYYY-MM-DD) |
+| `--dry-run` | No | Report counts without deleting anything |
+
+**SQLite date-scoped delete:** when `--date-from`/`--date-to` are given, the script resolves the affected `canonical_doc_ids` from PG `raw_documents` first, then deletes those rows from `processed_documents`. This lookup always happens before any PG deletions so `--stage fetch` (which clears `raw_documents`) does not produce an empty SQLite result.
+
+**Meilisearch:** uses the delete-by-filter API (`POST /indexes/parliamentary_records/documents/delete`) and polls the returned `taskUid` until the task succeeds.
+
+**Environment variables required (per store):**
+
+| Variable | Required for |
+|----------|-------------|
+| `DATABASE_URL` | `pg`; also `sqlite` when `--date-from`/`--date-to` are given |
+| `MEILISEARCH_URL` | `meili` |
+| `MEILISEARCH_MASTER_KEY` | `meili` |
+
+After running, follow §6.4 Step 4 (or §6.1 Step 4) to re-ingest.
+
+---
+
 PRD v2.0 adds columns to both record tables (`lang_original`, `time_of_day`, `word_count` on both; `sequence_within_sitting` on `qa_exchanges`) plus two composite sitting indexes for F09 adjacent navigation. The new field values are **not derivable from stored data** — they require re-parsing the source documents — so applying v2.0 means a schema migration **followed by a full re-ingestion**.
 
 **Step 1 — Apply the schema changes.** On a fresh database, re-run `app/db/schema.sql` (§3.3). On an existing database, apply the additive migration:

@@ -41,24 +41,24 @@ class MockIndexer:
 
     def __init__(self):
         self.indexed_records: list[dict] = []
-        self._raw_docs: dict[str, dict] = {}
+        self._raw_docs: dict[tuple, dict] = {}  # (canonical_doc_id, corpus) → row
 
     def index_record(self, record: dict, checkpoint: CheckpointStore) -> bool:
         self.indexed_records.append(record)
         return True
 
-    def check_raw_document_exists(self, canonical_doc_id: str) -> bool:
-        return canonical_doc_id in self._raw_docs
+    def check_raw_document_exists(self, canonical_doc_id: str, corpus: str) -> bool:
+        return (canonical_doc_id, corpus) in self._raw_docs
 
     def write_raw_document(
         self, canonical_doc_id, corpus, date, provider, format,
         extracted_text, metadata_json, fetch_url, citation_url,
     ) -> None:
-        if canonical_doc_id in self._raw_docs:
+        if (canonical_doc_id, corpus) in self._raw_docs:
             return
         import json
         meta = json.loads(json.dumps(metadata_json, default=str))
-        self._raw_docs[canonical_doc_id] = {
+        self._raw_docs[(canonical_doc_id, corpus)] = {
             "canonical_doc_id": canonical_doc_id, "corpus": corpus, "date": date,
             "provider": provider, "format": format, "extracted_text": extracted_text,
             "metadata_json": meta, "fetch_url": fetch_url, "citation_url": citation_url,
@@ -289,7 +289,7 @@ class TestLSOrchestratorProviderChain:
         await orchestrator.run()
 
         try:
-            assert checkpoint.is_document_processed("12345")
+            assert checkpoint.is_document_processed("12345", "LS")
         finally:
             checkpoint.close()
 
@@ -749,7 +749,7 @@ class TestLSStage1DateFilter:
             stats = await orchestrator.run_stage1(date_from="2024-01-01")
 
         try:
-            assert "11111" not in indexer._raw_docs, "pre-date_from doc must not be written"
+            assert ("11111", "LS") not in indexer._raw_docs, "pre-date_from doc must not be written"
             assert stats["fetched"] == 0
             assert stats["skipped"] == 1
         finally:
@@ -771,7 +771,7 @@ class TestLSStage1DateFilter:
             stats = await orchestrator.run_stage1(date_to="2024-03-31")
 
         try:
-            assert "22222" not in indexer._raw_docs, "post-date_to doc must not be written"
+            assert ("22222", "LS") not in indexer._raw_docs, "post-date_to doc must not be written"
             assert stats["fetched"] == 0
             assert stats["skipped"] == 1
         finally:
@@ -802,8 +802,8 @@ class TestLSStage1DateFilter:
             stats = await orchestrator.run_stage1(date_from="2024-01-01", date_to="2024-03-31")
 
         try:
-            assert "33333" in indexer._raw_docs, "in-window doc must be written"
-            assert "44444" not in indexer._raw_docs, "out-of-window doc must be skipped"
+            assert ("33333", "LS") in indexer._raw_docs, "in-window doc must be written"
+            assert ("44444", "LS") not in indexer._raw_docs, "out-of-window doc must be skipped"
             assert stats["fetched"] == 1
             assert stats["skipped"] == 1
         finally:
@@ -825,7 +825,7 @@ class TestLSStage1DateFilter:
             stats = await orchestrator.run_stage1(date_from="2024-01-01")
 
         try:
-            assert "66666" in indexer._raw_docs, "doc on exact date_from must be written (>= not >)"
+            assert ("66666", "LS") in indexer._raw_docs, "doc on exact date_from must be written (>= not >)"
             assert stats["fetched"] == 1
             assert stats["skipped"] == 0
         finally:
@@ -847,7 +847,7 @@ class TestLSStage1DateFilter:
             stats = await orchestrator.run_stage1(date_to="2024-03-31")
 
         try:
-            assert "77777" in indexer._raw_docs, "doc on exact date_to must be written (<= not <)"
+            assert ("77777", "LS") in indexer._raw_docs, "doc on exact date_to must be written (<= not <)"
             assert stats["fetched"] == 1
             assert stats["skipped"] == 0
         finally:
@@ -869,7 +869,7 @@ class TestLSStage1DateFilter:
             stats = await orchestrator.run_stage1()
 
         try:
-            assert "55555" in indexer._raw_docs, "doc must be written when no date filter"
+            assert ("55555", "LS") in indexer._raw_docs, "doc must be written when no date filter"
             assert stats["fetched"] == 1
         finally:
             checkpoint.close()

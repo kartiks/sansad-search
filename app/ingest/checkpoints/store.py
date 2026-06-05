@@ -3,17 +3,19 @@ SQLite-backed checkpoint store for ingestion resumability and deduplication.
 
 Tables:
   processed_documents(
-      canonical_doc_id TEXT PRIMARY KEY,
+      canonical_doc_id TEXT NOT NULL,
       corpus           TEXT NOT NULL,
       provider         TEXT,
       fetch_url        TEXT,
-      processed_at     TEXT NOT NULL
+      processed_at     TEXT NOT NULL,
+      PRIMARY KEY (canonical_doc_id, corpus)
   )
-      Keyed on the provider-agnostic canonical document id (the DSpace handle
-      number N for LS/RS; the constitutionofindia.net day-URL for CA).
-      A document is added here only after ALL its records have been successfully
-      indexed. On resume, already-processed documents are skipped.
-      provider/fetch_url record which provider satisfied the document for audit.
+      Composite-keyed on (canonical_doc_id, corpus) so that LS processing of
+      handle N does not suppress RS processing of the same handle N when
+      --source all runs sequentially. A document is added here only after ALL
+      its records have been successfully indexed. On resume, already-processed
+      documents are skipped. provider/fetch_url record which provider satisfied
+      the document for audit.
 
   inserted_dedup_keys(dedup_key TEXT PRIMARY KEY)
       Tracks compound dedup keys already written to PostgreSQL for fast
@@ -21,7 +23,7 @@ Tables:
 
 Usage:
     with CheckpointStore(Path("data/ingestion_checkpoints.db")) as store:
-        if store.is_document_processed(canonical_doc_id):
+        if store.is_document_processed(canonical_doc_id, corpus="LS"):
             continue
         # … process and index records …
         store.add_dedup_key(dedup_key)
@@ -53,11 +55,12 @@ class CheckpointStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS processed_documents (
-                canonical_doc_id TEXT PRIMARY KEY,
+                canonical_doc_id TEXT NOT NULL,
                 corpus           TEXT NOT NULL,
                 provider         TEXT,
                 fetch_url        TEXT,
-                processed_at     TEXT NOT NULL
+                processed_at     TEXT NOT NULL,
+                PRIMARY KEY (canonical_doc_id, corpus)
             );
             CREATE TABLE IF NOT EXISTS inserted_dedup_keys (
                 dedup_key TEXT PRIMARY KEY
@@ -85,11 +88,11 @@ class CheckpointStore:
 
     # ── Document tracking ──────────────────────────────────────────────────────
 
-    def is_document_processed(self, canonical_doc_id: str) -> bool:
-        """Return True if this document was fully processed and checkpointed."""
+    def is_document_processed(self, canonical_doc_id: str, corpus: str) -> bool:
+        """Return True if this (canonical_doc_id, corpus) pair was fully processed."""
         row = self._require_conn().execute(
-            "SELECT 1 FROM processed_documents WHERE canonical_doc_id = ?",
-            (canonical_doc_id,),
+            "SELECT 1 FROM processed_documents WHERE canonical_doc_id = ? AND corpus = ?",
+            (canonical_doc_id, corpus),
         ).fetchone()
         return row is not None
 

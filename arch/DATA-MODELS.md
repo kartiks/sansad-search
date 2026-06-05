@@ -1,7 +1,7 @@
 # Data Models — SansadSearch
 
-**PRD version:** v2.0
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable); updated 2026-06-01 (PRD v2.0: F01 — `lang_original`/`time_of_day`/`word_count` added to both tables, `sequence_within_sitting` added to `qa_exchanges`, sitting composite indexes for F09 adjacent nav; F05 — `lang_original`/`time_of_day` added to Meilisearch doc + search results; F09 — new `GET /api/record/{id}` contract; `id` stability rule documented); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table as Stage 1 intermediate store; SQLite `processed_documents` semantics updated to Stage 2 complete signal)
+**PRD version:** v2.1
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable); updated 2026-06-01 (PRD v2.0: F01 — `lang_original`/`time_of_day`/`word_count` added to both tables, `sequence_within_sitting` added to `qa_exchanges`, sitting composite indexes for F09 adjacent nav; F05 — `lang_original`/`time_of_day` added to Meilisearch doc + search results; F09 — new `GET /api/record/{id}` contract; `id` stability rule documented); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table as Stage 1 intermediate store; SQLite `processed_documents` semantics updated to Stage 2 complete signal); updated 2026-06-04 (PRD v2.1: §1.4 `raw_documents` composite PK `(canonical_doc_id, corpus)` — fixes sole-PK error; per-corpus dedup semantics documented)
 
 ---
 
@@ -129,12 +129,14 @@ SELECT * FROM index_status ORDER BY run_completed_at DESC LIMIT 1;
 
 ### 1.4 `raw_documents` (PostgreSQL)
 
-Intermediate raw document store. One row per source document (keyed on `canonical_doc_id`). Written by Stage 1 (fetch + parse); read by Stage 2 (segment + index). Persists extracted text and document-level metadata, decoupling the scraping cost from segmentation and indexing.
+Intermediate raw document store. One row per source document per corpus (keyed on the composite `(canonical_doc_id, corpus)`). Written by Stage 1 (fetch + parse); read by Stage 2 (segment + index). Persists extracted text and document-level metadata, decoupling the scraping cost from segmentation and indexing.
+
+**Primary key:** `PRIMARY KEY (canonical_doc_id, corpus)` — composite. The same `canonical_doc_id` value (e.g. a DSpace handle number shared by LS and RS IA providers) may appear as two independent rows, one per corpus. Dedup is scoped per corpus; a row fetched for LS does not suppress fetching the same id for RS.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `canonical_doc_id` | TEXT | PK | Provider-agnostic document identity. LS/RS: DSpace handle number `N` — Internet Archive `eparlib.nic.in.{N}` and DSpace `123456789/{N}` collapse to one row. CA: constitutionofindia.net day-page URL. Same key used by the SQLite checkpoint store and the cross-provider dedup logic |
-| `corpus` | VARCHAR(2) | NOT NULL, CHECK IN ('CA','LS','RS') | Source corpus |
+| `canonical_doc_id` | TEXT | NOT NULL (part of composite PK) | Provider-agnostic document identity. LS/RS: DSpace handle number `N` — Internet Archive `eparlib.nic.in.{N}` and DSpace `123456789/{N}` collapse to one row per corpus. CA: constitutionofindia.net day-page URL. Same key used by the SQLite checkpoint store and the cross-provider dedup logic |
+| `corpus` | VARCHAR(2) | NOT NULL, CHECK IN ('CA','LS','RS') (part of composite PK) | Source corpus. Together with `canonical_doc_id`, forms the table primary key |
 | `date` | DATE | NULL | Sitting date derived from document metadata or URL slug. NULL if unparseable at Stage 1 |
 | `provider` | VARCHAR(50) | NOT NULL | Provider that satisfied the fetch (e.g. `coi_html`, `internet_archive`, `eparlib_dspace`, `rsdebate_dspace`, `sansad_rs_html`) |
 | `format` | VARCHAR(10) | NOT NULL, CHECK IN ('html','ia_text','pdf') | Source format: `html` (CA coi + recent RS sansad.in/rs), `ia_text` (IA pre-OCR `_djvu.txt`), `pdf` (direct DSpace embedded-text) |
@@ -540,7 +542,7 @@ Meilisearch Cloud Growth plan (supports up to 2M documents) is required.
 **File:** `data/ingestion_checkpoints.db` (`.gitignore`d)
 
 **Tables:**
-- `processed_documents (canonical_doc_id TEXT PRIMARY KEY, corpus TEXT, provider TEXT, fetch_url TEXT, processed_at TIMESTAMP)` — **Stage 2 complete signal.** Tracks source documents whose `raw_documents` row has been fully segmented, canonicalized, and written to `speeches`/`qa_exchanges`. Keyed on `canonical_doc_id` (same key as `raw_documents` PK). Written by Stage 2 after all records from a raw document are persisted. Guards Stage 2 resumability — if Stage 2 is interrupted, re-running it will skip documents already in this table. **Does not** guard against cross-provider double-fetch: Stage 1 dedup is handled by the `raw_documents` PK lookup in PostgreSQL.
+- `processed_documents (canonical_doc_id TEXT NOT NULL, corpus TEXT NOT NULL, provider TEXT, fetch_url TEXT, processed_at TIMESTAMP, PRIMARY KEY (canonical_doc_id, corpus))` — **Stage 2 complete signal.** Tracks source documents whose `raw_documents` row has been fully segmented, canonicalized, and written to `speeches`/`qa_exchanges`. Keyed on `(canonical_doc_id, corpus)` — composite key matching the `raw_documents` PK. Corpus scoping is required so that LS Stage 2 processing of handle N does not suppress RS Stage 2 processing of the same handle N when `--source all` runs sequentially. Written by Stage 2 after all records from a raw document are persisted. Guards Stage 2 resumability — if Stage 2 is interrupted, re-running it will skip documents already in this table. **Does not** guard against cross-provider double-fetch: Stage 1 dedup is handled by the `raw_documents` PK lookup in PostgreSQL.
 - `inserted_dedup_keys (dedup_key TEXT PRIMARY KEY)` — tracks record-level dedup keys already written to PostgreSQL; prevents duplicate inserts on Stage 2 resume. Unchanged; mirrors the PostgreSQL `dedup_key` UNIQUE constraint for fast local lookup without a round-trip to PostgreSQL.
 
 **Purpose:** Fast local lookups during Stage 2 for resumability and record-level deduplication. The `processed_documents` table must be partially cleared (for the re-processing scope) before a selective Stage 2 re-run (DEPLOYMENT §6.4). Eliminated along with `raw_documents` on a full clean reindex.

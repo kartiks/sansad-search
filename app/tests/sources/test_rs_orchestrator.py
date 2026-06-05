@@ -57,24 +57,24 @@ class MockIndexer:
 
     def __init__(self):
         self.indexed_records: list[dict] = []
-        self._raw_docs: dict[str, dict] = {}
+        self._raw_docs: dict[tuple, dict] = {}  # (canonical_doc_id, corpus) → row
 
     def index_record(self, record: dict, checkpoint: CheckpointStore) -> bool:
         self.indexed_records.append(record)
         return True
 
-    def check_raw_document_exists(self, canonical_doc_id: str) -> bool:
-        return canonical_doc_id in self._raw_docs
+    def check_raw_document_exists(self, canonical_doc_id: str, corpus: str) -> bool:
+        return (canonical_doc_id, corpus) in self._raw_docs
 
     def write_raw_document(
         self, canonical_doc_id, corpus, date, provider, format,
         extracted_text, metadata_json, fetch_url, citation_url,
     ) -> None:
-        if canonical_doc_id in self._raw_docs:
+        if (canonical_doc_id, corpus) in self._raw_docs:
             return
         import json
         meta = json.loads(json.dumps(metadata_json, default=str))
-        self._raw_docs[canonical_doc_id] = {
+        self._raw_docs[(canonical_doc_id, corpus)] = {
             "canonical_doc_id": canonical_doc_id, "corpus": corpus, "date": date,
             "provider": provider, "format": format, "extracted_text": extracted_text,
             "metadata_json": meta, "fetch_url": fetch_url, "citation_url": citation_url,
@@ -378,7 +378,7 @@ class TestRSOrchestratorProviderChain:
         indexer = MockIndexer()
         try:
             await _orchestrator([provider], checkpoint, indexer).run()
-            assert checkpoint.is_document_processed(ref.canonical_doc_id)
+            assert checkpoint.is_document_processed(ref.canonical_doc_id, "RS")
         finally:
             checkpoint.close()
 
@@ -394,7 +394,7 @@ class TestRSOrchestratorProviderChain:
             assert stats["indexed"] == 0
             # Resumability: a failed fetch must NOT checkpoint the document so it
             # is retried on resume (mirrors test_ls_orchestrator.py:489).
-            assert not checkpoint.is_document_processed(ref.canonical_doc_id)
+            assert not checkpoint.is_document_processed(ref.canonical_doc_id, "RS")
         finally:
             checkpoint.close()
 
@@ -410,7 +410,7 @@ class TestRSOrchestratorProviderChain:
                 stats = await _orchestrator([provider], checkpoint, indexer).run()
             assert stats["errors"] == 1
             assert stats["indexed"] == 0
-            assert not checkpoint.is_document_processed(ref.canonical_doc_id)
+            assert not checkpoint.is_document_processed(ref.canonical_doc_id, "RS")
         finally:
             checkpoint.close()
 
@@ -434,7 +434,7 @@ class TestRSOrchestratorProviderChain:
             stats = await _orchestrator([provider], checkpoint, indexer).run()
             assert stats["errors"] == 1
             assert stats["indexed"] == 0
-            assert not checkpoint.is_document_processed(url)
+            assert not checkpoint.is_document_processed(url, "RS")
         finally:
             checkpoint.close()
 
@@ -594,7 +594,7 @@ class TestRSStage1DateFilter:
             stats = await orc.run_stage1(date_from="2024-01-01")
 
         try:
-            assert "11111" not in indexer._raw_docs
+            assert ("11111", "RS") not in indexer._raw_docs
             assert stats["skipped"] == 1
             assert stats["fetched"] == 0
         finally:
@@ -617,7 +617,7 @@ class TestRSStage1DateFilter:
             stats = await orc.run_stage1(date_to="2024-03-31")
 
         try:
-            assert "22222" not in indexer._raw_docs
+            assert ("22222", "RS") not in indexer._raw_docs
             assert stats["skipped"] == 1
             assert stats["fetched"] == 0
         finally:
@@ -649,8 +649,8 @@ class TestRSStage1DateFilter:
             stats = await orc.run_stage1(date_from="2024-01-01", date_to="2024-03-31")
 
         try:
-            assert "33333" in indexer._raw_docs
-            assert "44444" not in indexer._raw_docs
+            assert ("33333", "RS") in indexer._raw_docs
+            assert ("44444", "RS") not in indexer._raw_docs
             assert stats["fetched"] == 1
             assert stats["skipped"] == 1
         finally:
@@ -673,7 +673,7 @@ class TestRSStage1DateFilter:
             stats = await orc.run_stage1(date_from="2024-01-01")
 
         try:
-            assert "55555" in indexer._raw_docs, "doc on exact date_from must be written (>= not >)"
+            assert ("55555", "RS") in indexer._raw_docs, "doc on exact date_from must be written (>= not >)"
             assert stats["fetched"] == 1
             assert stats["skipped"] == 0
         finally:
@@ -696,7 +696,7 @@ class TestRSStage1DateFilter:
             stats = await orc.run_stage1(date_to="2024-03-31")
 
         try:
-            assert "66666" in indexer._raw_docs, "doc on exact date_to must be written (<= not <)"
+            assert ("66666", "RS") in indexer._raw_docs, "doc on exact date_to must be written (<= not <)"
             assert stats["fetched"] == 1
             assert stats["skipped"] == 0
         finally:

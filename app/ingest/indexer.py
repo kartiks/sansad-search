@@ -275,7 +275,7 @@ class Indexer:
                 (canonical_doc_id, corpus, date, provider, format,
                  extracted_text, metadata_json, fetch_url, citation_url)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (canonical_doc_id) DO NOTHING
+            ON CONFLICT (canonical_doc_id, corpus) DO NOTHING
             """,
             (
                 canonical_doc_id,
@@ -292,12 +292,12 @@ class Indexer:
         self._pg.commit()
         logger.debug("write_raw_document: %s (corpus=%s)", canonical_doc_id, corpus)
 
-    def check_raw_document_exists(self, canonical_doc_id: str) -> bool:
-        """Return True if canonical_doc_id already exists in raw_documents."""
+    def check_raw_document_exists(self, canonical_doc_id: str, corpus: str) -> bool:
+        """Return True if (canonical_doc_id, corpus) already exists in raw_documents."""
         cursor = self._pg.cursor()
         cursor.execute(
-            "SELECT 1 FROM raw_documents WHERE canonical_doc_id = %s",
-            (canonical_doc_id,),
+            "SELECT 1 FROM raw_documents WHERE canonical_doc_id = %s AND corpus = %s",
+            (canonical_doc_id, corpus),
         )
         return cursor.fetchone() is not None
 

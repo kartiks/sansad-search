@@ -55,11 +55,26 @@ class TestSchemaRawDocuments:
         content = self.SCHEMA_PATH.read_text()
         assert "CREATE TABLE IF NOT EXISTS raw_documents" in content
 
-    def test_raw_documents_has_canonical_doc_id_pk(self):
+    def test_raw_documents_has_composite_pk(self):
         content = self.SCHEMA_PATH.read_text()
         raw_block = content.split("CREATE TABLE IF NOT EXISTS raw_documents")[1].split(");")[0]
         assert "canonical_doc_id" in raw_block
-        assert "PRIMARY KEY" in raw_block
+        # PK must be the composite (canonical_doc_id, corpus), not single-column
+        assert "PRIMARY KEY (canonical_doc_id, corpus)" in raw_block
+
+    def test_raw_documents_canonical_doc_id_not_sole_pk(self):
+        """canonical_doc_id column definition must not carry an inline PRIMARY KEY."""
+        content = self.SCHEMA_PATH.read_text()
+        raw_block = content.split("CREATE TABLE IF NOT EXISTS raw_documents")[1].split(");")[0]
+        # Only check the column definition line (starts with canonical_doc_id after whitespace),
+        # not the table-level constraint line which legitimately contains both keywords.
+        for line in raw_block.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("canonical_doc_id"):
+                assert "PRIMARY KEY" not in stripped, (
+                    "canonical_doc_id must not carry a single-column PRIMARY KEY "
+                    "(fix: use composite PRIMARY KEY (canonical_doc_id, corpus))"
+                )
 
     def test_raw_documents_corpus_check_constraint(self):
         content = self.SCHEMA_PATH.read_text()
@@ -110,7 +125,7 @@ class TestIndexerWriteRawDocument:
         cursor = pg.cursor()
         sql = cursor.execute.call_args[0][0]
         assert "INSERT INTO raw_documents" in sql
-        assert "ON CONFLICT" in sql
+        assert "ON CONFLICT (canonical_doc_id, corpus)" in sql
         assert "DO NOTHING" in sql
 
     def test_write_raw_document_serializes_metadata_as_json(self):
@@ -189,7 +204,7 @@ class TestIndexerCheckRawDocumentExists:
         meili, _ = _make_mock_meili()
         indexer = Indexer(pg, meili)
 
-        result = indexer.check_raw_document_exists("existing-doc")
+        result = indexer.check_raw_document_exists("existing-doc", "LS")
         assert result is True
 
     def test_returns_false_for_absent_doc(self):
@@ -200,10 +215,11 @@ class TestIndexerCheckRawDocumentExists:
         meili, _ = _make_mock_meili()
         indexer = Indexer(pg, meili)
 
-        result = indexer.check_raw_document_exists("absent-doc")
+        result = indexer.check_raw_document_exists("absent-doc", "RS")
         assert result is False
 
-    def test_uses_pk_lookup_query(self):
+    def test_uses_composite_pk_lookup_query(self):
+        """Query must filter by BOTH canonical_doc_id AND corpus."""
         cursor = MagicMock()
         cursor.fetchone.return_value = None
         pg = MagicMock()
@@ -211,10 +227,36 @@ class TestIndexerCheckRawDocumentExists:
         meili, _ = _make_mock_meili()
         indexer = Indexer(pg, meili)
 
-        indexer.check_raw_document_exists("some-id")
+        indexer.check_raw_document_exists("some-id", "LS")
         sql = cursor.execute.call_args[0][0]
+        params = cursor.execute.call_args[0][1]
         assert "raw_documents" in sql
         assert "canonical_doc_id" in sql
+        assert "corpus" in sql
+        assert "some-id" in params
+        assert "LS" in params
+
+    def test_same_id_different_corpus_not_confused(self):
+        """LS and RS documents with the same handle number must not collide."""
+        call_args_list = []
+
+        def fake_execute(sql, params=None):
+            call_args_list.append((sql, params))
+            cursor.fetchone.return_value = None
+
+        cursor = MagicMock()
+        cursor.execute.side_effect = fake_execute
+        pg = MagicMock()
+        pg.cursor.return_value = cursor
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+
+        indexer.check_raw_document_exists("12345", "LS")
+        indexer.check_raw_document_exists("12345", "RS")
+
+        # Both calls must include the corpus in params so they are isolated queries
+        assert call_args_list[0][1] == ("12345", "LS")
+        assert call_args_list[1][1] == ("12345", "RS")
 
 
 class TestIndexerReadRawDocumentsForScope:
@@ -337,7 +379,7 @@ class TestStage1PKDedup:
             c = MagicMock()
             def fake_execute(sql, params=None):
                 executed_sqls.append(sql)
-                if "SELECT 1 FROM raw_documents" in sql:
+                if "SELECT 1 FROM raw_documents" in sql and "corpus" in sql:
                     call_count["check"] += 1
                     c.fetchone.return_value = (1,)
                 elif "INSERT INTO raw_documents" in sql:
@@ -354,7 +396,7 @@ class TestStage1PKDedup:
         indexer = Indexer(pg, meili)
 
         # Simulate Stage 1 dedup check
-        exists = indexer.check_raw_document_exists("doc-already-fetched")
+        exists = indexer.check_raw_document_exists("doc-already-fetched", "LS")
         assert exists is True
 
         # Since it exists, Stage 1 would skip; verify write not called
@@ -403,7 +445,7 @@ class TestCAOrchestratorStage1:
         """Stage 1 writes exactly one raw_documents row per discovered document."""
         writes = []
 
-        def fake_check(doc_id):
+        def fake_check(doc_id, corpus):
             return False  # not yet fetched
 
         def fake_write(**kwargs):
@@ -543,7 +585,7 @@ class TestCAOrchestratorStage1:
         # Simulate: first call returns False (new), subsequent returns True (exists)
         call_counts = [0]
 
-        def check_exists(doc_id):
+        def check_exists(doc_id, corpus):
             call_counts[0] += 1
             return call_counts[0] > 1  # False first time, True on re-run
 
@@ -685,7 +727,7 @@ class TestCAOrchestratorStage2:
                                            "is_translated": False, "has_untranslated_content": False}]
                 asyncio.run(orch.run_stage2())
             # After Stage 2, the SQLite checkpoint must record the document
-            assert cp.is_document_processed("ca-doc-1") is True
+            assert cp.is_document_processed("ca-doc-1", "CA") is True
 
     def test_run_stage2_date_from_passed_to_read_scope(self, tmp_path):
         """--date-from is forwarded to read_raw_documents_for_scope."""

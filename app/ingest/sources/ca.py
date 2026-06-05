@@ -35,7 +35,7 @@ from ingest.sources._http import (
     RobotsChecker,
     fetch_with_retry,
 )
-from ingest.sources._provider import DocumentRef, Provider
+from ingest.sources._provider import DocumentRef, Provider, extract_stage1_fields
 from ingest.sources.providers.coi_html import CoidHtmlProvider
 
 logger = logging.getLogger(__name__)
@@ -149,22 +149,6 @@ class CASource:
 # ── Phase 8+ Orchestrator ─────────────────────────────────────────────────────
 
 
-def _extract_stage1_fields(raw_record: dict) -> tuple[Optional[str], dict]:
-    """
-    Split a parser-output raw_record into (extracted_text, metadata_json).
-
-    ``extracted_text`` is the raw_text field (consumed by segmenters).
-    ``metadata_json`` contains all other fields needed to reconstruct the
-    raw_record in Stage 2, minus raw_html (large, not used by segmenters).
-    """
-    extracted_text = raw_record.get("raw_text")
-    metadata = {
-        k: v for k, v in raw_record.items()
-        if k not in ("raw_text", "raw_html")
-    }
-    return extracted_text, metadata
-
-
 class CAOrchestrator:
     """
     CA corpus orchestrator — provider chain: [CoidHtmlProvider].
@@ -236,7 +220,7 @@ class CAOrchestrator:
         logger.info("ca_stage1: discovered %d CA documents", len(doc_refs))
 
         for doc_ref in doc_refs:
-            if self._indexer.check_raw_document_exists(doc_ref.canonical_doc_id):
+            if self._indexer.check_raw_document_exists(doc_ref.canonical_doc_id, "CA"):
                 logger.debug("ca_stage1: already fetched %s; skipping", doc_ref.canonical_doc_id)
                 stats["skipped"] += 1
                 continue
@@ -274,7 +258,7 @@ class CAOrchestrator:
                 stats["skipped"] += 1
                 continue
 
-            extracted_text, metadata = _extract_stage1_fields(raw_record)
+            extracted_text, metadata = extract_stage1_fields(raw_record)
             metadata["volume"] = doc_ref.metadata.get("volume")
 
             self._indexer.write_raw_document(
@@ -314,7 +298,7 @@ class CAOrchestrator:
 
         for row in rows:
             canonical_doc_id = row["canonical_doc_id"]
-            if self._checkpoint.is_document_processed(canonical_doc_id):
+            if self._checkpoint.is_document_processed(canonical_doc_id, corpus="CA"):
                 logger.debug("ca_stage2: already processed %s; skipping", canonical_doc_id)
                 stats["skipped"] += 1
                 continue
