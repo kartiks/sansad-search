@@ -835,11 +835,7 @@ mark {
   .status-page-header-inner { padding: 0 12px; }
 }
 
-<<<<<<< HEAD
 /* ── Advanced Search link button (used in header and below-bar row) ── */
-=======
-/* ── Advanced Search link button ────────────────────────── */
->>>>>>> 286b750 (Checkpointing Phase 7 build.)
 
 .advanced-search-link-btn {
   background: transparent;
