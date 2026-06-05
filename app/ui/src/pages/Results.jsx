@@ -151,13 +151,14 @@ export default function Results() {
     next.set('q', cleaned.trim())
     next.set('page', '1')
     if (urlSort && urlSort !== 'relevance') next.set('sort', urlSort)
-    setParams(next)
+    setParams(next, { state: { filters } })
   }
 
   const onInputChange = (e) => {
     setInputValue(e.target.value)
     if (validation) setValidation('')
     if (e.target.value.length > 0) setDropdownVisible(false)
+    else if (cookiesEnabled) setDropdownVisible(true)
   }
 
   const onInputFocus = () => {
@@ -174,7 +175,7 @@ export default function Results() {
     } else {
       next.set('sort', nextSort)
     }
-    setParams(next)
+    setParams(next, { state: { filters } })
   }
 
   const onPageChange = (nextPage) => {
@@ -184,7 +185,7 @@ export default function Results() {
     if (urlSort && urlSort !== 'relevance') {
       next.set('sort', urlSort)
     }
-    setParams(next)
+    setParams(next, { state: { filters } })
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
@@ -194,46 +195,52 @@ export default function Results() {
     setFilters(newFilters)
     setModalOpen(false)
     const next = new URLSearchParams(params)
-    next.set('q', urlQuery)
+    next.set('q', inputValue.trim() || urlQuery)
     next.set('page', '1')
     if (urlSort && urlSort !== 'relevance') next.set('sort', urlSort)
     else next.delete('sort')
-    setParams(next)
+    setParams(next, { state: { filters: newFilters } })
   }
 
   const removeFilter = (dimension) => {
-    setFilters((prev) => {
-      switch (dimension) {
-        case 'sources':
-          return { ...prev, sources: [...ALL_SOURCES] }
-        case 'date':
-          return { ...prev, date_from: null, date_to: null }
-        case 'speaker':
-          return { ...prev, speaker: null }
-        case 'session':
-          return { ...prev, session: null }
-        case 'proceeding_types':
-          return { ...prev, proceeding_types: [...ALL_PROCEEDING_TYPES] }
-        default:
-          return prev
-      }
-    })
+    let newFilters
+    switch (dimension) {
+      case 'sources':
+        newFilters = { ...filters, sources: [...ALL_SOURCES] }
+        break
+      case 'date':
+        newFilters = { ...filters, date_from: null, date_to: null }
+        break
+      case 'speaker':
+        newFilters = { ...filters, speaker: null }
+        break
+      case 'session':
+        newFilters = { ...filters, session: null }
+        break
+      case 'proceeding_types':
+        newFilters = { ...filters, proceeding_types: [...ALL_PROCEEDING_TYPES] }
+        break
+      default:
+        newFilters = filters
+    }
+    setFilters(newFilters)
     const next = new URLSearchParams(params)
     next.set('q', urlQuery)
     next.set('page', '1')
     if (urlSort && urlSort !== 'relevance') next.set('sort', urlSort)
     else next.delete('sort')
-    setParams(next)
+    setParams(next, { state: { filters: newFilters } })
   }
 
   const clearAllFilters = () => {
-    setFilters(defaultFilterState())
+    const newFilters = defaultFilterState()
+    setFilters(newFilters)
     const next = new URLSearchParams(params)
     next.set('q', urlQuery)
     next.set('page', '1')
     if (urlSort && urlSort !== 'relevance') next.set('sort', urlSort)
     else next.delete('sort')
-    setParams(next)
+    setParams(next, { state: { filters: newFilters } })
   }
 
   const handleRecentSelect = (query) => {
@@ -243,8 +250,9 @@ export default function Results() {
     const next = new URLSearchParams()
     next.set('q', query)
     next.set('page', '1')
-    setFilters(defaultFilterState())
-    setParams(next)
+    const newFilters = defaultFilterState()
+    setFilters(newFilters)
+    setParams(next, { state: { filters: newFilters } })
   }
 
   const handleSavedRun = (entry) => {
@@ -481,7 +489,7 @@ export default function Results() {
               <>
                 <div data-testid="results-list">
                   {data.results.map((r) => (
-                    <ResultCard key={r.id} result={r} />
+                    <ResultCard key={r.id} result={r} filters={filters} />
                   ))}
                 </div>
                 <Pagination

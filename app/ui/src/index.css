@@ -218,6 +218,117 @@ mark {
   width: 30px;
 }
 
+.search-bar-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.recent-searches-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-panel);
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.recent-searches-label {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.recent-searches-empty {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.recent-searches-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.recent-searches-item {
+  display: flex;
+  align-items: center;
+}
+
+.recent-searches-item-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.recent-searches-item-btn:hover {
+  background: #F7F4EF;
+}
+
+.recent-searches-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.recent-searches-query {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-searches-delete-btn {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-secondary);
+}
+
+.recent-searches-delete-btn:hover {
+  color: var(--text-primary);
+}
+
+.recent-searches-footer {
+  border-top: 1px solid var(--border);
+  padding: 4px 0;
+}
+
+.recent-searches-clear-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.recent-searches-clear-btn:hover {
+  color: var(--text-primary);
+}
+
 .validation-message {
   margin: 6px 0 0;
   font-size: 13px;

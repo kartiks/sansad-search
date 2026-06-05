@@ -1,7 +1,7 @@
 # Project Tracker
 
 PRD version at last update: v2.1
-Last updated: 2026-06-05 (Phase 12 gap-fix build: cross-corpus Stage 2 checkpoint fixed — composite PK on processed_documents, corpus param on is_document_processed(), _extract_stage1_fields() deduplicated into _provider.py, DATA-MODELS §4.3 updated. 1014 passed/1 skipped. Ready for /verify-arch phase-12 run-6.)
+Last updated: 2026-06-05 (Ad-hoc frontend bug fixes: (1) recent-searches-dropdown made floating overlay via CSS position:absolute on .recent-searches-dropdown + position:relative on .search-bar-wrap; (2) dropdown re-shows when input cleared to empty (Home.jsx + Results.jsx onChange); (3) advanced search modal uses current typed input not stale urlQuery (Results.jsx onModalApply); (4) filters preserved on back nav — ResultCard passes filters in Link state, RecordDetail navigates back with state:{filters}, all Results.jsx setParams calls pass {state:{filters}}. 373/373 frontend tests passing.)
 
 ## Lifecycle Status
 

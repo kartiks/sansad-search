@@ -98,6 +98,7 @@ export default function Home() {
     setValue(e.target.value)
     if (validation) setValidation('')
     if (e.target.value.length > 0) setDropdownVisible(false)
+    else if (cookiesEnabled) setDropdownVisible(true)
   }
 
   const onFocus = () => {

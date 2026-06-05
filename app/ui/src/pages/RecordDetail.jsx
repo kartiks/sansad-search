@@ -97,7 +97,7 @@ export default function RecordDetail() {
             <button
               className="record-back-btn"
               data-testid="back-to-results"
-              onClick={() => navigate(resultsPath || '/')}
+              onClick={() => navigate(resultsPath || '/', { state: { filters: location.state?.filters } })}
             >
               ← Back to results
             </button>

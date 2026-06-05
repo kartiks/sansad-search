@@ -2,7 +2,7 @@ import { Link, useLocation } from 'react-router-dom'
 import SpeechCard from './SpeechCard.jsx'
 import QACard from './QACard.jsx'
 
-export default function ResultCard({ result }) {
+export default function ResultCard({ result, filters }) {
   const location = useLocation()
   if (!result) return null
   const card =
@@ -13,7 +13,7 @@ export default function ResultCard({ result }) {
   return (
     <Link
       to={`/record/${result.id}`}
-      state={{ from: 'search', resultsPath: location.pathname + location.search }}
+      state={{ from: 'search', resultsPath: location.pathname + location.search, filters }}
       className="result-card-link"
     >
       {card}
