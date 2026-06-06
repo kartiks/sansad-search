@@ -102,6 +102,23 @@ def _tokenize_query(query: str) -> List[str]:
     return _WORD_RE.findall(query.lower())
 
 
+def _merge_expansion_terms(
+    query_terms: List[str], expansion_notice: Optional[List[str]]
+) -> List[str]:
+    """Return query_terms extended with tokens from expansion_notice strings.
+
+    Meilisearch expands synonyms at search time, so results may match on terms
+    the user never typed.  Including those tokens in snippet highlighting makes
+    the relevance signal visible to the user.
+    """
+    if not expansion_notice:
+        return query_terms
+    merged: set = set(query_terms)
+    for term in expansion_notice:
+        merged.update(_tokenize_query(term))
+    return list(merged)
+
+
 def _find_supplementary_offset(text: str) -> int:
     """
     Return the character offset where the first supplementary exchange begins,
@@ -352,7 +369,8 @@ async def execute_search(
     per_page = raw.hits_per_page or PER_PAGE
 
     query_terms = _tokenize_query(query)
-    results = [format_result(hit, query_terms) for hit in hits]
+    all_terms = _merge_expansion_terms(query_terms, expansion_notice)
+    results = [format_result(hit, all_terms) for hit in hits]
 
     return {
         "total": total,

@@ -157,11 +157,6 @@ export default function RecordDetail() {
                 <span className="record-meta-label">Speaker</span>
                 <span className="record-meta-value">
                   {data.speaker_name}
-                  {data.speaker_name_unresolved && (
-                    <span className="record-name-unresolved" data-testid="name-unresolved">
-                      {' '}(name unresolved)
-                    </span>
-                  )}
                 </span>
               </div>
             )}

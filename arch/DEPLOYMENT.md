@@ -1,7 +1,7 @@
 # Deployment — SansadSearch
 
-**PRD version:** v2.0
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks); updated 2026-06-01 for PRD v2.0 — §6.3 schema migration for F01 new columns/indexes + re-ingestion; no new env vars, dependencies, or infrastructure (F09 detail endpoint reuses the existing Railway Postgres pool); updated 2026-06-03 — raw document store: §3.3/§3.5/§6.1 updated for `raw_documents`; §6.4 selective re-processing runbook added; no new env vars, dependencies, or infrastructure
+**PRD version:** v2.1
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks); updated 2026-06-01 for PRD v2.0 — §6.3 schema migration for F01 new columns/indexes + re-ingestion; no new env vars, dependencies, or infrastructure (F09 detail endpoint reuses the existing Railway Postgres pool); updated 2026-06-03 — raw document store: §3.3/§3.5/§6.1 updated for `raw_documents`; §6.4 selective re-processing runbook added; no new env vars, dependencies, or infrastructure; updated 2026-06-05 — post-deploy production fixes: `app/ui/vercel.json` proxy+SPA rewrites documented (§3.2); `app/.python-version` Railway/Nixpacks pin documented (§3.1); `app/ui/.npmrc` legacy-peer-deps documented (§3.2); `VITE_API_URL` removed from §2.2 (not used in production — API calls proxied via vercel.json); §4 Vercel row updated
 
 ---
 
@@ -30,9 +30,9 @@
 
 ### 2.2 Frontend (Vercel — build-time)
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `VITE_API_URL` | Required | FastAPI API base URL (e.g. `https://sansadsearch-api.up.railway.app`); baked into the static build at deploy time |
+No build-time environment variables are required for the Vercel deployment. In production, API calls are proxied through the `/api/:path*` rewrite in `app/ui/vercel.json` — the frontend makes relative `/api/...` requests and Vercel forwards them to Railway. `VITE_API_URL` is not used in production.
+
+For local development, `VITE_API_URL` is set in `app/ui/.env.local` — see §5.4.
 
 ### 2.3 Ingestion pipeline (local — operator's machine)
 
@@ -67,6 +67,8 @@ Start command:  uvicorn api.main:app --host 0.0.0.0 --port $PORT
 
 Railway auto-injects `DATABASE_URL` when the PostgreSQL plugin is added to the project. All other env vars are set manually in the Railway service environment.
 
+**Required file:** `app/.python-version` (content: `3.12`) — pins the Python version for Railway's Nixpacks build. Without it, Nixpacks may select a different Python version and the build may fail.
+
 Railway performs a zero-downtime deploy on each push to the connected git branch.
 
 ### 3.2 Frontend (Vercel)
@@ -79,7 +81,27 @@ Build command:     npm run build
 Output directory:  dist
 ```
 
-`VITE_API_URL` is set as a Vercel environment variable. Vercel rebuilds and deploys on each push to the connected branch.
+**Required files committed to the repo (within `app/ui/`):**
+
+- `vercel.json` — configures two rewrites: (1) `/api/:path*` → Railway API URL (proxies all frontend API calls at runtime; eliminates cross-origin requests in production); (2) `/(.*) → /index.html` (React Router SPA catch-all for direct URL and deep-link navigation). The destination URL in the proxy rule must match the Railway service URL:
+
+  ```json
+  {
+    "rewrites": [
+      {
+        "source": "/api/:path*",
+        "destination": "https://sansad-search-dev-api-production.up.railway.app/api/:path*"
+      },
+      {
+        "source": "/(.*)",
+        "destination": "/index.html"
+      }
+    ]
+  }
+  ```
+- `.npmrc` — sets `legacy-peer-deps=true`; resolves npm peer dependency conflicts during `npm install` on Vercel.
+
+No Vercel environment variables are required. Vercel rebuilds and deploys on each push to the connected branch.
 
 ### 3.3 Database schema init (one-time)
 
@@ -149,7 +171,7 @@ This reads all records from `speeches` and `qa_exchanges` in PostgreSQL and push
 |------------|-------------|-------|
 | Railway PostgreSQL | API (status endpoint), Ingestion | Must be provisioned before first deploy and before first ingestion run |
 | Meilisearch Cloud instance | API (all search), Ingestion | Must be set up and configured (`setup_meilisearch.py` run) before first ingestion |
-| Vercel project | Frontend | Connected to the repo; `VITE_API_URL` env var set |
+| Vercel project | Frontend | Connected to the repo; `app/ui/vercel.json` configures API proxy and SPA routing |
 | Internet Archive (archive.org) | Ingestion (preferred LS/RS bulk path) | Remote; no provisioning. Pre-OCR `_djvu.txt` + metadata JSON over HTTP. For IA-missing items the pipeline falls back to embedded-text extraction from the DSpace PDF (no OCR) |
 | Source sites (constitutionofindia.net, eparlib.sansad.in, rsdebate.nic.in, sansad.in/rs) | Ingestion (per-corpus providers) | Remote; no provisioning. Rate-limited, robots.txt-compliant HTTP reads |
 | PyMuPDF system deps | Ingestion only (direct DSpace PDF fallback; embedded-text extraction, no OCR) | Installed via `pip install PyMuPDF`; no additional system deps required on most platforms |

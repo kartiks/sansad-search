@@ -13,6 +13,7 @@ from api.services.search import (
     format_total_display,
     get_proceeding_type_label,
     _build_snippet,
+    _merge_expansion_terms,
     format_result,
 )
 
@@ -305,3 +306,51 @@ class TestFormatResult:
         hit = self._make_hit(date="1950-01-26")
         result = format_result(hit, [])
         assert result["date_display"] == "26 January 1950"
+
+
+# ── _merge_expansion_terms ────────────────────────────────────────────────────
+
+class TestMergeExpansionTerms:
+    def test_no_expansion_returns_original(self):
+        terms = _merge_expansion_terms(["budget", "allocation"], None)
+        assert set(terms) == {"budget", "allocation"}
+
+    def test_empty_expansion_returns_original(self):
+        terms = _merge_expansion_terms(["budget"], [])
+        assert set(terms) == {"budget"}
+
+    def test_single_word_synonym_added(self):
+        terms = _merge_expansion_terms(["budget"], ["allocation"])
+        assert "budget" in terms
+        assert "allocation" in terms
+
+    def test_phrase_synonym_tokenized(self):
+        terms = _merge_expansion_terms(["rights"], ["fundamental rights", "Article 14"])
+        assert "fundamental" in terms
+        assert "rights" in terms
+        assert "article" in terms
+        assert "14" in terms
+
+    def test_duplicate_terms_not_repeated(self):
+        terms = _merge_expansion_terms(["rights"], ["rights"])
+        assert terms.count("rights") == 1
+
+    def test_expansion_terms_lowercased(self):
+        terms = _merge_expansion_terms(["budget"], ["BUDGET", "Allocation"])
+        assert "budget" in terms
+        assert "allocation" in terms
+        assert "BUDGET" not in terms
+
+    def test_snippet_highlights_synonym_term(self):
+        """Synonym tokens must be highlighted in the snippet even when absent from query."""
+        text = (
+            "The government must protect fundamental rights under the constitution. "
+            "Article 14 guarantees equality before the law."
+        )
+        # User typed "rights"; synonym expansion adds "Article 14"
+        all_terms = _merge_expansion_terms(["rights"], ["Article 14"])
+        snippet, _ = _build_snippet(text, all_terms)
+        assert snippet is not None
+        assert "<mark>" in snippet
+        # Both the original query term and the synonym term must be highlighted
+        assert "<mark>rights</mark>" in snippet or "<mark>Article</mark>" in snippet

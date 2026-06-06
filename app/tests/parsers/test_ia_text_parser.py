@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from ingest.parsers.ia_text_parser import parse_ia_text
+from ingest.parsers.ia_text_parser import parse_ia_text, _normalize_eparlib_url
 
 
 def _meta(**overrides) -> dict:
@@ -378,3 +378,30 @@ class TestEparlibQAMetadataFields:
         result = parse_ia_text(_SAMPLE_TEXT, _meta(), "LS")
         assert result is not None
         assert result["ministry"] is None
+
+
+# ── _normalize_eparlib_url ────────────────────────────────────────────────────
+
+class TestNormalizeEparlibUrl:
+    def test_absolute_url_unchanged(self):
+        url = "https://eparlib.sansad.in/handle/123456789/12345"
+        assert _normalize_eparlib_url(url) == url
+
+    def test_relative_url_gets_base_prepended(self):
+        assert _normalize_eparlib_url("/handle/123456789/4") == \
+            "https://eparlib.sansad.in/handle/123456789/4"
+
+    def test_none_returns_none(self):
+        assert _normalize_eparlib_url(None) is None
+
+    def test_non_root_relative_unchanged(self):
+        """URLs that do not start with '/' are returned as-is (e.g. already absolute)."""
+        url = "http://example.com/path"
+        assert _normalize_eparlib_url(url) == url
+
+    def test_parse_ia_text_normalizes_relative_source_url(self):
+        """parse_ia_text must resolve relative eparlib_document_url to absolute."""
+        meta = _meta(eparlib_document_url="/handle/123456789/99")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["source_url"] == "https://eparlib.sansad.in/handle/123456789/99"

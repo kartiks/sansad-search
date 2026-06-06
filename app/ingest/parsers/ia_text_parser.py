@@ -85,6 +85,23 @@ _TITLE_TYPE_MAP: list[tuple[re.Pattern, str]] = [
 ]
 
 
+_EPARLIB_BASE = "https://eparlib.sansad.in"
+
+
+def _normalize_eparlib_url(url: str | None) -> str | None:
+    """Resolve relative eparlib URLs to absolute form.
+
+    IA metadata sometimes stores eparlib_document_url as a root-relative path
+    (e.g. '/handle/123456789/4') instead of a full URL.  Prepending the known
+    base makes these safe to use as href values.
+    """
+    if url is None:
+        return None
+    if url.startswith("/"):
+        return _EPARLIB_BASE + url
+    return url
+
+
 def _get(metadata: dict[str, Any], key: str) -> str | None:
     """Extract a metadata value that may be a string or a single-element list."""
     val = metadata.get(key)
@@ -188,7 +205,7 @@ def parse_ia_text(
 
     # ── Metadata mapping ──────────────────────────────────────────────────────
 
-    source_url = _get(metadata, "eparlib_document_url")
+    source_url = _normalize_eparlib_url(_get(metadata, "eparlib_document_url"))
 
     # Issue 1: parse 'D-Mon-YYYY' / 'D-Month-YYYY' in addition to ISO
     date_raw = _get(metadata, "eparlib_date")

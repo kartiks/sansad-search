@@ -235,11 +235,12 @@ describe('RecordDetail — metadata fields', () => {
     expect(screen.queryByText('View source ↗')).toBeNull()
   })
 
-  it('shows speaker name with "(name unresolved)" note when speaker_name_unresolved=true', async () => {
+  it('shows speaker name without unresolved badge when speaker_name_unresolved=true', async () => {
     mockFetch(makeRecordDetail({ speaker_name: 'Unknown Name', speaker_name_unresolved: true }))
     renderDetail()
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-    expect(screen.getByTestId('name-unresolved')).toBeInTheDocument()
+    expect(screen.getByTestId('field-speaker-name')).toHaveTextContent('Unknown Name')
+    expect(screen.queryByTestId('name-unresolved')).toBeNull()
   })
 
   it('does not show unresolved note when speaker_name_unresolved=false', async () => {
