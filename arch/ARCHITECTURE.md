@@ -1,7 +1,7 @@
 # Architecture — SansadSearch
 
-**PRD version:** v2.1
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules); updated 2026-06-03 (§5 CA Date: document all three URL slug formats — DD-MMM-YYYY, DD-MMMM-YYYY, YYYY-MM-DD); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table; two-stage pipeline split via `--stage fetch|process|all`; dual-signal checkpoint — `raw_documents` PK = Stage 1 complete, SQLite `processed_documents` = Stage 2 complete); updated 2026-06-04 (§1/§3/§5/§6 stale `{identifier}_djvu.txt` URL construction references replaced with dynamic DjVuTXT URL discovery from IA metadata `files` array); updated 2026-06-04 (PRD v2.1: §3 main.py comment, §4 Stage 1 data flow, §5 Deferred Processing + Checkpoint store + Cross-source identity — `--date-from`/`--date-to` scope both stages; `raw_documents` PK corrected to composite `(canonical_doc_id, corpus)`; per-corpus dedup scope clarified)
+**PRD version:** v3.0
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules); updated 2026-06-03 (§5 CA Date: document all three URL slug formats — DD-MMM-YYYY, DD-MMMM-YYYY, YYYY-MM-DD); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table; two-stage pipeline split via `--stage fetch|process|all`; dual-signal checkpoint — `raw_documents` PK = Stage 1 complete, SQLite `processed_documents` = Stage 2 complete); updated 2026-06-04 (§1/§3/§5/§6 stale `{identifier}_djvu.txt` URL construction references replaced with dynamic DjVuTXT URL discovery from IA metadata `files` array); updated 2026-06-04 (PRD v2.1: §3 main.py comment, §4 Stage 1 data flow, §5 Deferred Processing + Checkpoint store + Cross-source identity — `--date-from`/`--date-to` scope both stages; `raw_documents` PK corrected to composite `(canonical_doc_id, corpus)`; per-corpus dedup scope clarified); updated 2026-06-06 (PRD v3.0: **Non-Negotiable #9 reversed** — IA/archive.org URL is now the citation for LS and RS-via-IA/rsdebate; F01 adjacent speech merging + `lok_sabha_number`/`segments`/`canonical_doc_id` columns; F05 ≥400-word snippets; F09 inline adjacent loading replaces single Prev/Next nav — new `GET /api/record/{id}/adjacent`; F10 debug mode — new `api/routes/debug.py` + `api/services/debug.py`, search debug envelope, two lazy-fetch debug endpoints)
 
 ---
 
@@ -10,7 +10,7 @@
 SansadSearch is a two-subsystem application:
 
 - **Ingestion pipeline** — local CLI that runs a two-stage pipeline across three corpora (CA, LS, RS). **Stage 1 (fetch + parse):** discovers source documents via an ordered provider chain (government sites plus the Internet Archive mirror); URLs discovered at runtime from listing/browse pages, never hardcoded; writes extracted text and document-level metadata to `raw_documents` (PostgreSQL). **Stage 2 (segment + index):** reads from `raw_documents`, segments and canonicalizes records, writes to `speeches`/`qa_exchanges` (PostgreSQL), and pushes a derived search index to Meilisearch Cloud. Both stages are independently invokable.
-- **Web application** — FastAPI backend + React SPA serving search, filtering, sorting, result display, and a single-record detail view (F09). Read-only. No authentication.
+- **Web application** — FastAPI backend + React SPA serving search, filtering, sorting, result display, a single-record detail view with inline adjacent loading (F09), and an unauthenticated debug mode (F10, `?debug=1`) exposing scoring, index, processed-record and raw-document diagnostics. Read-only. No authentication.
 
 The two subsystems share no runtime coupling. Ingestion runs offline on the operator's machine. The web application is a stateless read interface over the populated stores.
 
@@ -52,17 +52,30 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
   api/
     main.py                      # FastAPI entry; CORS config, lifespan hooks
     routes/
-      search.py                  # POST /api/search
+      search.py                  # POST /api/search (F10: ?debug=1 adds debug envelope)
       status.py                  # GET /api/status
-      record.py                  # GET /api/record/{id} (F09 detail; 404 if not found)
+      record.py                  # GET /api/record/{id} (F09 detail; 404 if not found) +
+                                 # GET /api/record/{id}/adjacent (F09 inline range fetch)
+      debug.py                   # F10: GET /api/debug/processed/{id} (full speeches/qa row;
+                                 # 404 if not found) + GET /api/debug/raw/{id} (full
+                                 # raw_documents row via record.canonical_doc_id+source;
+                                 # 404 if no linked raw doc). No auth (NFR SEC-1)
     services/
       query_expander.py          # Query parsing, stop-word stripping, synonym lookup,
                                  # phrase synonym detection, expansion notice generation
       search.py                  # Meilisearch filter construction, result formatting,
-                                 # snippet post-processing
+                                 # snippet post-processing (F05 cropLength=400 ≥400-word
+                                 # snippets); F10: when debug active, sets showRankingScore/
+                                 # showRankingScoreDetails/attributesToRetrieve=["*"] and
+                                 # assembles the debug envelope (processed_query +
+                                 # Meilisearch request/response)
       record.py                  # F09: fetch one record by id (speeches UNION qa_exchanges),
-                                 # adjacent-neighbour query (same sitting, by sequence),
-                                 # sitting_total count, response formatting
+                                 # sitting_total count, has_prev/has_next boundary flags,
+                                 # and the adjacent range query (same sitting, by sequence,
+                                 # direction + from_seq + limit); response formatting
+      debug.py                   # F10: full-row fetch from speeches/qa_exchanges
+                                 # (processed) and from raw_documents (raw, resolved via
+                                 # the processed record's canonical_doc_id + source)
     lib/
       meilisearch_client.py      # Shared Meilisearch async client (singleton, search key)
       db.py                      # asyncpg connection pool init and teardown
@@ -94,10 +107,12 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
         internet_archive.py      # archive.org (LS/RS, preferred bulk): advancedsearch enumerate
                                  # eparlib.nic.in.{N}; metadata JSON; DjVuTXT URL discovered
                                  # eparlib_* custom fields. Dual-corpus: single provider serves
-                                 # both LS and RS via a `corpus` constructor param; citation_url
-                                 # dispatches on corpus = eparlib_document_url (LS) |
-                                 # rsdebate.nic.in URL (RS, derived from handle N) |
-                                 # null (RS no-derivable-handle edge case, PRD v1.3)
+                                 # both LS and RS via a `corpus` constructor param; also
+                                 # extracts lok_sabha_number from eparlib_lok_sabha_number.
+                                 # citation_url = the IA item URL
+                                 # (archive.org/details/eparlib.nic.in.{N}) for BOTH LS and RS
+                                 # (PRD v3.0 source_url reversal — Non-Negotiable #9);
+                                 # null only when no IA identifier is derivable
         eparlib_dspace.py        # eparlib.sansad.in (LS, handle /7; IA-missing fallback):
                                  # DSpace browse + item-page bitstream URL resolution
                                  # (never constructs filenames)
@@ -115,8 +130,14 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
                                  # metadata files array) + IA metadata JSON → raw record
                                  # dicts; no local OCR
     segmenters/
-      speech.py                  # Raw text/markup → Speech unit dicts
-      qa.py                      # Raw text/markup → Q+A exchange unit dicts
+      speech.py                  # Raw text/markup → Speech unit dicts; applies F01 Adjacent
+                                 # Speech Merging (consecutive same-speaker speeches in a
+                                 # sitting with no break signal → one record with a `segments`
+                                 # JSONB array, full_text_en = segments joined "\n\n",
+                                 # word_count = combined, sequence = first segment's position)
+      qa.py                      # Raw text/markup → Q+A exchange unit dicts (never merged);
+                                 # minister_name from the response section, never question
+                                 # preamble; fallback "Minister of [Ministry]" (PRD v3.0)
     canonical/
       names.py                   # Speaker name canonicalization against names_dict.csv
       sessions.py                # Session name canonicalization to canonical format
@@ -125,8 +146,12 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
                                  # doc id N / coi day-URL) and record-level dedup key store
     indexer.py                   # PostgreSQL writer for both stages: Stage 1 writes
                                  # extracted text + metadata to raw_documents; Stage 2 writes
-                                 # segmented records to speeches/qa_exchanges + pushes to
-                                 # Meilisearch + updates index_status on run completion
+                                 # segmented records to speeches/qa_exchanges (incl. new v3.0
+                                 # columns lok_sabha_number, segments, and canonical_doc_id =
+                                 # the source raw_documents row's id, for F10 debug-raw) +
+                                 # pushes to Meilisearch (lok_sabha_number/segments/
+                                 # canonical_doc_id excluded from the document) + updates
+                                 # index_status on run completion
     setup_meilisearch.py         # One-time/deploy-time: push synonyms.json to
                                  # Meilisearch synonyms API; configure index settings
 
@@ -134,7 +159,8 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
     src/
       components/
         ResultCard.jsx           # Dispatches to SpeechCard or QACard by record_type;
-                                 # each card links to /record/:id
+                                 # each card links to /record/:id; in debug mode renders a
+                                 # ResultDebugPanel toggle below the card (F10)
         SpeechCard.jsx           # F05: renders lang_original badge + time_of_day row
         QACard.jsx               # F05: renders lang_original badge + time_of_day row
         FilterChip.jsx
@@ -144,25 +170,47 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
         AdvancedSearchModal.jsx
         RecentSearchesDropdown.jsx
         SavedSearchesPanel.jsx
+        ResultDebugPanel.jsx     # F10 per-result panel: 4 collapsible sections — Scoring
+                                 # details + Document in index (from search response);
+                                 # Processed record (lazy GET /api/debug/processed/{id});
+                                 # Raw document (lazy GET /api/debug/raw/{id}); per-section
+                                 # error message on 404/failure
+        SearchDebugPanel.jsx     # F10 global panel above results: 5 collapsible sections —
+                                 # Processed query, API request, API response, Meilisearch
+                                 # request, Meilisearch response (from the response debug
+                                 # envelope + the frontend's own captured request/response)
       pages/
         Home.jsx
-        Results.jsx
+        Results.jsx              # F10: reads ?debug=1; renders SearchDebugPanel + per-card
+                                 # ResultDebugPanel; passes debug flag to useSearch
         IndexingStatusPage.jsx   # Full F07 indexing status panel (detailed: total +
                                  # per-source counts + per-source date coverage +
                                  # last-updated); reached via Results.jsx footer link
-        RecordDetail.jsx         # F09 detail page (route /record/:id): full text +
-                                 # all metadata; prev/next adjacent controls (disabled at
-                                 # boundaries); back-nav = "Back to results" (in-app referrer
-                                 # via router location state) | "Search" (direct URL)
+        RecordDetail.jsx         # F09 detail page (route /record/:id): full text + all
+                                 # metadata (incl. lok_sabha_number "[N]th Lok Sabha" for LS);
+                                 # inline adjacent loading — "Load 5 previous"/"Load 5 next"
+                                 # controls prepend/append batches via useAdjacent, enabled
+                                 # state from has_prev/has_next then has_more; URL unchanged;
+                                 # back-nav = "Back to results" (in-app referrer via router
+                                 # location state) | "Search" (direct URL)
       hooks/
-        useSearch.js             # POST /api/search call; loading/error state management
+        useSearch.js             # POST /api/search call; loading/error state management;
+                                 # forwards debug flag (F10) and returns the debug envelope
         useRecord.js             # GET /api/record/{id} call (F09); loading/error/404 state
+        useAdjacent.js           # F09: GET /api/record/{id}/adjacent calls (direction +
+                                 # from_seq + limit); accumulates prepended/appended batches,
+                                 # tracks per-direction has_more and in-flight/error state
+        useDebugDetail.js        # F10: lazy GET /api/debug/processed/{id} and
+                                 # GET /api/debug/raw/{id}; one fetch per section, cached
+                                 # after first expand; 404/error state per section
         useCookieHistory.js      # Recent searches read/write (F08)
         useSavedSearches.js      # Saved searches read/write (F08)
       lib/
         cookie.js                # Cookie read/write/delete helpers
         filterState.js           # Filter shape definition, defaults, validation helpers
         expansionNotice.js       # Parse expansion_notice array from API response
+        ordinal.js               # F09: integer → English ordinal ("17"→"17th","21"→"21st")
+                                 # for lok_sabha_number display
         constants.js             # Proceeding type labels, source labels
       main.jsx                   # SPA entry point; mounts React root; defines BrowserRouter
                                  # routes: / → Home, /search → Results,
@@ -199,9 +247,12 @@ The Coding Agent updates this table after any change to API routes or core lib f
 
 | Flow | Path |
 |------|------|
-| **Search request** | Browser → `POST /api/search` → `query_expander.py` (parse, strip stop words, synonym lookup, phrase detection) → `services/search.py` (build Meilisearch filter expression, call Meilisearch Cloud, format results and snippets) → Browser |
+| **Search request** | Browser → `POST /api/search` → `query_expander.py` (parse, strip stop words, synonym lookup, phrase detection) → `services/search.py` (build Meilisearch filter expression, set `attributesToCrop=["full_text_en"]`/`cropLength=400` for F05 ≥400-word snippets, call Meilisearch Cloud, format results and snippets) → Browser. **F10 debug:** when `?debug=1`, `search.py` also sets `showRankingScore`/`showRankingScoreDetails`/`attributesToRetrieve=["*"]`, captures the Meilisearch request + response, and returns a `debug` envelope (`processed_query` + Meilisearch request/response) alongside results |
 | **Index status (F07)** | Browser → `GET /api/status` → asyncpg query on `index_status` table (most recent row) → Browser. Both F07 surfaces share this one flow: the homepage strip (`Home.jsx`, condensed — counts + last-updated) and the full panel (`IndexingStatusPage.jsx`, detailed — total + per-source counts + per-source date coverage + last-updated) render different subsets of the same response. No separate endpoint. |
-| **Record detail (F09)** | Browser → `GET /api/record/{id}` → `services/record.py`: (1) asyncpg fetch by id — `speeches WHERE id` UNION ALL `qa_exchanges WHERE id`; 404 if neither matches. (2) adjacent-neighbour query over the same sitting (`source` + `date` + `sitting_number IS NOT DISTINCT FROM`), both tables unioned, ordered by `sequence_within_sitting`; resolves `prev_id`/`next_id` (null at boundaries) and `sitting_total` → Browser. **Detail is served from PostgreSQL, not Meilisearch** (the canonical store holds every display field, incl. `session_number`, `has_untranslated_content`, `page_reference`, `word_count`). Search remains Meilisearch-only. |
+| **Record detail (F09)** | Browser → `GET /api/record/{id}` → `services/record.py`: (1) asyncpg fetch by id — `speeches WHERE id` UNION ALL `qa_exchanges WHERE id`; 404 if neither matches. (2) same-sitting aggregate query (`source` + `date` + `sitting_number IS NOT DISTINCT FROM`, both tables unioned) → `sitting_total`, and `has_prev`/`has_next` (whether any record exists below/above the focal `sequence_within_sitting`) → Browser. **Detail is served from PostgreSQL, not Meilisearch** (the canonical store holds every display field, incl. `lok_sabha_number`, `session_number`, `has_untranslated_content`, `page_reference`, `word_count`). Search remains Meilisearch-only. |
+| **Adjacent loading (F09)** | Browser (click "Load 5 previous/next") → `GET /api/record/{id}/adjacent?direction=&from_seq=&limit=5` → `services/record.py`: resolve the focal record's sitting from `id`, query both tables for up to `limit` records strictly below (`prev`) / above (`next`) `from_seq` ordered by `sequence_within_sitting` (served by `idx_*_sitting`), return them ascending + `has_more` → Browser prepends/appends inline (URL unchanged). PostgreSQL-only; exempt from PERF-2 (NFR PERF-2 clarification). |
+| **Debug — processed record (F10)** | Browser (expand "Processed record") → `GET /api/debug/processed/{id}` → `services/debug.py`: asyncpg fetch full row `speeches WHERE id` then `qa_exchanges WHERE id`; 404 if neither → Browser. Returns every column incl. `segments`/`canonical_doc_id`. No auth (SEC-1); exempt from PERF (PERF-3). |
+| **Debug — raw document (F10)** | Browser (expand "Raw document") → `GET /api/debug/raw/{id}` → `services/debug.py`: (1) fetch processed record by `id` → `canonical_doc_id` + `source`; (2) fetch `raw_documents WHERE canonical_doc_id=$1 AND corpus=$2` (composite PK); 404 if no processed record or no linked raw row → Browser. Full row incl. `extracted_text`. No auth (SEC-1); exempt from PERF (PERF-3). |
 | **Search history (F08)** | Browser ↔ Browser cookies only — no server involvement |
 | **Stage 1 ingestion (fetch + parse)** | Operator CLI (`--stage fetch`) → corpus orchestrator → provider chain `discover()` (HTML listing crawl / DSpace browse / IA `advancedsearch`; document-level dedup: `raw_documents` PK lookup on `(canonical_doc_id, corpus)` — if row exists, skip fetch) → httpx fetcher (rate-limited, robots.txt compliant) → parser by format: HTML (`html_parser`) / IA pre-OCR text (`ia_text_parser`) / PDF (`pdf_parser`, embedded-text only) → date-window gate: when `--date-from`/`--date-to` provided, write to `raw_documents` only if parsed date is within window; skip out-of-window docs → `indexer.py` writes extracted text + metadata to `raw_documents` (PostgreSQL) |
 | **Stage 2 ingestion (segment + index)** | Operator CLI (`--stage process`) → reads `raw_documents` for scope (filtered by `--source`, optionally `--date-from`/`--date-to`) → segmenter → canonicalizer → `indexer.py` writes to `speeches`/`qa_exchanges` (PostgreSQL); SQLite `processed_documents` entry written → Meilisearch document pusher → `index_status` table updated on completion |
@@ -236,11 +287,10 @@ No custom scoring functions are implemented. This approximation is acceptable fo
 
 **Cross-source document identity.** The DSpace handle number `N` is the canonical document identity for LS/RS. The Internet Archive identifier `eparlib.nic.in.{N}` maps to DSpace handle `123456789/{N}` — `N` is the cross-provider join key. The checkpoint store dedupes at the **document level** on this canonical id so a document available from more than one provider (within the same corpus) is fetched and parsed once; the record-level `dedup_key` (DATA-MODELS §1.5) remains the final guard against duplicate records. **Dedup is scoped per corpus** — the same `canonical_doc_id` may appear as both an LS row and an RS row in `raw_documents` (the composite PK `(canonical_doc_id, corpus)` allows this). A document fetched for LS does not suppress fetching the same handle N for RS.
 
-**Internet Archive pre-OCR text path.** LS/RS bulk ingestion prefers the IA mirror. For each item, `internet_archive.py` fetches the IA metadata JSON and locates the entry with `"format" == "DjVuTXT"` in the top-level `files` array; the DjVuTXT URL is assembled from `server + dir + name` fields of that entry. Items where no DjVuTXT entry exists in the `files` array are logged and skipped — the URL is never constructed by guessing a filename pattern. The metadata JSON also carries `eparlib_*` fields (`eparlib_title`, `eparlib_date`, `eparlib_lok_sabha_number`, `eparlib_session_number`, `eparlib_document_url`). `ia_text_parser.py` consumes the text and maps the metadata. The pipeline runs no OCR of its own. A **single `InternetArchiveProvider` serves both corpora** (dual-corpus, selected by a `corpus` constructor parameter); citation derivation dispatches on the corpus:
-- **LS:** `source_url` is set to the canonical `eparlib_document_url`.
-- **RS:** `source_url` is set to the `rsdebate.nic.in` item URL derived from the DSpace handle `N` (the IA identifier `eparlib.nic.in.{N}` ↔ handle `123456789/{N}`); when no handle is derivable from the IA record, `source_url` is null, a warning is logged, and the item is still ingested (PRD v1.3 no-handle edge case).
+**Internet Archive pre-OCR text path.** LS/RS bulk ingestion prefers the IA mirror. For each item, `internet_archive.py` fetches the IA metadata JSON and locates the entry with `"format" == "DjVuTXT"` in the top-level `files` array; the DjVuTXT URL is assembled from `server + dir + name` fields of that entry. Items where no DjVuTXT entry exists in the `files` array are logged and skipped — the URL is never constructed by guessing a filename pattern. The metadata JSON also carries `eparlib_*` fields (`eparlib_title`, `eparlib_date`, `eparlib_lok_sabha_number`, `eparlib_session_number`, `eparlib_document_url`). `ia_text_parser.py` consumes the text, maps the metadata, and extracts `lok_sabha_number` from `eparlib_lok_sabha_number` (LS only). The pipeline runs no OCR of its own. A **single `InternetArchiveProvider` serves both corpora** (dual-corpus, selected by a `corpus` constructor parameter); under PRD v3.0 the citation is the same for both:
+- **LS and RS via IA:** `source_url` is set to the **Internet Archive item URL** (`https://archive.org/details/eparlib.nic.in.{N}`). This is the v3.0 reversal — `eparlib_document_url` (LS) and the derived `rsdebate.nic.in` URL (RS) are **no longer** used as the citation; the archive.org URL *is* the citation (Non-Negotiable #9). `source_url` is null only when no IA identifier is derivable.
 
-In neither case is the archive.org mirror URL ever used as `source_url` (Non-Negotiable #9). Direct DSpace PDF (embedded-text extraction via PyMuPDF, no OCR) is the fallback for items absent from the mirror; a fallback PDF with no text layer is logged and skipped.
+Direct DSpace PDF (embedded-text extraction via PyMuPDF, no OCR) is the fallback for items absent from the mirror; a fallback PDF with no text layer is logged and skipped. For a fallback-path item genuinely absent from IA, no archive.org URL exists, so `source_url` is null per the v3.0 "null if no accessible URL can be derived" rule (see §8 build-time verification). Recent RS sourced from sansad.in HTML cites its sansad.in page URL.
 
 **DSpace bitstream resolution.** DSpace PDF URLs (eparlib.sansad.in, rsdebate.nic.in) are always resolved by reading the real bitstream URL from the item page/metadata. Bitstream filenames are **never constructed** — the convention is inconsistent across years (e.g. `lsd_08_09_04-12-1987.pdf`, `lsd_10_V_01_12_1992.pdf`, `lsd_08_1_30-01-1985.pdf`).
 
@@ -263,9 +313,13 @@ The SQLite checkpoint file is local to the operator's machine, never deployed, a
 
 **Pre-computed index status.** The ingestion pipeline writes a row to the `index_status` PostgreSQL table on successful completion. The `GET /api/status` endpoint reads the most recent row. The status panel never issues a Meilisearch document count query at request time.
 
-**Record detail served from PostgreSQL (F09).** The detail page reads from PostgreSQL, not Meilisearch. PostgreSQL is the canonical store and already holds every field the detail page shows — including fields deliberately excluded from the Meilisearch document (`session_number`, `has_untranslated_content`, `page_reference`, `word_count`). `GET /api/record/{id}` fetches one record (`speeches` UNION ALL `qa_exchanges` by `id`) and runs one adjacent-neighbour query over the same sitting. This is the **only** record-serving Postgres read path; search continues to run exclusively against Meilisearch. The split is deliberate: search needs ranking/typo/synonym behaviour (Meilisearch); detail needs the complete record with no document-size pressure (Postgres). PERF-2 (≤500ms p95) is met by the `id` primary-key lookup plus a composite sitting index (DATA-MODELS §1.1/§1.2).
+**Record detail + inline adjacent loading served from PostgreSQL (F09).** The detail page reads from PostgreSQL, not Meilisearch. PostgreSQL is the canonical store and already holds every field the detail page shows — including fields deliberately excluded from the Meilisearch document (`lok_sabha_number`, `segments`, `session_number`, `has_untranslated_content`, `page_reference`, `word_count`). `GET /api/record/{id}` fetches one record (`speeches` UNION ALL `qa_exchanges` by `id`) and reports `sitting_total` plus `has_prev`/`has_next` boundary flags. **Inline adjacent loading** (PRD v3.0, replacing single Prev/Next navigation) is served by a separate `GET /api/record/{id}/adjacent` range endpoint: given a `direction` and an exclusive `from_seq`, it returns up to 5 same-sitting records beyond that position (ordered by the shared `sequence_within_sitting`) plus `has_more`. The client prepends/appends batches without changing the URL. These are the **only** record-serving Postgres read paths; search continues to run exclusively against Meilisearch. The split is deliberate: search needs ranking/typo/synonym behaviour (Meilisearch); detail needs the complete record with no document-size pressure (Postgres). PERF-2 (≤500ms p95) covers the initial `GET /api/record/{id}` only — the `id` primary-key lookup plus a composite sitting index (DATA-MODELS §1.1/§1.2); adjacent batch loads are explicitly exempt from PERF-2 (NFR v3.0 clarification) and are served by the same `idx_*_sitting` indexes.
 
-**Unified sitting-level sequence assignment.** `sequence_within_sitting` is a single 1-based ordering **shared** across speech and Q+A records within one sitting (a Q+A exchange and a speech never share a number). It is assigned at the corpus-orchestrator level by walking the sitting's parsed proceedings in document order across both record types — not independently inside `segmenters/speech.py` and `segmenters/qa.py`. This shared space is what makes F09 adjacent navigation (prev = seq−1, next = seq+1) traverse speeches and questions in true document order. `sequence_within_sitting` is **not** part of the Q+A `dedup_key` (DATA-MODELS §1.5).
+**Unified sitting-level sequence assignment.** `sequence_within_sitting` is a single 1-based ordering **shared** across speech and Q+A records within one sitting (a Q+A exchange and a speech never share a number). It is assigned at the corpus-orchestrator level by walking the sitting's parsed proceedings in document order across both record types — not independently inside `segmenters/speech.py` and `segmenters/qa.py`. This shared space is what makes F09 inline adjacent loading (range fetch below/above a `from_seq`) traverse speeches and questions in true document order. For a **merged speech** (Adjacent Speech Merging, below) the record's `sequence_within_sitting` is the position of the first segment in the merge group; the merged record occupies a single sequence slot. `sequence_within_sitting` is **not** part of the Q+A `dedup_key` (DATA-MODELS §1.5).
+
+**Adjacent Speech Merging (F01, PRD v3.0).** During Stage 2, `segmenters/speech.py` merges consecutive speeches by the **same speaker** within the **same sitting** and **same `proceeding_type`**, consecutive in document order with **no break signal**, into a single `speeches` record. Break signals (any one prevents merging): a speech/interjection by a different speaker; a section heading (H1/H2/H3 or equivalent); a procedural entry (new question-number heading, block header such as "QUESTIONS"/"STARRED QUESTION NO. X", or a formal marker such as "The House adjourned for lunch"). The merged record stores a `segments` JSONB array (one element `{text, segment_index}` per original speech, 0-based); `full_text_en` = segment texts joined with `\n\n`; `word_count` = combined total; `sequence_within_sitting` = first segment's position. Unmerged speeches get a single-element `segments` array. Q+A exchanges are **never** merged. Because the Q+A dedup key excludes `sequence_within_sitting` and the speech dedup key uses the first-segment position, merging does not create duplicate rows on re-ingestion.
+
+**Debug mode (F10, PRD v3.0).** An unauthenticated diagnostic surface gated by the `?debug=1` query parameter; it adds **no new infrastructure** and reuses the existing Railway Postgres pool and Meilisearch client. Three backend surfaces: (1) `POST /api/search?debug=1` augments the Meilisearch query (`showRankingScore`, `showRankingScoreDetails`, `attributesToRetrieve=["*"]`) and returns a `debug` envelope (processed query + captured Meilisearch request/response) alongside results; (2) `GET /api/debug/processed/{id}` returns the full `speeches`/`qa_exchanges` row; (3) `GET /api/debug/raw/{id}` returns the full `raw_documents` row, resolved via the processed record's `canonical_doc_id` + `source`. The frontend lazy-fetches (2) and (3) on first section expand and caches per section. All three are exempt from PERF-1/PERF-2 (NFR PERF-3) and expose full records without auth — a deliberate v1 choice flagged by NFR SEC-1 (review before production use with sensitive data). The `canonical_doc_id` column on `speeches`/`qa_exchanges` exists solely to make (3) a clean composite-PK lookup against `raw_documents`.
 
 **CA field-level parsing (F01).** Two CA-only rules in the CA parse path (`providers/coi_html.py` → `parsers/html_parser.py`):
 - **Date** — the constitutionofindia.net URL slug is the *authoritative* date source. The parser derives `date` from the slug and **discards** any date found in the HTML body, even when present. (Supersedes the prior URL-as-fallback-only behaviour.) A CA record's date is missing only if the slug itself fails to parse. Three slug formats are handled (all observed on the live site):
@@ -282,7 +336,7 @@ The SQLite checkpoint file is local to the operator's machine, never deployed, a
 |-------------|-----------|---------|-------|
 | Meilisearch Cloud | Read (search) | API (`meilisearch_client.py`) | Search-only API key used at runtime |
 | Meilisearch Cloud | Write (index, settings) | Ingestion pipeline | Master key used for document push and index config; never exposed to API at runtime |
-| PostgreSQL (Railway) | Read | API (`db.py`) | Two read paths: `index_status` table for the F07 status endpoint, and `speeches`/`qa_exchanges` for the F09 record-detail endpoint (`GET /api/record/{id}` — single record + adjacent navigation). Search records are **not** served from Postgres (search runs on Meilisearch) |
+| PostgreSQL (Railway) | Read | API (`db.py`) | Read paths: `index_status` (F07 status); `speeches`/`qa_exchanges` for the F09 record-detail endpoint (`GET /api/record/{id}`) and the F09 inline adjacent-loading endpoint (`GET /api/record/{id}/adjacent`); and the F10 debug endpoints — `speeches`/`qa_exchanges` (`GET /api/debug/processed/{id}`) and `raw_documents` (`GET /api/debug/raw/{id}`, resolved via `canonical_doc_id`+`source`). Search records are **not** served from Postgres (search runs on Meilisearch). All read paths reuse the same asyncpg pool — no new infrastructure for v3.0 |
 | PostgreSQL (Railway) | Write | Ingestion pipeline | Stage 1: extracted text + metadata to `raw_documents`. Stage 2: segmented records to `speeches`/`qa_exchanges`; `index_status` on completion |
 | constitutionofindia.net (CLPR) | Read (HTTP) | Ingestion `providers/coi_html.py` | CA primary & only; clean semantic HTML, one page per sitting; rate-limited; robots.txt compliant |
 | archive.org (Internet Archive) | Read (HTTP) | Ingestion `providers/internet_archive.py` | **Preferred LS/RS bulk path**; pre-OCR DjVuTXT (URL discovered dynamically from metadata `files` array — entry with `format == "DjVuTXT"`; items with no such entry are skipped) + metadata JSON via `advancedsearch.php` / `metadata`; identifier `eparlib.nic.in.{N}` ↔ DSpace handle `123456789/{N}` |
@@ -313,18 +367,35 @@ Decisions that must not be changed without explicit user approval. Changes to an
 
 8. **React SPA — no SSR.** The frontend is a static Vite build served from Vercel. No server-side rendering.
 
-9. **IA-sourced records cite the canonical record, not the mirror.** For LS records ingested via the Internet Archive, `source_url` is set to `eparlib_document_url` (the official parliamentary-library URL). For RS records ingested via the Internet Archive, `source_url` is set to the `rsdebate.nic.in` item URL derived from the DSpace handle `N`; when no handle is derivable, `source_url` is null (PRD v1.3 no-handle edge case). The archive.org mirror URL is never cited in either case — the mirror is a fetch path, not a citation.
+9. **`source_url` citation rules (PRD v3.0 — reverses the pre-v3.0 rule).** The Internet Archive (archive.org) URL **is** the citation for IA-sourced records:
+   - **CA** → constitutionofindia.net day-page URL.
+   - **LS** (any path) → the Internet Archive item URL (`https://archive.org/details/eparlib.nic.in.{N}`). `eparlib.sansad.in` is **not** reliably accessible and must **not** be used as the citation.
+   - **RS via Internet Archive or rsdebate.nic.in** → the Internet Archive item URL.
+   - **RS via sansad.in HTML** → the sansad.in page URL.
+   - **NULL** when no accessible URL can be derived (e.g. an LS/RS item fetched via DSpace fallback that is genuinely absent from the IA mirror, so no archive.org URL exists).
+
+   This **reverses** the prior non-negotiable (which forbade the archive.org URL and cited `eparlib_document_url` for LS / `rsdebate.nic.in` for RS). The change is user-approved for PRD v3.0. Build-time verification of IA-URL derivability for fallback-path items is in §8.
 
 10. **Stage 2 re-processing requires prior clearing of the target scope.** Before re-running Stage 2 (`--stage process`) for any scope, the operator must delete all existing `speeches`/`qa_exchanges` records for that scope, delete the corresponding Meilisearch documents, and clear the matching `processed_documents` entries from the SQLite checkpoint store. Stage 2 inserts with `ON CONFLICT DO NOTHING` — running it without clearing produces no changes to already-indexed records and silently leaves stale data in place. See DEPLOYMENT.md §6.4 for the full procedure.
 
 ---
 
-## 8. Build-Time Verifications (PRD v2.0)
+## 8. Build-Time Verifications (PRD v2.0 + v3.0)
 
-Items the Coding Agent must confirm against live source structure during the build that introduces F01 v2.0 fields and F09; architecture is silent on the outcome because it depends on source-document reality.
+Items the Coding Agent must confirm against live source structure during the build; architecture is silent on the outcome because it depends on source-document reality.
 
-1. **Shared speech↔Q+A sequence feasibility (all three providers).** Confirm that, for CA (coi HTML), LS (IA text + DSpace PDF), and RS (sansad.in/rs HTML + IA + rsdebate PDF), the sitting's speeches and Q+A exchanges can be ordered into a single document-order sequence. If a provider's format does not expose a reliable interleaved order between the two record types, flag it — F09 adjacent navigation depends on the shared space.
+### PRD v2.0 items (F01 v2.0 fields + F09)
+
+1. **Shared speech↔Q+A sequence feasibility (all three providers).** Confirm that, for CA (coi HTML), LS (IA text + DSpace PDF), and RS (sansad.in/rs HTML + IA + rsdebate PDF), the sitting's speeches and Q+A exchanges can be ordered into a single document-order sequence. If a provider's format does not expose a reliable interleaved order between the two record types, flag it — F09 inline adjacent loading depends on the shared space.
 
 2. **CA TOC anchor mapping.** For the CA subject fallback, verify whether TOC `<li><a href="#ID">` anchor IDs correspond to `id=` attributes on body elements. If the mapping exists, use it to resolve the first-topic fallback; otherwise fall back to the first TOC item's link text. Record the finding.
 
 3. **`time_of_day` extraction surface.** Confirm which HTML sources expose a sitting start time (CA coi, recent RS sansad.in/rs). `time_of_day` is HTML-only — null for all IA pre-OCR text and PDF-sourced records by design.
+
+### PRD v3.0 items (F01 source_url reversal + merging + lok_sabha_number)
+
+4. **IA-URL derivability on fallback paths (`source_url`).** Non-Negotiable #9 requires the Internet Archive item URL as `source_url` for all LS records and for RS-via-IA/rsdebate. For items fetched on a **DSpace fallback path** (LS `eparlib_dspace`, RS `rsdebate_dspace`) because they are absent from the IA mirror, confirm whether a valid archive.org item URL can nonetheless be derived (e.g. the IA identifier `eparlib.nic.in.{N}` resolves to a real IA item) or whether no IA item exists. Per §7 the rule is: cite the IA URL when an IA item is derivable; otherwise `source_url` is **null**. Record which fallback items, if any, end up null so QA can assert the behaviour. (RS fetched from sansad.in HTML always cites its sansad.in page URL — not affected.)
+
+5. **`lok_sabha_number` extraction surface.** `lok_sabha_number` is LS-only. Confirm the field is available on each LS path: IA (`eparlib_lok_sabha_number` in the metadata JSON — primary), and the DSpace PDF fallback (derive from metadata or document text if present). If a particular LS path cannot yield the term number, `lok_sabha_number` is null for those records; record the finding. RS and CA are always null by design.
+
+6. **Adjacent-merge break-signal detection per format.** Adjacent Speech Merging depends on reliably detecting break signals (different speaker, section heading, procedural entry) in each source format: CA coi HTML, recent RS sansad.in HTML, IA pre-OCR plain text (LS/RS), and DSpace PDF embedded text (LS/RS). HTML exposes structural headings directly; pre-OCR/PDF text may not. Confirm that the segmenter can identify break signals in the flat-text formats (IA text, PDF) well enough to avoid over-merging distinct speeches; flag any format where heading/procedural boundaries are not recoverable, since over-merging silently corrupts `segments` and `full_text_en`.

@@ -1,7 +1,7 @@
 # Deployment — SansadSearch
 
-**PRD version:** v2.1
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks); updated 2026-06-01 for PRD v2.0 — §6.3 schema migration for F01 new columns/indexes + re-ingestion; no new env vars, dependencies, or infrastructure (F09 detail endpoint reuses the existing Railway Postgres pool); updated 2026-06-03 — raw document store: §3.3/§3.5/§6.1 updated for `raw_documents`; §6.4 selective re-processing runbook added; no new env vars, dependencies, or infrastructure; updated 2026-06-05 — post-deploy production fixes: `app/ui/vercel.json` proxy+SPA rewrites documented (§3.2); `app/.python-version` Railway/Nixpacks pin documented (§3.1); `app/ui/.npmrc` legacy-peer-deps documented (§3.2); `VITE_API_URL` removed from §2.2 (not used in production — API calls proxied via vercel.json); §4 Vercel row updated
+**PRD version:** v3.0
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks); updated 2026-06-01 for PRD v2.0 — §6.3 schema migration for F01 new columns/indexes + re-ingestion; no new env vars, dependencies, or infrastructure (F09 detail endpoint reuses the existing Railway Postgres pool); updated 2026-06-03 — raw document store: §3.3/§3.5/§6.1 updated for `raw_documents`; §6.4 selective re-processing runbook added; no new env vars, dependencies, or infrastructure; updated 2026-06-05 — post-deploy production fixes: `app/ui/vercel.json` proxy+SPA rewrites documented (§3.2); `app/.python-version` Railway/Nixpacks pin documented (§3.1); `app/ui/.npmrc` legacy-peer-deps documented (§3.2); `VITE_API_URL` removed from §2.2 (not used in production — API calls proxied via vercel.json); §4 Vercel row updated; updated 2026-06-06 for PRD v3.0 — §6.6 schema migration for F01 new columns (`lok_sabha_number`, `segments`, `canonical_doc_id`) + full re-ingestion; no new env vars, dependencies, or infrastructure (F09 adjacent endpoint and F10 debug endpoints reuse the existing Railway Postgres pool and Meilisearch client; debug mode is exempt from response-time SLAs per NFR PERF-3 and is an unauthenticated v1 choice per NFR SEC-1)
 
 ---
 
@@ -466,3 +466,28 @@ The `DEFAULT 'en'` on `lang_original` exists only to satisfy `NOT NULL` for any 
 **Step 2 — Full clean reindex.** Because the new fields require re-parsing, run the full clean reindex (§6.1) so every record is re-ingested with the v2.0 fields populated and a fresh, stable `id`. A Meilisearch-only reindex (§6.2) is **not** sufficient — it would only re-push existing rows that still lack the new values.
 
 **No new env vars, dependencies, or infrastructure.** The F09 `GET /api/record/{id}` endpoint reuses the existing Railway PostgreSQL connection pool (`api/lib/db.py`). PERF-2 (detail page ≤500ms p95) is satisfied by the `id` primary-key lookup plus the `idx_*_sitting` composite indexes for the adjacent-neighbour query; no caching layer or additional service is required.
+
+---
+
+### 6.6 PRD v3.0 migration (F01 new columns + source_url correction + F05/F09/F10)
+
+PRD v3.0 adds three columns to `speeches` (`lok_sabha_number`, `segments`, `canonical_doc_id`) and two to `qa_exchanges` (`lok_sabha_number`, `canonical_doc_id`), and **corrects `source_url`** for all LS and RS records (Non-Negotiable #9 reversal: IA item URL instead of `eparlib_document_url`/`rsdebate.nic.in`). The new column values and the corrected `source_url`/`minister_name`/merged `segments` are **not derivable from stored data** — they require re-parsing and re-segmenting the source documents — so applying v3.0 means a schema migration **followed by a full re-ingestion**.
+
+**Step 1 — Apply the schema changes.** On a fresh database, re-run `app/db/schema.sql` (§3.3). On an existing database, apply the additive migration:
+
+```sql
+ALTER TABLE speeches
+  ADD COLUMN lok_sabha_number INTEGER,
+  ADD COLUMN segments JSONB,
+  ADD COLUMN canonical_doc_id TEXT;
+
+ALTER TABLE qa_exchanges
+  ADD COLUMN lok_sabha_number INTEGER,
+  ADD COLUMN canonical_doc_id TEXT;
+```
+
+All five columns are nullable with no default — re-ingestion populates them (LS records get `lok_sabha_number`; speech records get `segments`; both tables get `canonical_doc_id` linking to the source `raw_documents` row). No new indexes are required: `canonical_doc_id` is resolved only after an `id` primary-key lookup (then a `raw_documents` composite-PK lookup), `lok_sabha_number` is neither filtered nor sorted, and `segments` is display/diagnostic only. `schema.sql` declares all five columns inline for fresh installs.
+
+**Step 2 — Full clean reindex.** Because the new fields require re-parsing **and** existing `source_url`/`minister_name` values are now incorrect **and** speech records are structurally changed by Adjacent Speech Merging, run the full clean reindex (§6.1) so every record is re-ingested with v3.0 values and a fresh, stable `id`. A Meilisearch-only reindex (§6.2) is **not** sufficient — it would only re-push existing rows that still carry the old `source_url` and lack the new columns. The §6.1 `TRUNCATE` already lists all four tables (incl. `raw_documents`), so Stage 1 re-fetch and Stage 2 re-segmentation both occur.
+
+**No new env vars, dependencies, or infrastructure.** The F09 `GET /api/record/{id}/adjacent` range endpoint and the F10 debug endpoints (`POST /api/search?debug=1`, `GET /api/debug/processed/{id}`, `GET /api/debug/raw/{id}`) all reuse the existing Railway PostgreSQL pool and the existing Meilisearch client. Debug mode adds no service and is exempt from response-time SLAs (NFR PERF-3). Debug endpoints are unauthenticated by deliberate v1 choice (NFR SEC-1) — **review before exposing a production instance that holds sensitive data.** The F05 ≥400-word snippet change is a query-time Meilisearch parameter (`cropLength`) in `api/services/search.py`; no index re-configuration via `setup_meilisearch.py` is required for it.
