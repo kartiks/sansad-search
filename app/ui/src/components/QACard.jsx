@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import {
   getProceedingTypeLabel,
   getSourceLabel,
@@ -67,7 +68,7 @@ export function formatQuestionerNames(names) {
   return `${primary} +${names.length - 1} others`
 }
 
-export default function QACard({ result }) {
+export default function QACard({ result, detailTo, detailState }) {
   const subject = result.subject
   const questionNumber = result.question_number
   const questioners = result.questioner_names
@@ -95,20 +96,40 @@ export default function QACard({ result }) {
       <MetadataRow result={result} />
 
       {subject && (
-        <div className="subject-line subject-two-lines" title={subject}>
+        <Link
+          to={detailTo}
+          state={detailState}
+          className="subject-line subject-two-lines card-detail-link"
+          title={subject}
+          data-testid="subject-detail-link"
+        >
           {subject}
-        </div>
+        </Link>
       )}
 
       {questionNumber != null && (
         <div className="question-number" data-testid="question-number">
-          Q. {questionNumber}
+          <Link
+            to={detailTo}
+            state={detailState}
+            className="card-detail-link"
+            data-testid="question-number-link"
+          >
+            Q. {questionNumber}
+          </Link>
         </div>
       )}
 
       {questionerLine && (
         <div className="questioner-row" data-testid="questioner-row">
-          {questionerLine}
+          <Link
+            to={detailTo}
+            state={detailState}
+            className="card-detail-link"
+            data-testid="questioner-detail-link"
+          >
+            {questionerLine}
+          </Link>
           {questionerParty && (
             <span className="party-meta">· {questionerParty}</span>
           )}
@@ -117,7 +138,14 @@ export default function QACard({ result }) {
 
       {ministerLine && (
         <div className="minister-row" data-testid="minister-row">
-          {ministerLine}
+          <Link
+            to={detailTo}
+            state={detailState}
+            className="card-detail-link"
+            data-testid="minister-detail-link"
+          >
+            {ministerLine}
+          </Link>
         </div>
       )}
 
@@ -150,17 +178,26 @@ export default function QACard({ result }) {
 
       <LangBadge lang_original={result.lang_original} />
 
-      {sourceUrl && (
-        <a
-          className="view-source"
-          href={sourceUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
+      <div className="card-actions">
+        <Link
+          to={detailTo}
+          state={detailState}
+          className="card-details-link"
+          data-testid="details-link"
         >
-          View source ↗
-        </a>
-      )}
+          Details
+        </Link>
+        {sourceUrl && (
+          <a
+            className="view-source"
+            href={sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View source ↗
+          </a>
+        )}
+      </div>
     </article>
   )
 }

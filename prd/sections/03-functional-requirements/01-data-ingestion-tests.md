@@ -11,7 +11,8 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 
 - When the same proceeding is available as both HTML and PDF, exactly one record is created; the HTML-sourced record is retained
 - Duplicate detection must use the compound key (source + date + sitting_number + proceeding_type + speaker_name + sequence_within_sitting, or question_number for Q+A); a match on all key fields results in a skip, not a second insert
-- A member speaking twice in the same sitting must produce two separate indexed records with distinct sequence_within_sitting values; they must not be merged
+- Two speeches by the same speaker in the same sitting with a different speaker's speech between them must produce two separate indexed records with distinct sequence_within_sitting values
+- Two consecutive speeches by the same speaker in the same sitting with no intervening speaker, section heading, or procedural entry must produce a single merged record whose `segments` array contains two elements; the merged record's `full_text_en` must contain the text of both original speeches separated by `\n\n`
 
 ## Resumability
 
@@ -72,6 +73,26 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 - A document dated exactly on `date_from` must be written to `raw_documents`; a document dated one day before `date_from` must not be written
 - A document dated exactly on `date_to` must be written to `raw_documents`; a document dated one day after `date_to` must not be written
 - When neither `--date-from` nor `--date-to` is specified, Stage 1 must write all discovered documents to `raw_documents` regardless of date
+
+## Minister Name Extraction
+
+- A Q+A record whose source document contains only the question preamble "Will the minister of [Ministry] be pleased to state…" and no explicit minister name in the response section must have `minister_name` set to "Minister of [Ministry]" — not the preamble text itself
+- A Q+A record with an explicit minister name attribution in the response section must have `minister_name` set to that name, not the preamble text
+- No indexed Q+A record may have a `minister_name` value that begins with "Will the"
+
+## Source URL Rules
+
+- An LS record (regardless of which provider fetched it) must have `source_url` set to an Internet Archive URL (archive.org domain); it must not contain "eparlib.sansad.in"
+- An RS record fetched via Internet Archive or rsdebate.nic.in must have `source_url` set to an Internet Archive URL; it must not contain "rsdebate.nic.in"
+- An RS record fetched from sansad.in HTML must have `source_url` containing "sansad.in"
+- A CA record must have `source_url` containing "constitutionofindia.net"
+
+## Adjacent Speech Merging
+
+- Two consecutive speeches by the same speaker with a section heading (H-tag) between them in the source HTML must produce two separate records, not a merged record
+- Two consecutive speeches by the same speaker with a procedural block header (e.g., "STARRED QUESTIONS", "STARRED QUESTION NO. X") between them must produce two separate records
+- Three consecutive speeches by the same speaker with no break signal between any of them must produce a single merged record whose `segments` array contains three elements
+- A merged record's `segments` array elements must be ordered by document position (segment_index 0 is the earliest in the document)
 
 ## Progress Log Integrity
 

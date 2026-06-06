@@ -615,24 +615,47 @@ mark {
   margin-top: 6px;
 }
 
-.view-source {
-  display: inline-block;
+/* card-actions: flex row for Details + View source, aligned right */
+.card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
   margin-top: 8px;
+}
+
+.card-details-link {
   font-size: 13px;
   color: var(--primary);
-  text-align: right;
-  float: right;
+  text-decoration: none;
+}
+
+.card-details-link:hover {
+  text-decoration: underline;
+}
+
+.view-source {
+  font-size: 13px;
+  color: var(--primary);
 }
 
 .view-source:hover {
   text-decoration: underline;
 }
 
-/* clearfix for floated view-source */
-.result-card::after {
-  content: '';
+/* Inline detail links (speaker, subject, questioner, etc.): clickable but no underline */
+.card-detail-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.card-detail-link:hover {
+  text-decoration: none;
+}
+
+/* Subject links are block so text-overflow truncation works */
+.subject-line.card-detail-link {
   display: block;
-  clear: both;
 }
 
 /* ── Pagination ─────────────────────────────────────────── */

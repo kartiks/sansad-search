@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import {
   getProceedingTypeLabel,
   getSourceLabel,
@@ -60,7 +61,7 @@ function MetadataRow({ result }) {
   )
 }
 
-export default function SpeechCard({ result }) {
+export default function SpeechCard({ result, detailTo, detailState }) {
   const speakerName = result.speaker_name
   const party = result.speaker_party
   const constituency = result.speaker_constituency_or_state
@@ -80,14 +81,31 @@ export default function SpeechCard({ result }) {
       <MetadataRow result={result} />
 
       <div className="speaker-row">
-        {speakerName ? speakerName : 'Speaker unknown'}
+        {speakerName ? (
+          <Link
+            to={detailTo}
+            state={detailState}
+            className="card-detail-link"
+            data-testid="speaker-detail-link"
+          >
+            {speakerName}
+          </Link>
+        ) : (
+          'Speaker unknown'
+        )}
         {metaText && <span className="speaker-meta">· {metaText}</span>}
       </div>
 
       {subject && (
-        <div className="subject-line" title={subject}>
+        <Link
+          to={detailTo}
+          state={detailState}
+          className="subject-line card-detail-link"
+          title={subject}
+          data-testid="subject-detail-link"
+        >
           {subject}
-        </div>
+        </Link>
       )}
 
       {fullTextNull ? (
@@ -110,17 +128,26 @@ export default function SpeechCard({ result }) {
 
       <LangBadge lang_original={result.lang_original} />
 
-      {sourceUrl && (
-        <a
-          className="view-source"
-          href={sourceUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
+      <div className="card-actions">
+        <Link
+          to={detailTo}
+          state={detailState}
+          className="card-details-link"
+          data-testid="details-link"
         >
-          View source ↗
-        </a>
-      )}
+          Details
+        </Link>
+        {sourceUrl && (
+          <a
+            className="view-source"
+            href={sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View source ↗
+          </a>
+        )}
+      </div>
     </article>
   )
 }

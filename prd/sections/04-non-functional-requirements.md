@@ -15,7 +15,8 @@ The bulk ingestion pipeline must be resumable from a per-document checkpoint. An
 
 ## Security
 
-*To be populated as features are specced.*
+**SEC-1: Debug mode data exposure**
+Debug mode (`?debug=1`) exposes full database records (speeches, qa_exchanges, raw_documents rows), internal query details, and Meilisearch request/response payloads via unauthenticated endpoints (`GET /api/debug/processed/{id}` and `GET /api/debug/raw/{id}`). This is a deliberate choice for v1. Any deployment handling sensitive or access-controlled parliamentary data must review whether unauthenticated debug access is acceptable before enabling this feature in production.
 
 ## Storage
 
@@ -36,6 +37,11 @@ Bulk ingestion is a long-running operation. No maximum time constraint is specif
 
 **SCALE-1: Concurrent search load**
 Search must remain within the PERF-1 response time target under concurrent user load. Exact concurrency targets are an architecture-stage deliverable.
+
+## Debug Mode Performance
+
+**PERF-3: Debug mode SLA exemption**
+PERF-1 and PERF-2 response time targets do not apply when debug mode is active (`?debug=1`). Debug mode responses include large additional payloads — full Meilisearch documents, full database rows, and complete raw source documents — and are exempt from all response time SLAs.
 
 ## Privacy
 

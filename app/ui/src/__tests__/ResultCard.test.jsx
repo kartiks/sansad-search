@@ -1,13 +1,29 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import ResultCard from '../components/ResultCard.jsx'
 import { makeSpeechResult, makeQAResult } from './fixtures.js'
+
+function LocationDisplay() {
+  const location = useLocation()
+  return <div data-testid="location">{location.pathname}</div>
+}
 
 function renderCard(result) {
   return render(
     <MemoryRouter>
       <ResultCard result={result} />
+    </MemoryRouter>
+  )
+}
+
+function renderCardWithRouter(result) {
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <Routes>
+        <Route path="/" element={<ResultCard result={result} />} />
+        <Route path="/record/:id" element={<LocationDisplay />} />
+      </Routes>
     </MemoryRouter>
   )
 }
@@ -31,22 +47,36 @@ describe('ResultCard — dispatcher', () => {
   })
 })
 
-describe('ResultCard — links to /record/:id', () => {
-  it('speech card is wrapped in a link to /record/:id', () => {
+describe('ResultCard — card wrapper is not itself a link', () => {
+  it('speech card is not wrapped in an anchor element', () => {
     renderCard(makeSpeechResult({ id: 'speech-1' }))
     const card = screen.getByTestId('speech-card')
-    expect(card.closest('a')).toHaveAttribute('href', '/record/speech-1')
+    expect(card.closest('a')).toBeNull()
   })
 
-  it('qa card is wrapped in a link to /record/:id', () => {
+  it('qa card is not wrapped in an anchor element', () => {
     renderCard(makeQAResult({ id: 'qa-1' }))
     const card = screen.getByTestId('qa-card')
-    expect(card.closest('a')).toHaveAttribute('href', '/record/qa-1')
+    expect(card.closest('a')).toBeNull()
+  })
+})
+
+describe('ResultCard — Details link navigates to /record/:id', () => {
+  it('Details link on speech card navigates to /record/:id', () => {
+    renderCardWithRouter(makeSpeechResult({ id: 'speech-1' }))
+    fireEvent.click(screen.getByTestId('details-link'))
+    expect(screen.getByTestId('location')).toHaveTextContent('/record/speech-1')
   })
 
-  it('link href uses the result id field', () => {
-    renderCard(makeSpeechResult({ id: 'custom-id-xyz' }))
-    const card = screen.getByTestId('speech-card')
-    expect(card.closest('a')).toHaveAttribute('href', '/record/custom-id-xyz')
+  it('Details link on qa card navigates to /record/:id', () => {
+    renderCardWithRouter(makeQAResult({ id: 'qa-1' }))
+    fireEvent.click(screen.getByTestId('details-link'))
+    expect(screen.getByTestId('location')).toHaveTextContent('/record/qa-1')
+  })
+
+  it('Details link uses the result id field', () => {
+    renderCardWithRouter(makeSpeechResult({ id: 'custom-id-xyz' }))
+    fireEvent.click(screen.getByTestId('details-link'))
+    expect(screen.getByTestId('location')).toHaveTextContent('/record/custom-id-xyz')
   })
 })

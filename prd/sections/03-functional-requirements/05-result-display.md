@@ -59,9 +59,10 @@ Displayed fields, in order:
 
 ## Snippet Generation
 
-- Snippet is 2–3 sentences extracted from `full_text_en`, chosen from the passage with the highest density of query term matches
+- Snippet is a passage of at least 400 words extracted from `full_text_en`, chosen from the passage with the highest density of query term matches; the Meilisearch crop length must be configured to produce this minimum
 - Query terms (original and expanded matches) are highlighted in the snippet
-- If the matched passage is near the start or end of `full_text_en`, the snippet may be shorter than 3 sentences
+- If `full_text_en` contains fewer than 400 words, the full text is shown as the snippet (no truncation of content shorter than the minimum)
+- If the matched passage is near the start or end of `full_text_en`, the snippet may be shorter than 400 words
 - If the record has `full_text_en: null` (untranslated Hindi speech): snippet area shows the message "This speech was delivered in Hindi. No English text is available." in place of a snippet; `has_untranslated_content` is the trigger
 - For Q+A records, if the match is in a supplementary exchange rather than the main question/answer, the snippet is drawn from the supplementary exchange; a label "From supplementary exchange" is shown
 

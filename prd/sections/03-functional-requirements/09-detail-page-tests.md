@@ -2,16 +2,17 @@
 
 Supplements the feature spec. Does not repeat acceptance criteria or edge cases already stated there.
 
-## Adjacent Navigation Boundaries
+## Lok Sabha Term Display
 
-- A record with `sequence_within_sitting: 1` must have the "Prev" control in a disabled state; clicking a disabled control must produce no navigation
-- A record with the maximum `sequence_within_sitting` in its sitting must have the "Next" control disabled
-- A sitting containing exactly one record must have both "Prev" and "Next" disabled simultaneously
-- Disabled controls must be present in the DOM and visible — not `display:none`, not removed from the DOM
+- A record with `lok_sabha_number: 17` must display "17th Lok Sabha"; a record with `lok_sabha_number: 21` must display "21st Lok Sabha"; a record with `lok_sabha_number: 22` must display "22nd Lok Sabha"; a record with `lok_sabha_number: 23` must display "23rd Lok Sabha" — the ordinal suffix must be correct for each value
+- An RS record must not render any element with the text "Lok Sabha" in the metadata area; the `lok_sabha_number` field must be entirely absent from the DOM
 
-## URL Update on Adjacent Navigation
+## Inline Adjacent Loading
 
-- After clicking "Next", the browser URL must update to `/record/:id` of the next record before any subsequent "Prev" click; navigating Prev from that updated URL must return to the original record
+- Clicking "Load 5 next" must not trigger a page navigation; the URL must remain `/record/:id` of the focal record after the click
+- After "Load 5 next" loads 5 records and 3 more remain, the "Load 5 next" control must be enabled; after a subsequent click that loads those 3, the control must be disabled
+- Clicking "Load 5 previous" must prepend records above the focal record, not replace it; the focal record must remain in the DOM after any number of adjacent loads
+- When the focal record is the only record in its sitting, both load controls must be disabled simultaneously; neither must be hidden or absent from the DOM
 
 ## Back Navigation Detection
 

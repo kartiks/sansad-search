@@ -32,9 +32,10 @@ Stage 1 does not write to `speeches`, `qa_exchanges`, or the SQLite checkpoint s
 1. Read `raw_documents` rows for the selected corpus; apply `--date-from`/`--date-to` window if provided
 2. Skip documents already checkpointed as processed in the SQLite `processed_documents` store
 3. Segment each document into speech and Q+A exchange units
-4. Canonicalize speaker names and session names
-5. Index each unit into `speeches`/`qa_exchanges`
-6. Checkpoint the document in `processed_documents` after all its records are successfully indexed
+4. Apply adjacent speech merging to speech units (see Adjacent Speech Merging section)
+5. Canonicalize speaker names and session names
+6. Index each unit into `speeches`/`qa_exchanges`
+7. Checkpoint the document in `processed_documents` after all its records are successfully indexed
 
 `index_status` is updated only at the end of Stage 2, not at the end of Stage 1.
 
@@ -54,7 +55,7 @@ When neither flag is provided, both stages operate on the full corpus without da
 2. System enumerates all records in scope for the specified source(s) — building a list of documents/pages to fetch
 3. System fetches each document with rate limiting and robots.txt compliance
 4. System parses fetched content (HTML or PDF) to extract text and metadata
-5. System segments content into speech units and Q+A exchange units
+5. System segments content into speech units and Q+A exchange units; applies adjacent speech merging to speech units
 6. System indexes each unit with full metadata into the search index
 7. System logs progress in real time: document processed, records indexed, errors, skipped
 8. On completion, system prints a summary: total records indexed per source, total errors, total skipped
@@ -106,17 +107,19 @@ When neither flag is provided, both stages operate on the full corpus without da
 | `speaker_party` | Party or group affiliation |
 | `speaker_constituency_or_state` | Constituency (LS), state (RS), or null (CA) |
 | `speaker_role` | member \| minister \| presiding_officer |
-| `full_text_en` | Full English text of the speech; see Language Handling below |
+| `full_text_en` | Full English text of the speech; for merged speeches, the concatenation of all segment texts joined with `\n\n`; see Language Handling below |
+| `segments` | JSONB array of speech text segments; each element: `{"text": "...", "segment_index": N}` (0-based); single-element array for speeches that were not merged with any adjacent speech |
 | `lang_original` | Language of the original speech before translation: `en` (English), `hi` (Hindi), or `mixed` (genuinely bilingual — alternates between Hindi and English in both directions; predominantly Hindi speeches with only translation fragments are classified `hi`); derived from Language Handling cases: case 1→`en`; cases 2 and 4→`hi`; case 3→`mixed` if genuinely alternating, `hi` if predominantly Hindi with translation fragments |
 | `time_of_day` | Time the speech began, as HH:MM (24-hour); extracted from HTML sources only; null for Internet Archive pre-OCR text and PDF sources |
 | `word_count` | Integer word count of `full_text_en` computed at ingest; null if `full_text_en` is null |
 | `is_translated` | true if `full_text_en` contains or includes official English translation of Hindi portions |
 | `has_untranslated_content` | true if any portion of the speech could not be indexed due to absent translation |
 | `speaker_name_unresolved` | true if `speaker_name` could not be matched to a canonical form in the names dictionary |
-| `source_url` | URL of the original HTML page or PDF; for LS records fetched from Internet Archive, always set to the corresponding eparlib.sansad.in document URL; for RS records fetched from Internet Archive, always set to the corresponding rsdebate.nic.in document URL (derived from the DSpace handle) |
+| `source_url` | URL of the original source document. For LS records: always the Internet Archive URL (eparlib.sansad.in is not reliably accessible and must not be used). For RS records fetched via Internet Archive or rsdebate.nic.in: the Internet Archive URL. For RS records fetched from sansad.in HTML: the sansad.in URL. For CA records: the constitutionofindia.net URL. Null if no accessible URL can be derived for the record. |
 | `page_reference` | Page number in source PDF; null for HTML sources |
-| `sequence_within_sitting` | Integer position of this speech within the sitting's proceedings, derived from document order (1-based) |
+| `sequence_within_sitting` | Integer position of this speech within the sitting's proceedings, derived from document order (1-based); for merged speeches, the position of the first segment in the merge group |
 | `volume` | CA volume number (1–12); null for LS/RS |
+| `lok_sabha_number` | Lok Sabha term number (e.g., 17 for the 17th Lok Sabha); INTEGER; extracted from source data at ingestion time; null for RS and CA records |
 
 ### Q+A exchange unit (starred question)
 
@@ -133,7 +136,7 @@ When neither flag is provided, both stages operate on the full corpus without da
 | `subject` | Question subject/title |
 | `questioner_names` | Primary questioner and co-signatories (array) |
 | `questioner_party` | Party affiliation of primary questioner |
-| `minister_name` | Minister answering |
+| `minister_name` | Name of the minister who answered the question; extracted from the minister's response section in the source document; must never be set to question preamble text (e.g., "Will the minister of [Ministry] be pleased to state…"); if the minister's name is not identifiable from the response section, set to "Minister of [Ministry]" using the value of the `ministry` field |
 | `ministry` | Ministry responsible |
 | `full_text_en` | Full text of the complete exchange: main question + answer + all supplementaries with attribution; English only, translated as needed |
 | `lang_original` | Language of the original exchange before translation: `en`, `hi`, or `mixed`; same derivation rules as speech units |
@@ -141,9 +144,10 @@ When neither flag is provided, both stages operate on the full corpus without da
 | `word_count` | Integer word count of `full_text_en` computed at ingest; null if `full_text_en` is null |
 | `is_translated` | true if any portion was translated from Hindi |
 | `has_untranslated_content` | true if any portion could not be indexed due to absent translation |
-| `source_url` | URL of the original document; for LS records fetched from Internet Archive, always set to the corresponding eparlib.sansad.in document URL; for RS records fetched from Internet Archive, always set to the corresponding rsdebate.nic.in document URL (derived from the DSpace handle) |
+| `source_url` | URL of the original source document. For LS records: always the Internet Archive URL (eparlib.sansad.in is not reliably accessible and must not be used). For RS records fetched via Internet Archive or rsdebate.nic.in: the Internet Archive URL. For RS records fetched from sansad.in HTML: the sansad.in URL. Null if no accessible URL can be derived. |
 | `page_reference` | Page number in source PDF; null for HTML sources |
 | `sequence_within_sitting` | Integer position of this Q+A exchange within the sitting's proceedings, derived from document order (1-based); shared sequence space with speech units within the same sitting |
+| `lok_sabha_number` | Lok Sabha term number (e.g., 17 for the 17th Lok Sabha); INTEGER; extracted from source data at ingestion time; null for RS records |
 
 ### Q+A exchange unit (unstarred question)
 
@@ -151,6 +155,8 @@ Same fields as starred question except:
 - `proceeding_type`: unstarred_question
 - `full_text_en`: question text and written answer only (no supplementaries)
 - No `questioner_names` array needed; single `questioner_name` field
+
+The `source_url`, `minister_name`, and `lok_sabha_number` rules above apply equally to unstarred questions.
 
 ## Language Handling
 
@@ -162,6 +168,33 @@ Official parliamentary records include English translations of speeches delivere
 4. **Hindi speech with no translation available:** `full_text_en: null`; `has_untranslated_content: true`; record is still indexed (metadata remains searchable)
 
 Translations in official records are typically marked inline as "[Translation]" or equivalent notation.
+
+## Adjacent Speech Merging
+
+During Stage 2 processing, consecutive speeches by the same speaker within the same sitting are merged into a single `speeches` record. This applies to speech units only; Q+A exchange units are never merged.
+
+### Merge conditions
+
+All of the following must be true for two consecutive speeches to be candidates for merging:
+- Same `speaker_name`
+- Same sitting (same `source` + `date` + `sitting_number`)
+- Same `proceeding_type`
+- Consecutive in document order with no break signal between them
+
+### Break signals
+
+Any of the following appearing in the source document between two speeches by the same speaker prevents merging:
+- A speech or interjection by a different speaker
+- A section heading (H1, H2, H3 tag or equivalent structural heading element in the parsed HTML)
+- A procedural entry: a new question number heading, a block header (e.g., "QUESTIONS", "STARRED QUESTIONS", "STARRED QUESTION NO. X"), or a formal procedural marker (e.g., "The House adjourned for lunch", "The House then adjourned")
+
+### Merged record structure
+
+- The merged record stores individual speech texts as an ordered JSONB array in the `segments` field; each element: `{"text": "...", "segment_index": N}` where N is 0-based
+- `full_text_en` = all segment texts joined with `\n\n` (double newline)
+- `word_count` = total word count of the combined `full_text_en`
+- `sequence_within_sitting` = document-order position of the first segment in the merge group
+- An unmerged speech has a single-element `segments` array
 
 ## CA Field-Level Parsing Rules
 
@@ -211,7 +244,7 @@ CA records have no session name; `session_name` is null for all CA records.
 
 ## Deduplication
 
-When the same proceeding is available as both HTML and PDF from the source site, the HTML version is preferred. Only one record is created per unique speech or Q+A exchange. Duplicate detection key: source + date + sitting_number + proceeding_type + speaker_name + sequence_within_sitting (or question_number for Q+A units). The sequence_within_sitting field is required because a member may speak multiple times in the same sitting on the same agenda item.
+When the same proceeding is available as both HTML and PDF from the source site, the HTML version is preferred. Only one record is created per unique speech or Q+A exchange. Duplicate detection key: source + date + sitting_number + proceeding_type + speaker_name + sequence_within_sitting (or question_number for Q+A units). For merged speech records, `sequence_within_sitting` in the dedup key is the position of the first segment in the merge group. The sequence_within_sitting field is required because a member may speak multiple times in the same sitting on the same agenda item with intervening speakers.
 
 ## Acceptance Criteria
 
@@ -230,6 +263,11 @@ When the same proceeding is available as both HTML and PDF from the source site,
 - Re-running Stage 1 against an already-fetched corpus writes zero new `raw_documents` rows (PK dedup skips all)
 - `--stage fetch --date-from X --date-to Y` writes only documents with dates within that range to `raw_documents`; documents outside the window are skipped after parsing
 - `--stage all --date-from X --date-to Y` produces `speeches`/`qa_exchanges` records only for dates within the specified range
+- LS speech and Q+A records have `lok_sabha_number` populated with the correct Lok Sabha term number; RS and CA records have `lok_sabha_number: null`
+- `minister_name` never contains question preamble text (e.g., "Will the minister of [Ministry] be pleased to state…"); Q+A records where the minister's name is not identifiable from the response section have `minister_name` set to "Minister of [Ministry]"
+- For LS records, `source_url` is the Internet Archive URL; for RS records fetched via IA or rsdebate.nic.in, `source_url` is the Internet Archive URL; for RS records from sansad.in HTML, `source_url` is the sansad.in URL; for CA records, `source_url` is the constitutionofindia.net URL
+- Adjacent speeches by the same speaker with no break signal between them are merged into a single record; the merged record's `segments` array contains one element per original speech; `full_text_en` is the concatenation of all segment texts separated by `\n\n`
+- Adjacent speeches by the same speaker separated by a different speaker's speech, a section heading, or a procedural entry are stored as separate records with distinct `sequence_within_sitting` values
 
 ## Edge Cases
 
@@ -240,8 +278,10 @@ When the same proceeding is available as both HTML and PDF from the source site,
 - HTTP 5xx errors: retry up to 3 times with exponential backoff; log and skip if all retries fail
 - HTTP 429 (rate limited): back off with exponential delay and retry; do not skip
 - Malformed or unparseable HTML/PDF: log parsing error with document URL; skip
-- RS record fetched from Internet Archive with no derivable DSpace handle: set `source_url` to null; log a warning; do not use the archive.org URL
+- RS record fetched from Internet Archive with no derivable DSpace handle: set `source_url` to null; log a warning; do not use the archive.org URL as a fallback to this rule
 - Records outside the date scope appearing within an in-scope document: skip those records; continue processing in-scope records in the same document
+- Q+A record where the minister's name is not present in the response section: `minister_name` is set to "Minister of [Ministry]" using the value of the `ministry` field; must never be set to question preamble text such as "Will the minister of [Ministry] be pleased to state…"
+- Merged speech where some segments have English text and others do not (e.g., first segment in English, subsequent segment in Hindi with no translation): `full_text_en` must include the available English segments; `has_untranslated_content` must be set to true; `full_text_en` must not be null solely because one segment lacked a translation
 
 ## Dependencies
 
