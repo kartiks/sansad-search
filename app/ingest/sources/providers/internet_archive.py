@@ -6,7 +6,7 @@ Discovery:
   metadata JSON fetch per identifier (https://archive.org/metadata/{id}) →
   locate DjVuTXT entry in top-level `files` array (format == "DjVuTXT") →
   build fetch_url as https://{server}{dir}/{name} →
-  DocumentRef(format=ia_text, canonical_doc_id=N, citation_url=eparlib_document_url)
+  DocumentRef(format=ia_text, canonical_doc_id=N, citation_url=archive.org item URL)
 
 Fetch:
   GET https://{server}{dir}/{name}  (DjVuTXT file served from IA content server)
@@ -136,12 +136,12 @@ class InternetArchiveProvider(Provider):
                         identifier,
                     )
                     continue
-                # RS: retain the item but no DSpace handle is derivable, so no
-                # canonical rsdebate.nic.in citation can be built (PRD v1.3 edge
-                # case). citation_url=None; the archive.org URL is never used.
+                # RS: retain the item — _build_citation_url() will return the
+                # archive.org item URL even without a DSpace handle (Non-Neg #9
+                # v3.0). citation_url is set below via _build_citation_url().
                 logger.warning(
                     "RS IA identifier %r has no derivable DSpace handle; "
-                    "citation_url set to null (PRD v1.3 edge case)",
+                    "citation_url will be set to archive.org URL (Non-Neg #9 v3.0)",
                     identifier,
                 )
 

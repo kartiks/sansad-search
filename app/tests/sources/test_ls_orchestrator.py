@@ -550,6 +550,39 @@ class TestLSOrchestratorProviderChain:
         finally:
             checkpoint.close()
 
+    async def test_canonical_doc_id_stamped_on_indexed_records(self):
+        """Stage 2 copies canonical_doc_id from the raw_documents row onto each indexed record.
+
+        Verifies the orchestrator seam at ls.py:371 (`record["canonical_doc_id"] =
+        canonical_doc_id`). A silent NULL would break Phase 15 GET /api/debug/raw/{id},
+        which resolves via canonical_doc_id to fetch the matching raw_documents row.
+        """
+        handle_n = "12345"
+        ia_ref = _make_ia_doc_ref(handle_n)
+        ia_provider = StubProvider([ia_ref], {handle_n: IA_DJVU_TEXT}, name="ia")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        client = AsyncMock(spec=httpx.AsyncClient)
+
+        orchestrator = LSOrchestrator(
+            client=client,
+            checkpoint=checkpoint,
+            indexer=indexer,
+            providers=[ia_provider],
+        )
+        await orchestrator.run()
+
+        try:
+            assert len(indexer.indexed_records) >= 1
+            for record in indexer.indexed_records:
+                assert record.get("canonical_doc_id") == handle_n, (
+                    f"expected canonical_doc_id={handle_n!r}, "
+                    f"got {record.get('canonical_doc_id')!r}"
+                )
+        finally:
+            checkpoint.close()
+
 
 # ── Phase 10: Shared sequence assignment ──────────────────────────────────────
 

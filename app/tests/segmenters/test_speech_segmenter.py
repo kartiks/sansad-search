@@ -535,6 +535,16 @@ class TestAdjacentSpeechMerging:
         result = segment_speeches(_raw_record(text), "LS")
         assert len(result) == 2
 
+    def test_formal_house_procedural_marker_between_same_speaker_breaks_merge(self):
+        text = (
+            "SHRI NARENDRA MODI :\nFirst point before adjournment.\n\n"
+            "The House adjourned for lunch.\n\n"
+            "SHRI NARENDRA MODI :\nSecond point after adjournment.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 2
+        assert all(len(r["segments"]) == 1 for r in result)
+
     def test_unmerged_speech_has_single_element_segments(self):
         text = "SHRI SOLO SPEAKER :\nA standalone speech.\n"
         result = segment_speeches(_raw_record(text), "LS")
