@@ -440,6 +440,55 @@ class TestFilterForwarding:
         assert params["page"] == 3
 
 
+# ── F05 snippet crop configuration ────────────────────────────────────────────
+
+class TestSnippetCropParams:
+    """F05 (PRD v3.0): ≥400-word snippets via Meilisearch crop parameters."""
+
+    def _captured_search_params(self):
+        captured = []
+
+        async def fake_search(query, **kwargs):
+            captured.append({"query": query, "params": kwargs})
+            return _meili_ns()
+
+        mock_index = AsyncMock()
+        mock_index.search = fake_search
+        mock_client = MagicMock()
+        mock_client.index = MagicMock(return_value=mock_index)
+        return mock_client, captured
+
+    def test_attributes_to_crop_forwarded(self):
+        mock_client, captured = self._captured_search_params()
+        mock_pool = make_mock_pool()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_client
+        with TestClient(app) as client:
+            client.post("/api/search", json={"query": "budget"})
+        params = captured[0]["params"]
+        assert params["attributes_to_crop"] == ["full_text_en"]
+
+    def test_crop_length_is_400(self):
+        mock_client, captured = self._captured_search_params()
+        mock_pool = make_mock_pool()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_client
+        with TestClient(app) as client:
+            client.post("/api/search", json={"query": "budget"})
+        params = captured[0]["params"]
+        assert params["crop_length"] == 400
+
+    def test_crop_marker_present(self):
+        mock_client, captured = self._captured_search_params()
+        mock_pool = make_mock_pool()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_client
+        with TestClient(app) as client:
+            client.post("/api/search", json={"query": "budget"})
+        params = captured[0]["params"]
+        assert params["crop_marker"] == "…"
+
+
 # ── Filter validation edge cases ──────────────────────────────────────────────
 
 class TestFilterEdgeCases:

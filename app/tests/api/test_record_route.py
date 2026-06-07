@@ -1,5 +1,9 @@
 """
-Tests for GET /api/record/{id} — F09 record detail endpoint.
+Tests for the F09 record detail endpoints (PRD v3.0):
+- GET /api/record/{id}            — single record + sitting context
+                                     (has_prev / has_next, sitting_total,
+                                     lok_sabha_number).
+- GET /api/record/{id}/adjacent   — inline adjacent range-fetch.
 
 All tests use dependency overrides; no real DB connections required.
 """
@@ -24,6 +28,7 @@ def _speech_row(**overrides):
     base = {
         "id": "3f2a1b00-0000-0000-0000-000000000001",
         "source": "LS",
+        "lok_sabha_number": 17,
         "proceeding_type": "debate",
         "date": datetime.date(2023, 3, 15),
         "session_name": "Budget Session 2023",
@@ -37,7 +42,7 @@ def _speech_row(**overrides):
         "is_translated": False,
         "has_untranslated_content": False,
         "page_reference": None,
-        "source_url": "https://eparlib.sansad.in/example",
+        "source_url": "https://archive.org/details/eparlib.nic.in.123456",
         "sequence_within_sitting": 7,
         "volume": None,
         "speaker_name": "Jairam Ramesh",
@@ -61,6 +66,7 @@ def _qa_row(**overrides):
     base = {
         "id": "qa2b1b00-0000-0000-0000-000000000001",
         "source": "LS",
+        "lok_sabha_number": 17,
         "proceeding_type": "starred_question",
         "date": datetime.date(2023, 8, 4),
         "session_name": "Monsoon Session 2023",
@@ -74,7 +80,7 @@ def _qa_row(**overrides):
         "is_translated": False,
         "has_untranslated_content": False,
         "page_reference": None,
-        "source_url": "https://eparlib.sansad.in/qa-example",
+        "source_url": "https://archive.org/details/eparlib.nic.in.654321",
         "sequence_within_sitting": 3,
         "volume": None,
         "speaker_name": None,
@@ -93,13 +99,18 @@ def _qa_row(**overrides):
     return base
 
 
-def _sitting_rows(current_id, current_seq, total=5):
-    """Build sitting rows list with current record at current_seq."""
-    rows = []
-    for i in range(1, total + 1):
-        row_id = current_id if i == current_seq else f"other-id-{i:04d}"
-        rows.append({"id": row_id, "sequence_within_sitting": i})
-    return rows
+def _seq_rows(seqs):
+    """Build sitting sequence rows (only sequence_within_sitting, per query)."""
+    return [{"sequence_within_sitting": s} for s in seqs]
+
+
+def _focal(source="LS", date=datetime.date(2023, 3, 15), sitting_number=42, seq=7):
+    return {
+        "source": source,
+        "date": date,
+        "sitting_number": sitting_number,
+        "sequence_within_sitting": seq,
+    }
 
 
 def _get_client(pool_mock=None, meili_mock=None):
@@ -125,8 +136,7 @@ def setup_teardown():
 class TestGetSpeechRecord:
     def test_returns_200(self):
         row = _speech_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"])
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             resp = client.get(f"/api/record/{row['id']}")
@@ -134,8 +144,7 @@ class TestGetSpeechRecord:
 
     def test_record_type_is_speech(self):
         row = _speech_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"])
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
@@ -143,8 +152,7 @@ class TestGetSpeechRecord:
 
     def test_date_display_formatted(self):
         row = _speech_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"])
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
@@ -152,8 +160,7 @@ class TestGetSpeechRecord:
 
     def test_date_iso_string(self):
         row = _speech_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"])
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
@@ -161,94 +168,97 @@ class TestGetSpeechRecord:
 
     def test_proceeding_type_label_formatted(self):
         row = _speech_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"])
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
         assert body["proceeding_type_label"] == "Debate"
 
+    def test_lok_sabha_number_present(self):
+        row = _speech_row(lok_sabha_number=17)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            body = client.get(f"/api/record/{row['id']}").json()
+        assert body["lok_sabha_number"] == 17
+
+    def test_lok_sabha_number_null_passthrough(self):
+        row = _speech_row(source="RS", lok_sabha_number=None)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            body = client.get(f"/api/record/{row['id']}").json()
+        assert body["lok_sabha_number"] is None
+
     def test_all_required_fields_present(self):
         row = _speech_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"])
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
-        for field in ("id", "record_type", "source", "proceeding_type",
-                      "proceeding_type_label", "date", "date_display",
-                      "full_text_en", "lang_original", "sequence_within_sitting",
-                      "sitting_total", "adjacent"):
+        for field in ("id", "record_type", "source", "lok_sabha_number",
+                      "proceeding_type", "proceeding_type_label", "date",
+                      "date_display", "full_text_en", "lang_original",
+                      "sequence_within_sitting", "sitting_total",
+                      "has_prev", "has_next"):
             assert field in body, f"Missing field: {field}"
 
-    def test_adjacent_field_has_prev_and_next_keys(self):
+    def test_adjacent_object_removed(self):
+        """PRD v3.0 replaced the adjacent.{prev_id,next_id} object."""
         row = _speech_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"])
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
-        assert "prev_id" in body["adjacent"]
-        assert "next_id" in body["adjacent"]
+        assert "adjacent" not in body
 
 
-# ── 200 — Adjacent navigation ─────────────────────────────────────────────────
+# ── 200 — has_prev / has_next boundary flags ──────────────────────────────────
 
-class TestAdjacentNavigation:
+class TestSittingBoundaryFlags:
     def test_sitting_total_matches_sitting_size(self):
         row = _speech_row(sequence_within_sitting=3)
-        sitting = _sitting_rows(row["id"], 3, total=7)
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([1, 2, 3, 4, 5, 6, 7]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
         assert body["sitting_total"] == 7
 
-    def test_prev_id_correct(self):
+    def test_has_prev_and_has_next_true_in_middle(self):
         row = _speech_row(sequence_within_sitting=3)
-        sitting = _sitting_rows(row["id"], 3, total=5)
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([1, 2, 3, 4, 5]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
-        assert body["adjacent"]["prev_id"] == "other-id-0002"
+        assert body["has_prev"] is True
+        assert body["has_next"] is True
 
-    def test_next_id_correct(self):
-        row = _speech_row(sequence_within_sitting=3)
-        sitting = _sitting_rows(row["id"], 3, total=5)
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
-            body = client.get(f"/api/record/{row['id']}").json()
-        assert body["adjacent"]["next_id"] == "other-id-0004"
-
-    def test_prev_id_null_at_lower_boundary(self):
+    def test_has_prev_false_at_lower_boundary(self):
         row = _speech_row(sequence_within_sitting=1)
-        sitting = _sitting_rows(row["id"], 1, total=5)
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([1, 2, 3, 4, 5]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
-        assert body["adjacent"]["prev_id"] is None
+        assert body["has_prev"] is False
+        assert body["has_next"] is True
 
-    def test_next_id_null_at_upper_boundary(self):
+    def test_has_next_false_at_upper_boundary(self):
         row = _speech_row(sequence_within_sitting=5)
-        sitting = _sitting_rows(row["id"], 5, total=5)
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([1, 2, 3, 4, 5]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
-        assert body["adjacent"]["next_id"] is None
+        assert body["has_prev"] is True
+        assert body["has_next"] is False
 
-    def test_both_null_for_single_record_sitting(self):
+    def test_both_false_for_single_record_sitting(self):
         row = _speech_row(sequence_within_sitting=1)
-        sitting = [{"id": row["id"], "sequence_within_sitting": 1}]
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([1]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
-        assert body["adjacent"]["prev_id"] is None
-        assert body["adjacent"]["next_id"] is None
+        assert body["has_prev"] is False
+        assert body["has_next"] is False
         assert body["sitting_total"] == 1
 
 
@@ -257,8 +267,7 @@ class TestAdjacentNavigation:
 class TestGetQARecord:
     def test_returns_200(self):
         row = _qa_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"], total=3)
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([1, 2, 3]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             resp = client.get(f"/api/record/{row['id']}")
@@ -266,8 +275,7 @@ class TestGetQARecord:
 
     def test_record_type_is_qa(self):
         row = _qa_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"], total=3)
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([1, 2, 3]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
@@ -275,8 +283,7 @@ class TestGetQARecord:
 
     def test_qa_fields_present(self):
         row = _qa_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"], total=3)
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([1, 2, 3]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
@@ -286,8 +293,7 @@ class TestGetQARecord:
 
     def test_proceeding_type_label_starred(self):
         row = _qa_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"], total=3)
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([1, 2, 3]))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
             body = client.get(f"/api/record/{row['id']}").json()
@@ -313,7 +319,6 @@ class TestRecordNotFound:
         assert body["message"] == "Record not found."
 
     def test_invalid_uuid_returns_404(self):
-        # DB will raise an exception on invalid UUID cast; service returns None → 404
         pool = make_mock_pool(fetchrow_side_effect=Exception("invalid input for UUID"))
         meili = make_mock_meili_client()
         with _get_client(pool, meili) as client:
@@ -327,11 +332,152 @@ class TestRecordServesFromPostgres:
     def test_meilisearch_not_called(self):
         """Record detail must read from PostgreSQL only."""
         row = _speech_row()
-        sitting = _sitting_rows(row["id"], row["sequence_within_sitting"])
-        pool = make_mock_pool(fetchrow_result=row, fetch_result=sitting)
+        pool = make_mock_pool(fetchrow_result=row, fetch_result=_seq_rows([6, 7, 8]))
         meili = make_mock_meili_client(
             search_side_effect=Exception("Meili should not be called")
         )
         with _get_client(pool, meili) as client:
             resp = client.get(f"/api/record/{row['id']}")
         assert resp.status_code == 200
+
+
+# ── GET /api/record/{id}/adjacent ─────────────────────────────────────────────
+
+_ADJ_ID = "3f2a1b00-0000-0000-0000-000000000001"
+
+
+class TestAdjacentEndpoint:
+    def test_next_returns_records_ascending(self):
+        focal = _focal(seq=7)
+        batch = [
+            _speech_row(id="adj-8", sequence_within_sitting=8),
+            _speech_row(id="adj-9", sequence_within_sitting=9),
+            _speech_row(id="adj-10", sequence_within_sitting=10),
+        ]
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=batch)
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            body = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "next", "from_seq": 7},
+            ).json()
+        seqs = [r["sequence_within_sitting"] for r in body["records"]]
+        assert seqs == [8, 9, 10]
+        assert body["direction"] == "next"
+
+    def test_prev_returns_records_reversed_to_ascending(self):
+        focal = _focal(seq=10)
+        # Stored DESC (closest-to-focal first) as the real query returns for prev.
+        batch = [
+            _speech_row(id="adj-9", sequence_within_sitting=9),
+            _speech_row(id="adj-8", sequence_within_sitting=8),
+            _speech_row(id="adj-7", sequence_within_sitting=7),
+        ]
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=batch)
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            body = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "prev", "from_seq": 10},
+            ).json()
+        seqs = [r["sequence_within_sitting"] for r in body["records"]]
+        assert seqs == [7, 8, 9]
+
+    def test_has_more_true_when_more_remain(self):
+        """6 rows returned for limit 5 → has_more True, batch trimmed to 5."""
+        focal = _focal(seq=7)
+        batch = [
+            _speech_row(id=f"adj-{s}", sequence_within_sitting=s)
+            for s in range(8, 14)  # 8..13 → 6 rows
+        ]
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=batch)
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            body = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "next", "from_seq": 7},
+            ).json()
+        assert body["has_more"] is True
+        assert len(body["records"]) == 5
+
+    def test_has_more_false_when_batch_is_last(self):
+        focal = _focal(seq=7)
+        batch = [
+            _speech_row(id="adj-8", sequence_within_sitting=8),
+            _speech_row(id="adj-9", sequence_within_sitting=9),
+        ]
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=batch)
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            body = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "next", "from_seq": 7},
+            ).json()
+        assert body["has_more"] is False
+        assert len(body["records"]) == 2
+
+    def test_records_carry_full_fields(self):
+        focal = _focal(seq=7)
+        batch = [_qa_row(id="adj-q", sequence_within_sitting=8)]
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=batch)
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            rec = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "next", "from_seq": 7},
+            ).json()["records"][0]
+        for field in ("id", "record_type", "date_display", "subject",
+                      "full_text_en", "proceeding_type_label", "minister_name",
+                      "questioner_names", "sequence_within_sitting"):
+            assert field in rec
+        # Sitting-context fields must NOT be on adjacent records (§3.4).
+        assert "sitting_total" not in rec
+        assert "has_prev" not in rec
+        assert "has_next" not in rec
+
+    def test_invalid_direction_returns_400(self):
+        focal = _focal(seq=7)
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=[])
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            resp = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "sideways", "from_seq": 7},
+            )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "validation_error"
+
+    def test_non_integer_from_seq_returns_400(self):
+        focal = _focal(seq=7)
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=[])
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            resp = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "next", "from_seq": "abc"},
+            )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "validation_error"
+
+    def test_focal_not_found_returns_404(self):
+        pool = make_mock_pool(fetchrow_result=None)
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            resp = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "next", "from_seq": 7},
+            )
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "not_found"
+
+    def test_empty_batch_returns_empty_records(self):
+        focal = _focal(seq=99)
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=[])
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            body = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "next", "from_seq": 99},
+            ).json()
+        assert body["records"] == []
+        assert body["has_more"] is False

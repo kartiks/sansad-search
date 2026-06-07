@@ -21,6 +21,10 @@ MEILI_INDEX_NAME = "parliamentary_records"
 PER_PAGE = 20
 MAX_TOTAL_HITS = 10000
 
+# F05 (PRD v3.0): snippets must be at least 400 words. The crop window passed to
+# Meilisearch and the local snippet window are both measured in words.
+SNIPPET_WORD_WINDOW = 400
+
 _PROCEEDING_TYPE_LABELS: Dict[str, str] = {
     "debate": "Debate",
     "zero_hour": "Zero Hour",
@@ -158,7 +162,7 @@ def _build_snippet(
         return None, False
 
     query_set = set(query_terms)
-    window = min(30, len(word_positions))
+    window = min(SNIPPET_WORD_WINDOW, len(word_positions))
 
     best_start = 0
     best_count = -1
@@ -354,6 +358,12 @@ async def execute_search(
     search_kwargs: Dict[str, Any] = {
         "hits_per_page": PER_PAGE,
         "page": page,
+        # F05 (PRD v3.0): ≥400-word snippet. Meilisearch crops full_text_en to a
+        # window of at least cropLength words centred on the densest match
+        # passage; shorter texts are returned in full.
+        "attributes_to_crop": ["full_text_en"],
+        "crop_length": SNIPPET_WORD_WINDOW,
+        "crop_marker": "…",
     }
     if filter_expr:
         search_kwargs["filter"] = filter_expr

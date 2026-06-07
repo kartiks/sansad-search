@@ -63,6 +63,7 @@ export function makeRecordDetail(overrides = {}) {
     id: 'speech-1',
     record_type: 'speech',
     source: 'LS',
+    lok_sabha_number: 17,
     proceeding_type: 'debate',
     proceeding_type_label: 'Debate',
     date: '2023-03-15',
@@ -92,7 +93,57 @@ export function makeRecordDetail(overrides = {}) {
     ministry: null,
     sequence_within_sitting: 7,
     sitting_total: 20,
-    adjacent: { prev_id: 'prev-id-1', next_id: 'next-id-1' },
+    has_prev: true,
+    has_next: true,
+    ...overrides,
+  }
+}
+
+// One inline adjacent record (shape per DATA-MODELS §3.4 records[]).
+export function makeAdjacentRecord(overrides = {}) {
+  return {
+    id: 'adj-1',
+    record_type: 'speech',
+    source: 'LS',
+    lok_sabha_number: 17,
+    proceeding_type: 'debate',
+    proceeding_type_label: 'Debate',
+    date: '2023-03-15',
+    date_display: '15 March 2023',
+    time_of_day: '14:40',
+    session_name: 'Budget Session 2023',
+    session_number: 7,
+    sitting_number: 42,
+    volume: null,
+    subject: 'General Discussion on the Union Budget',
+    full_text_en: 'Continuing on the point of order raised earlier.',
+    lang_original: 'en',
+    is_translated: false,
+    has_untranslated_content: false,
+    page_reference: null,
+    word_count: 540,
+    source_url: 'https://archive.org/details/eparlib.nic.in.123456',
+    speaker_name: 'Another Member',
+    speaker_role: 'member',
+    speaker_party: 'BJP',
+    speaker_constituency_or_state: 'Gujarat',
+    speaker_name_unresolved: false,
+    question_number: null,
+    questioner_names: null,
+    questioner_party: null,
+    minister_name: null,
+    ministry: null,
+    sequence_within_sitting: 8,
+    ...overrides,
+  }
+}
+
+// An /api/record/{id}/adjacent response.
+export function makeAdjacentResponse(overrides = {}) {
+  return {
+    direction: 'next',
+    records: [makeAdjacentRecord()],
+    has_more: false,
     ...overrides,
   }
 }

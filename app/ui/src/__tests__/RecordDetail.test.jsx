@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import RecordDetail from '../pages/RecordDetail.jsx'
-import { makeRecordDetail } from './fixtures.js'
+import { makeRecordDetail, makeAdjacentRecord } from './fixtures.js'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -262,61 +262,91 @@ describe('RecordDetail — position indicator', () => {
   })
 })
 
-// ── Adjacent navigation ───────────────────────────────────────────────────────
+// ── Lok Sabha term display ────────────────────────────────────────────────────
 
-describe('RecordDetail — adjacent navigation', () => {
-  it('Prev button is present and enabled when prev_id is set', async () => {
-    mockFetch(makeRecordDetail({ adjacent: { prev_id: 'prev-id-1', next_id: 'next-id-1' } }))
+describe('RecordDetail — Lok Sabha term display', () => {
+  it('renders "17th Lok Sabha" for an LS record with lok_sabha_number 17', async () => {
+    mockFetch(makeRecordDetail({ source: 'LS', lok_sabha_number: 17 }))
     renderDetail()
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-    const prevBtn = screen.getByTestId('prev-button')
-    expect(prevBtn).toBeInTheDocument()
-    expect(prevBtn).not.toBeDisabled()
+    expect(screen.getByTestId('field-lok-sabha-number')).toHaveTextContent('17th Lok Sabha')
   })
 
-  it('Next button is present and enabled when next_id is set', async () => {
-    mockFetch(makeRecordDetail({ adjacent: { prev_id: 'prev-id-1', next_id: 'next-id-1' } }))
-    renderDetail()
-    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-    expect(screen.getByTestId('next-button')).not.toBeDisabled()
+  it('renders correct ordinal suffixes (21st, 22nd, 23rd)', async () => {
+    for (const [n, expected] of [[21, '21st Lok Sabha'], [22, '22nd Lok Sabha'], [23, '23rd Lok Sabha']]) {
+      mockFetch(makeRecordDetail({ source: 'LS', lok_sabha_number: n }))
+      const { unmount } = renderDetail()
+      await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+      expect(screen.getByTestId('field-lok-sabha-number')).toHaveTextContent(expected)
+      unmount()
+    }
   })
 
-  it('Prev button disabled and IN the DOM at lower boundary', async () => {
-    mockFetch(makeRecordDetail({ sequence_within_sitting: 1, adjacent: { prev_id: null, next_id: 'next-1' } }))
+  it('RS record renders no "Lok Sabha" text and no lok_sabha field', async () => {
+    mockFetch(makeRecordDetail({ source: 'RS', lok_sabha_number: null, speaker_constituency_or_state: 'Maharashtra' }))
     renderDetail()
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-    const prevBtn = screen.getByTestId('prev-button')
-    expect(prevBtn).toBeInTheDocument()
-    expect(prevBtn).toBeDisabled()
+    expect(screen.queryByTestId('field-lok-sabha-number')).toBeNull()
+    expect(screen.queryByText(/Lok Sabha/)).toBeNull()
   })
 
-  it('Next button disabled and IN the DOM at upper boundary', async () => {
-    mockFetch(makeRecordDetail({ adjacent: { prev_id: 'prev-1', next_id: null } }))
+  it('omits the field when an LS record has null lok_sabha_number', async () => {
+    mockFetch(makeRecordDetail({ source: 'LS', lok_sabha_number: null }))
     renderDetail()
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-    const nextBtn = screen.getByTestId('next-button')
-    expect(nextBtn).toBeInTheDocument()
-    expect(nextBtn).toBeDisabled()
+    expect(screen.queryByTestId('field-lok-sabha-number')).toBeNull()
+  })
+})
+
+// ── Adjacent load controls — initial state ────────────────────────────────────
+
+describe('RecordDetail — adjacent load controls', () => {
+  it('renders Load 5 previous / Load 5 next controls', async () => {
+    mockFetch(makeRecordDetail({ has_prev: true, has_next: true }))
+    renderDetail()
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+    expect(screen.getByTestId('load-prev-button')).toHaveTextContent('Load 5 previous')
+    expect(screen.getByTestId('load-next-button')).toHaveTextContent('Load 5 next')
   })
 
-  it('Both Prev and Next disabled for single-record sitting', async () => {
-    mockFetch(makeRecordDetail({
-      sequence_within_sitting: 1,
-      sitting_total: 1,
-      adjacent: { prev_id: null, next_id: null },
-    }))
+  it('Load 5 previous enabled when has_prev true', async () => {
+    mockFetch(makeRecordDetail({ has_prev: true }))
     renderDetail()
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-    expect(screen.getByTestId('prev-button')).toBeDisabled()
-    expect(screen.getByTestId('next-button')).toBeDisabled()
+    expect(screen.getByTestId('load-prev-button')).not.toBeDisabled()
   })
 
-  it('disabled Prev button style does not include display:none', async () => {
-    mockFetch(makeRecordDetail({ adjacent: { prev_id: null, next_id: 'next-1' } }))
+  it('Load 5 previous disabled and IN the DOM when has_prev false (lower boundary)', async () => {
+    mockFetch(makeRecordDetail({ sequence_within_sitting: 1, has_prev: false, has_next: true }))
     renderDetail()
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-    const prevBtn = screen.getByTestId('prev-button')
-    expect(prevBtn.style.display).not.toBe('none')
+    const btn = screen.getByTestId('load-prev-button')
+    expect(btn).toBeInTheDocument()
+    expect(btn).toBeDisabled()
+  })
+
+  it('Load 5 next disabled and IN the DOM when has_next false (upper boundary)', async () => {
+    mockFetch(makeRecordDetail({ has_prev: true, has_next: false }))
+    renderDetail()
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+    const btn = screen.getByTestId('load-next-button')
+    expect(btn).toBeInTheDocument()
+    expect(btn).toBeDisabled()
+  })
+
+  it('both controls disabled for single-record sitting', async () => {
+    mockFetch(makeRecordDetail({ sequence_within_sitting: 1, sitting_total: 1, has_prev: false, has_next: false }))
+    renderDetail()
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+    expect(screen.getByTestId('load-prev-button')).toBeDisabled()
+    expect(screen.getByTestId('load-next-button')).toBeDisabled()
+  })
+
+  it('disabled control is not hidden (no display:none)', async () => {
+    mockFetch(makeRecordDetail({ has_prev: false, has_next: true }))
+    renderDetail()
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+    expect(screen.getByTestId('load-prev-button').style.display).not.toBe('none')
   })
 })
 
@@ -373,68 +403,109 @@ describe('RecordDetail — back navigation', () => {
   })
 })
 
-// ── Adjacent navigation behavior ──────────────────────────────────────────────
+// ── Inline adjacent loading behavior ──────────────────────────────────────────
 
-describe('RecordDetail — adjacent navigation behavior', () => {
-  it('clicking Next navigates to next_id and updates the URL', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => makeRecordDetail({ adjacent: { prev_id: 'prev-1', next_id: 'next-1' } }),
-    }))
+// Dispatches the record fetch and the /adjacent fetch by URL. `adjacentQueue`
+// is an array of responses returned in order for successive /adjacent calls.
+function mockRecordAndAdjacent(record, adjacentQueue) {
+  let idx = 0
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((url) => {
+    if (typeof url === 'string' && url.includes('/adjacent')) {
+      const resp = adjacentQueue[Math.min(idx, adjacentQueue.length - 1)]
+      idx += 1
+      return Promise.resolve({ ok: true, status: 200, json: async () => resp })
+    }
+    return Promise.resolve({ ok: true, status: 200, json: async () => record })
+  }))
+}
+
+describe('RecordDetail — inline adjacent loading', () => {
+  it('clicking Load 5 next appends records without page navigation', async () => {
+    mockRecordAndAdjacent(
+      makeRecordDetail({ id: 'speech-1', sequence_within_sitting: 7, has_next: true }),
+      [{
+        direction: 'next',
+        records: [
+          makeAdjacentRecord({ id: 'next-a', sequence_within_sitting: 8, subject: 'Next subject A' }),
+        ],
+        has_more: false,
+      }]
+    )
     renderDetailWithNav('speech-1')
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-    expect(screen.getByTestId('location-display')).toHaveTextContent('/record/speech-1')
 
-    fireEvent.click(screen.getByTestId('next-button'))
+    fireEvent.click(screen.getByTestId('load-next-button'))
 
     await waitFor(() =>
-      expect(screen.getByTestId('location-display')).toHaveTextContent('/record/next-1')
+      expect(screen.getByTestId('adjacent-record-next-a')).toBeInTheDocument()
     )
+    // URL did not change.
+    expect(screen.getByTestId('location-display')).toHaveTextContent('/record/speech-1')
   })
 
-  it('clicking Prev navigates to prev_id and updates the URL', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => makeRecordDetail({ adjacent: { prev_id: 'prev-1', next_id: 'next-1' } }),
-    }))
+  it('clicking Load 5 previous prepends records; focal stays in the DOM', async () => {
+    mockRecordAndAdjacent(
+      makeRecordDetail({ id: 'speech-1', sequence_within_sitting: 10, has_prev: true }),
+      [{
+        direction: 'prev',
+        records: [
+          makeAdjacentRecord({ id: 'prev-a', sequence_within_sitting: 9, subject: 'Prev subject A' }),
+        ],
+        has_more: false,
+      }]
+    )
     renderDetailWithNav('speech-1')
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-    expect(screen.getByTestId('location-display')).toHaveTextContent('/record/speech-1')
 
-    fireEvent.click(screen.getByTestId('prev-button'))
+    fireEvent.click(screen.getByTestId('load-prev-button'))
 
     await waitFor(() =>
-      expect(screen.getByTestId('location-display')).toHaveTextContent('/record/prev-1')
+      expect(screen.getByTestId('adjacent-record-prev-a')).toBeInTheDocument()
     )
-  })
-
-  it('clicking disabled Prev button produces no navigation', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => makeRecordDetail({ adjacent: { prev_id: null, next_id: 'next-1' } }),
-    }))
-    renderDetailWithNav('speech-1')
-    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
-
-    fireEvent.click(screen.getByTestId('prev-button'))
-
+    // Focal record still present.
+    expect(screen.getByTestId('record-detail')).toBeInTheDocument()
     expect(screen.getByTestId('location-display')).toHaveTextContent('/record/speech-1')
   })
 
-  it('clicking disabled Next button produces no navigation', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => makeRecordDetail({ adjacent: { prev_id: 'prev-1', next_id: null } }),
-    }))
+  it('control stays enabled when has_more true, disables when next batch has_more false', async () => {
+    mockRecordAndAdjacent(
+      makeRecordDetail({ id: 'speech-1', sequence_within_sitting: 7, has_next: true }),
+      [
+        {
+          direction: 'next',
+          records: [makeAdjacentRecord({ id: 'n8', sequence_within_sitting: 8 })],
+          has_more: true,
+        },
+        {
+          direction: 'next',
+          records: [makeAdjacentRecord({ id: 'n9', sequence_within_sitting: 9 })],
+          has_more: false,
+        },
+      ]
+    )
     renderDetailWithNav('speech-1')
     await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
 
-    fireEvent.click(screen.getByTestId('next-button'))
+    fireEvent.click(screen.getByTestId('load-next-button'))
+    await waitFor(() => expect(screen.getByTestId('adjacent-record-n8')).toBeInTheDocument())
+    expect(screen.getByTestId('load-next-button')).not.toBeDisabled()
 
+    fireEvent.click(screen.getByTestId('load-next-button'))
+    await waitFor(() => expect(screen.getByTestId('adjacent-record-n9')).toBeInTheDocument())
+    expect(screen.getByTestId('load-next-button')).toBeDisabled()
+  })
+
+  it('clicking a disabled control loads nothing and does not navigate', async () => {
+    mockRecordAndAdjacent(
+      makeRecordDetail({ id: 'speech-1', sequence_within_sitting: 1, has_prev: false, has_next: true }),
+      [{ direction: 'prev', records: [], has_more: false }]
+    )
+    renderDetailWithNav('speech-1')
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('load-prev-button'))
+
+    expect(screen.queryByTestId('adjacent-prev-records')).toBeNull()
     expect(screen.getByTestId('location-display')).toHaveTextContent('/record/speech-1')
   })
 })

@@ -1,6 +1,8 @@
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useRecord } from '../hooks/useRecord.js'
+import { useAdjacent } from '../hooks/useAdjacent.js'
 import { getProceedingTypeLabel, getSourceLabel } from '../lib/constants.js'
+import { toOrdinal } from '../lib/ordinal.js'
 
 const NULL_FULL_TEXT_MESSAGE =
   'This record was delivered in Hindi. No English text is available.'
@@ -27,6 +29,64 @@ function MetaField({ label, value, testId }) {
   )
 }
 
+function renderParagraphs(fullText) {
+  if (!fullText) {
+    return (
+      <p className="record-null-text" data-testid="null-full-text-message">
+        {NULL_FULL_TEXT_MESSAGE}
+      </p>
+    )
+  }
+  return fullText
+    .split('\n')
+    .filter((p) => p.trim())
+    .map((para, i) => (
+      <p key={i} className="record-text-para">
+        {para}
+      </p>
+    ))
+}
+
+// One inline adjacent record: speaker (or questioner/minister), date, subject,
+// proceeding type, and full text.
+function AdjacentRecord({ record }) {
+  const proceedingLabel = getProceedingTypeLabel(record.proceeding_type)
+  const attribution =
+    record.record_type === 'qa'
+      ? [
+          record.questioner_names && record.questioner_names.length > 0
+            ? record.questioner_names.join(', ')
+            : null,
+          record.minister_name ? `Answered by ${record.minister_name}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : record.speaker_name || 'Speaker unknown'
+
+  return (
+    <article
+      className="record-adjacent-item"
+      data-testid={`adjacent-record-${record.id}`}
+    >
+      <div className="record-adjacent-meta">
+        <span className="record-adjacent-attribution">{attribution}</span>
+        {proceedingLabel && (
+          <span className="record-adjacent-proceeding">{proceedingLabel}</span>
+        )}
+        {record.date_display && (
+          <span className="record-adjacent-date">{record.date_display}</span>
+        )}
+      </div>
+      {record.subject && (
+        <div className="record-adjacent-subject">{record.subject}</div>
+      )}
+      <div className="record-adjacent-fulltext">
+        {renderParagraphs(record.full_text_en)}
+      </div>
+    </article>
+  )
+}
+
 export default function RecordDetail() {
   const { id } = useParams()
   const location = useLocation()
@@ -35,6 +95,19 @@ export default function RecordDetail() {
 
   const fromSearch = location.state?.from === 'search'
   const resultsPath = location.state?.resultsPath
+
+  const {
+    prevRecords,
+    nextRecords,
+    canLoadPrev,
+    canLoadNext,
+    loadingPrev,
+    loadingNext,
+    errorPrev,
+    errorNext,
+    loadPrev,
+    loadNext,
+  } = useAdjacent(id, data)
 
   if (loading) {
     return (
@@ -67,19 +140,7 @@ export default function RecordDetail() {
 
   if (!data) return null
 
-  const { adjacent, sitting_total } = data
-
-  const handlePrev = () => {
-    if (adjacent?.prev_id) {
-      navigate(`/record/${adjacent.prev_id}`, { state: location.state })
-    }
-  }
-
-  const handleNext = () => {
-    if (adjacent?.next_id) {
-      navigate(`/record/${adjacent.next_id}`, { state: location.state })
-    }
-  }
+  const { sitting_total } = data
 
   const sourceLabel = getSourceLabel(data.source)
   const proceedingLabel = getProceedingTypeLabel(data.proceeding_type)
@@ -88,9 +149,16 @@ export default function RecordDetail() {
     ? SPEAKER_ROLE_LABELS[data.speaker_role] || data.speaker_role
     : null
 
+  // F09 (PRD v3.0): Lok Sabha term — LS records only, rendered with ordinal
+  // suffix. Omitted entirely for RS and CA (no "Lok Sabha" text in those cards).
+  const lokSabhaDisplay =
+    data.source === 'LS' && data.lok_sabha_number != null
+      ? `${toOrdinal(data.lok_sabha_number)} Lok Sabha`
+      : null
+
   return (
     <div className="record-detail" data-testid="record-detail">
-      {/* ── Top bar: back nav + adjacent navigation ── */}
+      {/* ── Top bar: back nav + position indicator ── */}
       <div className="record-detail-topbar">
         <div className="record-detail-backnav">
           {fromSearch ? (
@@ -108,36 +176,49 @@ export default function RecordDetail() {
           )}
         </div>
 
-        <div className="record-detail-adjacent" data-testid="adjacent-nav">
-          <button
-            className="record-adj-btn"
-            data-testid="prev-button"
-            disabled={!adjacent?.prev_id}
-            onClick={handlePrev}
-          >
-            ← Prev
-          </button>
-
-          {data.sequence_within_sitting != null && sitting_total > 0 && (
-            <span className="record-position" data-testid="position-indicator">
-              {data.sequence_within_sitting} of {sitting_total}
-            </span>
-          )}
-
-          <button
-            className="record-adj-btn"
-            data-testid="next-button"
-            disabled={!adjacent?.next_id}
-            onClick={handleNext}
-          >
-            Next →
-          </button>
-        </div>
+        {data.sequence_within_sitting != null && sitting_total > 0 && (
+          <span className="record-position" data-testid="position-indicator">
+            {data.sequence_within_sitting} of {sitting_total}
+          </span>
+        )}
       </div>
 
-      {/* ── Metadata ── */}
+      {/* ── Load 5 previous ── */}
+      <div className="record-adjacent-controls record-adjacent-controls--prev">
+        <button
+          className="record-load-btn"
+          data-testid="load-prev-button"
+          disabled={!canLoadPrev || loadingPrev}
+          onClick={loadPrev}
+        >
+          {loadingPrev ? 'Loading…' : 'Load 5 previous'}
+        </button>
+        {errorPrev && (
+          <p className="record-adjacent-error" data-testid="adjacent-error-prev">
+            Unable to load previous records.
+          </p>
+        )}
+      </div>
+
+      {/* ── Loaded previous records (ascending, above focal) ── */}
+      {prevRecords.length > 0 && (
+        <div className="record-adjacent-list" data-testid="adjacent-prev-records">
+          {prevRecords.map((r) => (
+            <AdjacentRecord key={r.id} record={r} />
+          ))}
+        </div>
+      )}
+
+      {/* ── Focal record metadata ── */}
       <div className="record-detail-metadata">
         <MetaField label="Legislative body" value={sourceLabel} testId="field-source" />
+        {lokSabhaDisplay && (
+          <MetaField
+            label="Lok Sabha term"
+            value={lokSabhaDisplay}
+            testId="field-lok-sabha-number"
+          />
+        )}
         <MetaField label="Proceeding type" value={proceedingLabel} testId="field-proceeding-type" />
         <MetaField label="Date" value={data.date_display} testId="field-date" />
         <MetaField label="Time" value={data.time_of_day} testId="field-time-of-day" />
@@ -244,20 +325,33 @@ export default function RecordDetail() {
         )}
       </div>
 
-      {/* ── Full text ── */}
+      {/* ── Focal full text ── */}
       <div className="record-detail-fulltext">
-        {data.full_text_en ? (
-          data.full_text_en
-            .split('\n')
-            .filter((p) => p.trim())
-            .map((para, i) => (
-              <p key={i} className="record-text-para">
-                {para}
-              </p>
-            ))
-        ) : (
-          <p className="record-null-text" data-testid="null-full-text-message">
-            {NULL_FULL_TEXT_MESSAGE}
+        {renderParagraphs(data.full_text_en)}
+      </div>
+
+      {/* ── Loaded next records (ascending, below focal) ── */}
+      {nextRecords.length > 0 && (
+        <div className="record-adjacent-list" data-testid="adjacent-next-records">
+          {nextRecords.map((r) => (
+            <AdjacentRecord key={r.id} record={r} />
+          ))}
+        </div>
+      )}
+
+      {/* ── Load 5 next ── */}
+      <div className="record-adjacent-controls record-adjacent-controls--next">
+        <button
+          className="record-load-btn"
+          data-testid="load-next-button"
+          disabled={!canLoadNext || loadingNext}
+          onClick={loadNext}
+        >
+          {loadingNext ? 'Loading…' : 'Load 5 next'}
+        </button>
+        {errorNext && (
+          <p className="record-adjacent-error" data-testid="adjacent-error-next">
+            Unable to load next records.
           </p>
         )}
       </div>
