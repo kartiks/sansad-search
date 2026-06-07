@@ -481,3 +481,39 @@ class TestAdjacentEndpoint:
             ).json()
         assert body["records"] == []
         assert body["has_more"] is False
+
+    def test_limit_above_max_clamped_to_5(self):
+        """limit=50 in the URL is clamped to max 5 by record.py:222."""
+        focal = _focal(seq=7)
+        # 6 rows: if limit were not clamped the service would keep all 6.
+        batch = [
+            _speech_row(id=f"adj-{s}", sequence_within_sitting=s)
+            for s in range(8, 14)
+        ]
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=batch)
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            body = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "next", "from_seq": 7, "limit": 50},
+            ).json()
+        assert len(body["records"]) <= 5
+        assert body["has_more"] is True
+
+    def test_limit_zero_floored_to_1(self):
+        """limit=0 is floored to 1 by record.py:222."""
+        focal = _focal(seq=7)
+        # 2 rows: with clamped limit=1 the service fetches limit+1=2, trims to 1.
+        batch = [
+            _speech_row(id="adj-8", sequence_within_sitting=8),
+            _speech_row(id="adj-9", sequence_within_sitting=9),
+        ]
+        pool = make_mock_pool(fetchrow_result=focal, fetch_result=batch)
+        meili = make_mock_meili_client()
+        with _get_client(pool, meili) as client:
+            body = client.get(
+                f"/api/record/{_ADJ_ID}/adjacent",
+                params={"direction": "next", "from_seq": 7, "limit": 0},
+            ).json()
+        assert len(body["records"]) == 1
+        assert body["has_more"] is True

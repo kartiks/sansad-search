@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import RecordDetail from '../pages/RecordDetail.jsx'
 import { makeRecordDetail, makeAdjacentRecord } from './fixtures.js'
@@ -507,5 +507,139 @@ describe('RecordDetail — inline adjacent loading', () => {
 
     expect(screen.queryByTestId('adjacent-prev-records')).toBeNull()
     expect(screen.getByTestId('location-display')).toHaveTextContent('/record/speech-1')
+  })
+})
+
+// ── Adjacent record content rendering ─────────────────────────────────────────
+
+describe('RecordDetail — adjacent record content rendering', () => {
+  it('loaded speech adjacent record renders speaker, date, subject, proceeding type, and full text', async () => {
+    const adjacentSpeech = makeAdjacentRecord({
+      id: 'speech-adj-1',
+      record_type: 'speech',
+      speaker_name: 'Another Member',
+      date_display: '15 March 2023',
+      subject: 'Water Resources Development',
+      proceeding_type: 'debate',
+      full_text_en: 'Continuing on the point of order raised earlier.',
+    })
+    mockRecordAndAdjacent(
+      makeRecordDetail({ id: 'speech-1', sequence_within_sitting: 7, has_next: true }),
+      [{ direction: 'next', records: [adjacentSpeech], has_more: false }]
+    )
+    renderDetailWithNav('speech-1')
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('load-next-button'))
+    await waitFor(() => expect(screen.getByTestId('adjacent-record-speech-adj-1')).toBeInTheDocument())
+
+    const article = screen.getByTestId('adjacent-record-speech-adj-1')
+    expect(within(article).getByText('Another Member')).toBeInTheDocument()
+    expect(within(article).getByText('15 March 2023')).toBeInTheDocument()
+    expect(within(article).getByText('Water Resources Development')).toBeInTheDocument()
+    expect(within(article).getByText('Debate')).toBeInTheDocument()
+    expect(within(article).getByText('Continuing on the point of order raised earlier.')).toBeInTheDocument()
+  })
+
+  it('loaded Q+A adjacent record renders questioner and minister attribution', async () => {
+    const adjacentQA = makeAdjacentRecord({
+      id: 'qa-adj-1',
+      record_type: 'qa',
+      speaker_name: null,
+      questioner_names: ['Shri A. Kumar'],
+      minister_name: 'Dr. Mansukh Mandaviya',
+      date_display: '4 August 2023',
+      subject: 'National Health Mission Status',
+      proceeding_type: 'starred_question',
+      full_text_en: 'Q: What is the status of NHM?',
+    })
+    mockRecordAndAdjacent(
+      makeRecordDetail({ id: 'speech-1', sequence_within_sitting: 7, has_next: true }),
+      [{ direction: 'next', records: [adjacentQA], has_more: false }]
+    )
+    renderDetailWithNav('speech-1')
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('load-next-button'))
+    await waitFor(() => expect(screen.getByTestId('adjacent-record-qa-adj-1')).toBeInTheDocument())
+
+    const article = screen.getByTestId('adjacent-record-qa-adj-1')
+    // Q+A attribution: questioner · "Answered by" minister
+    expect(within(article).getByText('Shri A. Kumar · Answered by Dr. Mansukh Mandaviya')).toBeInTheDocument()
+    expect(within(article).getByText('4 August 2023')).toBeInTheDocument()
+    expect(within(article).getByText('National Health Mission Status')).toBeInTheDocument()
+    expect(within(article).getByText('Q: What is the status of NHM?')).toBeInTheDocument()
+  })
+})
+
+// ── Adjacent load error UI ─────────────────────────────────────────────────────
+
+// Like mockRecordAndAdjacent but queue entries can be null (→ 500 error) or a
+// success payload.
+function mockRecordAndAdjacentMixed(record, adjacentQueue) {
+  let idx = 0
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((url) => {
+    if (typeof url === 'string' && url.includes('/adjacent')) {
+      const entry = adjacentQueue[Math.min(idx, adjacentQueue.length - 1)]
+      idx += 1
+      if (entry === null) {
+        return Promise.resolve({ ok: false, status: 500, json: async () => null })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => entry })
+    }
+    return Promise.resolve({ ok: true, status: 200, json: async () => record })
+  }))
+}
+
+describe('RecordDetail — adjacent load error UI', () => {
+  it('renders adjacent-error-next message when a next load fails', async () => {
+    mockRecordAndAdjacentMixed(
+      makeRecordDetail({ id: 'speech-1', sequence_within_sitting: 7, has_next: true }),
+      [null]
+    )
+    renderDetailWithNav('speech-1')
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('load-next-button'))
+
+    await waitFor(() => expect(screen.getByTestId('adjacent-error-next')).toBeInTheDocument())
+    expect(screen.getByTestId('adjacent-error-next')).toHaveTextContent('Unable to load next records.')
+  })
+
+  it('renders adjacent-error-prev message when a prev load fails', async () => {
+    mockRecordAndAdjacentMixed(
+      makeRecordDetail({ id: 'speech-1', sequence_within_sitting: 10, has_prev: true }),
+      [null]
+    )
+    renderDetailWithNav('speech-1')
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('load-prev-button'))
+
+    await waitFor(() => expect(screen.getByTestId('adjacent-error-prev')).toBeInTheDocument())
+    expect(screen.getByTestId('adjacent-error-prev')).toHaveTextContent('Unable to load previous records.')
+  })
+
+  it('first batch records remain in DOM after a subsequent failed batch', async () => {
+    mockRecordAndAdjacentMixed(
+      makeRecordDetail({ id: 'speech-1', sequence_within_sitting: 7, has_next: true }),
+      [
+        { direction: 'next', records: [makeAdjacentRecord({ id: 'n8', sequence_within_sitting: 8 })], has_more: true },
+        null,
+      ]
+    )
+    renderDetailWithNav('speech-1')
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    // First batch: success.
+    fireEvent.click(screen.getByTestId('load-next-button'))
+    await waitFor(() => expect(screen.getByTestId('adjacent-record-n8')).toBeInTheDocument())
+
+    // Second batch: fails.
+    fireEvent.click(screen.getByTestId('load-next-button'))
+    await waitFor(() => expect(screen.getByTestId('adjacent-error-next')).toBeInTheDocument())
+
+    // First batch's record must still be rendered.
+    expect(screen.getByTestId('adjacent-record-n8')).toBeInTheDocument()
   })
 })

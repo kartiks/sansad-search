@@ -324,6 +324,22 @@ class TestFormatResult:
         result = format_result(hit, [])
         assert result["date_display"] == "26 January 1950"
 
+    def test_lang_original_and_time_of_day_present_in_result(self):
+        """DATA-MODELS §3.1: lang_original and time_of_day must appear on every search result."""
+        hit = self._make_hit(lang_original="en", time_of_day="14:32")
+        result = format_result(hit, [])
+        assert result["lang_original"] == "en"
+        assert result["time_of_day"] == "14:32"
+
+    def test_lang_original_and_time_of_day_null_when_absent(self):
+        """Fields are null (not absent) when not present in the hit."""
+        hit = self._make_hit()
+        result = format_result(hit, [])
+        assert "lang_original" in result
+        assert result["lang_original"] is None
+        assert "time_of_day" in result
+        assert result["time_of_day"] is None
+
 
 # ── _merge_expansion_terms ────────────────────────────────────────────────────
 

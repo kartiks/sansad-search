@@ -299,6 +299,8 @@ def format_result(hit: Dict[str, Any], query_terms: List[str]) -> Dict[str, Any]
         "session_name": hit.get("session_name"),
         "subject": hit.get("subject"),
         "is_translated": hit.get("is_translated", False),
+        "lang_original": hit.get("lang_original"),
+        "time_of_day": hit.get("time_of_day"),
         "source_url": hit.get("source_url"),
         # Speech fields
         "speaker_name": hit.get("speaker_name"),
