@@ -2,15 +2,16 @@
 Integration tests for ingest.sources.rs.RSOrchestrator (Phase 9).
 
 Verifies the RS provider chain [sansad_rs_html, internet_archive, rsdebate_dspace]
-and the PRD v1.3 canonical-citation rule:
+and the PRD v3.0 canonical-citation rule (Non-Negotiable #9 v3.0 reversal):
 
   - sansad.in/rs HTML records are produced for recent sittings (format=html).
   - IA fallback processes documents the HTML front-end did not cover.
   - DSpace fallback processes documents IA did not cover (document-level dedup).
-  - No record's source_url is ever an archive.org URL (Non-Negotiable #9).
+  - RS-via-IA records cite the archive.org item URL (Non-Neg #9 v3.0).
+  - RS-via-rsdebate DSpace records have source_url=None (absent from IA).
   - source_url on every indexed record == doc_ref.citation_url, for ALL formats
     (html / ia_text / pdf) — the RS canonical-citation rule.
-  - The RS-via-IA no-handle edge case: citation_url=None → source_url=None.
+  - The no-handle edge case: citation_url=None → source_url=None.
   - Re-run against a fully-processed corpus produces zero new records.
 """
 from __future__ import annotations
@@ -128,14 +129,13 @@ def _make_sansad_doc_ref(date_iso: str = "2023-03-15") -> DocumentRef:
 
 def _make_ia_doc_ref(handle_n: str) -> DocumentRef:
     identifier = f"eparlib.nic.in.{handle_n}"
-    citation = f"https://rsdebate.nic.in/handle/123456789/{handle_n}"
     return DocumentRef(
         corpus="RS",
         provider="internet_archive",
         format="ia_text",
         fetch_url=f"https://archive.org/download/{identifier}/{identifier}_djvu.txt",
         canonical_doc_id=handle_n,
-        citation_url=citation,
+        citation_url=f"https://archive.org/details/{identifier}",  # Non-Neg #9 v3.0
         metadata={"identifier": identifier, "eparlib_date": "2018-02-12"},
     )
 
@@ -148,7 +148,7 @@ def _make_dspace_doc_ref(handle_n: str) -> DocumentRef:
         format="pdf",
         fetch_url=item_url,
         canonical_doc_id=handle_n,
-        citation_url=item_url,
+        citation_url=None,  # absent from IA → no archive.org URL (Non-Neg #9 v3.0)
         metadata={"item_url": item_url},
     )
 
@@ -236,8 +236,8 @@ class TestRSOrchestratorProviderChain:
         finally:
             checkpoint.close()
 
-    async def test_source_url_equals_rsdebate_url_for_ia_records(self):
-        """RS-via-IA records cite rsdebate.nic.in (derived from handle), never archive.org."""
+    async def test_source_url_is_archive_org_for_ia_records(self):
+        """Non-Neg #9 v3.0: RS-via-IA records cite the archive.org item URL."""
         ref = _make_ia_doc_ref("55501")
         ia_provider = StubProvider([ref], {"55501": _SPEECH_TEXT}, name="ia")
 
@@ -247,13 +247,12 @@ class TestRSOrchestratorProviderChain:
             await _orchestrator([ia_provider], checkpoint, indexer).run()
             assert len(indexer.indexed_records) >= 1
             for record in indexer.indexed_records:
-                assert record.get("source_url") == "https://rsdebate.nic.in/handle/123456789/55501"
-                assert "archive.org" not in (record.get("source_url") or "")
+                assert record.get("source_url") == "https://archive.org/details/eparlib.nic.in.55501"
         finally:
             checkpoint.close()
 
     async def test_no_handle_edge_case_yields_null_source_url(self):
-        """PRD v1.3 edge case: IA RS item with citation_url=None → source_url=None (never archive.org)."""
+        """Edge case: IA RS item with no derivable handle → citation_url=None → source_url=None."""
         identifier = "rs_untagged_item"
         ref = DocumentRef(
             corpus="RS",
@@ -327,8 +326,8 @@ class TestRSOrchestratorProviderChain:
         finally:
             checkpoint.close()
 
-    async def test_no_archive_org_url_in_any_source_url(self):
-        """No indexed record's source_url is ever an archive.org URL (Non-Neg #9)."""
+    async def test_source_url_matches_citation_url_across_providers(self):
+        """Non-Neg #9 v3.0: source_url == doc_ref.citation_url for all provider paths."""
         html_ref = _make_sansad_doc_ref()
         ia_ref = _make_ia_doc_ref("55501")
 
@@ -342,10 +341,12 @@ class TestRSOrchestratorProviderChain:
         try:
             await _orchestrator([html_provider, ia_provider], checkpoint, indexer).run()
             assert len(indexer.indexed_records) >= 1
+            # HTML records → sansad.in/rs URL; IA records → archive.org URL
             for record in indexer.indexed_records:
                 url = record.get("source_url")
-                if url is not None:
-                    assert "archive.org" not in url
+                assert url is None or (
+                    "sansad.in/rs" in url or "archive.org" in url
+                ), f"Unexpected source_url: {url!r}"
         finally:
             checkpoint.close()
 

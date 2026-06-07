@@ -405,3 +405,24 @@ class TestNormalizeEparlibUrl:
         result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
         assert result is not None
         assert result["source_url"] == "https://eparlib.sansad.in/handle/123456789/99"
+
+
+# ── Phase 13: lok_sabha_number passthrough (PRD v3.0) ─────────────────────────
+
+class TestLokSabhaNumberPassthrough:
+    def test_ls_lok_sabha_number_from_provider_metadata(self):
+        """The IA provider pre-parses lok_sabha_number (int) onto the metadata;
+        the parser passes it through for LS records."""
+        meta = _meta(lok_sabha_number=17)
+        result = parse_ia_text(_SAMPLE_TEXT, meta, source="LS")
+        assert result["lok_sabha_number"] == 17
+
+    def test_rs_lok_sabha_number_always_null(self):
+        """RS records always carry null lok_sabha_number even if present on metadata."""
+        meta = _meta(lok_sabha_number=17)
+        result = parse_ia_text(_SAMPLE_TEXT, meta, source="RS")
+        assert result["lok_sabha_number"] is None
+
+    def test_lok_sabha_number_null_when_absent(self):
+        result = parse_ia_text(_SAMPLE_TEXT, _meta(), source="LS")
+        assert result["lok_sabha_number"] is None

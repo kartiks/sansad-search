@@ -797,3 +797,93 @@ class TestMeilisearchFieldsV2:
         doc = build_meili_document(record)
         assert "sequence_within_sitting" in doc
         assert doc["sequence_within_sitting"] == 3
+
+
+# ── Phase 13: v3.0 columns (lok_sabha_number, segments, canonical_doc_id) ──────
+
+class TestV3Columns:
+    def test_v3_fields_excluded_from_meili_document(self):
+        record = {
+            "source": "LS",
+            "speaker_name": "Narendra Modi",
+            "full_text_en": "Speech text",
+            "lok_sabha_number": 17,
+            "segments": [{"text": "Speech text", "segment_index": 0}],
+            "canonical_doc_id": "123456",
+        }
+        doc = build_meili_document(record)
+        for field in ("lok_sabha_number", "segments", "canonical_doc_id"):
+            assert field not in doc, f"{field} must be excluded from the Meilisearch doc"
+
+    def test_v3_columns_present_in_speech_columns(self):
+        from ingest.indexer import _SPEECH_COLUMNS
+        for col in ("lok_sabha_number", "segments", "canonical_doc_id"):
+            assert col in _SPEECH_COLUMNS
+
+    def test_v3_columns_present_in_qa_columns(self):
+        from ingest.indexer import _QA_COLUMNS
+        for col in ("lok_sabha_number", "canonical_doc_id"):
+            assert col in _QA_COLUMNS
+        # segments is a speeches-only column
+        assert "segments" not in _QA_COLUMNS
+
+    def test_speech_insert_writes_v3_fields_to_pg(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record(
+            lok_sabha_number=17,
+            segments=[
+                {"text": "First.", "segment_index": 0},
+                {"text": "Second.", "segment_index": 1},
+            ],
+            canonical_doc_id="123456",
+        )
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            indexer.index_record(record, cp)
+
+        # Inspect the INSERT executed against the mock cursor.
+        cursor = pg.cursor.return_value
+        sql, values = cursor.execute.call_args[0]
+        assert "INSERT INTO speeches" in sql
+        assert "lok_sabha_number" in sql
+        assert "canonical_doc_id" in sql
+        assert "segments" in sql
+        assert 17 in values
+        assert "123456" in values
+        # segments is serialized to a JSON string (psycopg2 adapts lists to ARRAY).
+        seg_json = next(v for v in values if isinstance(v, str) and v.startswith("[") and "segment_index" in v)
+        import json as _json
+        assert _json.loads(seg_json)[1]["segment_index"] == 1
+
+    def test_qa_insert_writes_v3_fields_to_pg(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_qa_record(lok_sabha_number=17, canonical_doc_id="998877")
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            indexer.index_record(record, cp)
+
+        cursor = pg.cursor.return_value
+        sql, values = cursor.execute.call_args[0]
+        assert "INSERT INTO qa_exchanges" in sql
+        assert "lok_sabha_number" in sql
+        assert "canonical_doc_id" in sql
+        assert 17 in values
+        assert "998877" in values
+
+    def test_segments_none_passed_as_none_not_serialized(self, tmp_path):
+        pg = _make_mock_pg_conn(inserted=True)
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record(segments=None, lok_sabha_number=None, canonical_doc_id=None)
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            indexer.index_record(record, cp)
+
+        cursor = pg.cursor.return_value
+        _, values = cursor.execute.call_args[0]
+        # No accidental "null" string serialization for a None segments value.
+        assert "null" not in [v for v in values if isinstance(v, str)]

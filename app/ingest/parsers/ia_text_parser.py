@@ -9,14 +9,17 @@ Consumes:
     (the top-level "metadata" dict is passed in directly)
 
 Maps IA custom eparlib_* fields:
-  eparlib_document_url     → source_url (canonical citation; never archive.org)
+  eparlib_document_url     → source_url (set here; overridden by orchestrator with
+                             archive.org item URL per Non-Negotiable #9 v3.0)
   eparlib_date             → date (ISO; also parses 'D-Month-YYYY' / 'D-Mon-YYYY')
   eparlib_session_number   → session_number (int or Roman numeral I–XVII)
   eparlib_question_type    → proceeding_type ('Starred'/'Unstarred' → typed string)
   eparlib_question_number  → question_number (int)
   eparlib_members          → questioner_names (list; string split on comma or list)
   eparlib_relation_ministry → ministry
-  eparlib_lok_sabha_number → (ignored here; used by corpus orchestrator)
+  lok_sabha_number         → lok_sabha_number (LS only; pre-parsed int set on the
+                             DocumentRef metadata by InternetArchiveProvider; null
+                             for RS — PRD v3.0)
   eparlib_title / title    → subject; also used for proceeding_type fallback
 
 IA metadata fields may be strings or single-element lists; _get() handles both.
@@ -36,7 +39,7 @@ Returned dict shape:
     "questioner_names": list[str],
     "ministry":         str | None,
     "subject":          str | None,
-    "source_url":       str | None,   # eparlib_document_url; never archive.org
+    "source_url":       str | None,   # eparlib_document_url; overridden by orchestrator (Non-Neg #9 v3.0)
     "page_reference":   None,         # not applicable for IA text
     "volume":           None,         # not applicable for LS/RS
     "raw_text":         str,
@@ -240,6 +243,10 @@ def parse_ia_text(
     questioner_names: list[str] = _get_list(metadata, "eparlib_members")
     ministry: str | None = _get(metadata, "eparlib_relation_ministry")
 
+    # PRD v3.0: lok_sabha_number is pre-parsed to an int by the IA provider and
+    # is LS-only. RS records always carry null.
+    lok_sabha_number = metadata.get("lok_sabha_number") if source == "LS" else None
+
     return {
         "source": source,
         "proceeding_type": proceeding_type,
@@ -255,5 +262,6 @@ def parse_ia_text(
         "page_reference": None,     # IA text has no page numbers
         "volume": None,
         "time_of_day": None,        # IA pre-OCR text has no sitting start time
+        "lok_sabha_number": lok_sabha_number,
         "raw_text": raw_text,
     }

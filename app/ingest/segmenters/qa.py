@@ -189,6 +189,15 @@ def _parse_single_qa(
                 text_parts.append(rest_content)
             continue
 
+        # PRD v3.0: the question preamble ("Will the Minister of X be pleased to
+        # state…") contains the word "Minister" but is NOT the minister's
+        # response attribution. It must never become minister_name. Treat the
+        # whole block as question text and skip all minister/attribution
+        # detection for it.
+        if _WILL_THE_MINISTER_RE.search(first_line):
+            text_parts.append(block)
+            continue
+
         # Minister detection on first line
         m = _MINISTER_RE.match(first_line)
         if m:
@@ -276,6 +285,15 @@ def _parse_single_qa(
     if not text_parts and not question_number:
         return None
 
+    # PRD v3.0: minister_name must come from the response section only and must
+    # never be question-preamble text. When no explicit minister name was found
+    # (None) — or a preamble slipped through ("Will the …") — fall back to
+    # "Minister of [Ministry]" using the ministry field. Never emit preamble.
+    if minister_name is not None and _WILL_THE_MINISTER_RE.search(minister_name):
+        minister_name = None
+    if minister_name is None and ministry:
+        minister_name = f"Minister of {ministry}"
+
     return {
         "source": source,
         "proceeding_type": proceeding_type,
@@ -297,4 +315,5 @@ def _parse_single_qa(
         "has_untranslated_content": has_untranslated,
         "source_url": raw_record.get("source_url"),
         "page_reference": raw_record.get("page_reference"),
+        "lok_sabha_number": raw_record.get("lok_sabha_number"),
     }

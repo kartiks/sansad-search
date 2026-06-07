@@ -12,9 +12,14 @@ Fetch:
   GET https://{server}{dir}/{name}  (DjVuTXT file served from IA content server)
   Returns str (IA _djvu.txt text content).
 
-Non-Negotiable #9: citation_url is NEVER an archive.org URL. For LS,
-citation_url = eparlib_document_url from metadata. For RS (Phase 9 extension),
-citation_url = rsdebate.nic.in URL derived from handle N.
+Non-Negotiable #9 (REVERSED in PRD v3.0): citation_url IS the Internet Archive
+item URL — `https://archive.org/details/{identifier}` — for both LS and RS.
+The prior rule (eparlib_document_url for LS, rsdebate.nic.in for RS) is no
+longer used. citation_url is null only when no IA identifier is derivable.
+
+lok_sabha_number (PRD v3.0): extracted from `eparlib_lok_sabha_number` in the
+IA metadata JSON for LS items only (RS and CA are always null). Surfaced on the
+DocumentRef metadata as the integer `lok_sabha_number`.
 """
 from __future__ import annotations
 
@@ -36,9 +41,13 @@ _IDENTIFIER_RE = re.compile(r"eparlib\.nic\.in\.(\d+)$", re.IGNORECASE)
 
 _IA_METADATA_BASE = "https://archive.org/metadata"
 
-# rsdebate.nic.in is the canonical RS citation host (DSpace). The handle number N
-# extracted from the IA identifier is the same DSpace handle used on rsdebate.
-# Non-Negotiable #9: this URL is cited instead of the archive.org mirror.
+# PRD v3.0: the Internet Archive item page is now the canonical citation
+# (source_url) for both LS and RS records (Non-Negotiable #9 reversal).
+IA_DETAILS_BASE = "https://archive.org/details"
+IA_ITEM_PATTERN = f"{IA_DETAILS_BASE}/{{identifier}}"
+
+# rsdebate.nic.in handle pattern — retained for the RS DSpace fallback provider
+# and for tests; no longer used to build the IA citation_url (PRD v3.0 reversal).
 RSDEBATE_BASE = "https://rsdebate.nic.in"
 RSDEBATE_ITEM_PATTERN = f"{RSDEBATE_BASE}/handle/123456789/{{handle}}"
 
@@ -70,8 +79,9 @@ class InternetArchiveProvider(Provider):
     metadata JSON fetch per identifier to populate eparlib_* fields and
     determine citation_url.
 
-    corpus="LS" (Phase 8): citation_url = eparlib_document_url.
-    corpus="RS" (Phase 9, subclassed): citation_url = rsdebate.nic.in URL.
+    corpus="LS" or corpus="RS": citation_url = archive.org item URL
+    (https://archive.org/details/{identifier}) — Non-Negotiable #9 v3.0 reversal.
+    Null only when no IA identifier is derivable.
     """
 
     IA_QUERY = "identifier:(eparlib.nic.in*)"
@@ -101,7 +111,8 @@ class InternetArchiveProvider(Provider):
 
         For each identifier: fetches the IA metadata JSON to get eparlib_* fields,
         extracts the DSpace handle number N as canonical_doc_id, sets citation_url
-        to eparlib_document_url (never archive.org — Non-Negotiable #9).
+        to the archive.org item URL (Non-Negotiable #9 v3.0 — archive.org is the
+        canonical citation for both LS and RS records fetched via IA).
         """
         ia_results = await enumerate_ia_search(
             self._client,
@@ -153,11 +164,19 @@ class InternetArchiveProvider(Provider):
             djvu_url = f"https://{server}{dir_}/{djvu_entry['name']}"
 
             meta = full_data.get("metadata", {})
-            citation_url = self._build_citation_url(meta, handle_n)
+            citation_url = self._build_citation_url(str(identifier))
             # When no DSpace handle is derivable (RS edge case), fall back to the
             # IA identifier as the checkpoint/dedup key so the item is still
             # tracked for resumability.
             canonical_id = handle_n if handle_n is not None else str(identifier)
+
+            # PRD v3.0: lok_sabha_number is LS-only, derived from the IA metadata
+            # field eparlib_lok_sabha_number. RS and CA are always null.
+            lok_sabha_number = (
+                self._extract_lok_sabha_number(meta)
+                if self._corpus == "LS"
+                else None
+            )
 
             doc_refs.append(
                 DocumentRef(
@@ -169,6 +188,7 @@ class InternetArchiveProvider(Provider):
                     citation_url=citation_url,
                     metadata={
                         "identifier": str(identifier),
+                        "lok_sabha_number": lok_sabha_number,
                         "eparlib_document_url": _get_meta(meta, "eparlib_document_url"),
                         "eparlib_date": _get_meta(meta, "eparlib_date"),
                         "eparlib_lok_sabha_number": _get_meta(meta, "eparlib_lok_sabha_number"),
@@ -188,23 +208,36 @@ class InternetArchiveProvider(Provider):
         )
         return doc_refs
 
-    def _build_citation_url(
-        self, meta: dict[str, Any], handle_n: str | None
-    ) -> str | None:
+    def _build_citation_url(self, identifier: str | None) -> str | None:
         """
-        Return the canonical citation URL. Never returns an archive.org URL.
+        Return the canonical citation URL — the Internet Archive item page.
 
-        LS: eparlib_document_url from metadata.
-        RS: rsdebate.nic.in item URL derived from the DSpace handle number N
-            (PRD v1.3). When N is not derivable, returns None — the archive.org
-            mirror URL is never substituted (Non-Negotiable #9).
+        PRD v3.0 (Non-Negotiable #9 reversal): the archive.org item URL
+        (`https://archive.org/details/{identifier}`) is the citation for both
+        LS and RS. eparlib_document_url (LS) and the rsdebate.nic.in handle URL
+        (RS) are no longer used. Returns None only when no IA identifier exists.
         """
-        if self._corpus == "LS":
-            return _get_meta(meta, "eparlib_document_url")
-        # RS (PRD v1.3): canonical citation is rsdebate.nic.in, derived from handle N.
-        if handle_n is None:
+        if not identifier:
             return None
-        return RSDEBATE_ITEM_PATTERN.format(handle=handle_n)
+        return IA_ITEM_PATTERN.format(identifier=identifier)
+
+    @staticmethod
+    def _extract_lok_sabha_number(meta: dict[str, Any]) -> int | None:
+        """
+        Parse eparlib_lok_sabha_number to an int. Returns None when absent or
+        unparseable. LS-only gating is applied at the corpus level (RS/CA pass
+        no eparlib_lok_sabha_number).
+        """
+        raw = _get_meta(meta, "eparlib_lok_sabha_number")
+        if raw is None:
+            return None
+        try:
+            return int(str(raw).strip())
+        except (ValueError, TypeError):
+            logger.warning(
+                "eparlib_lok_sabha_number %r is not an integer; ignoring", raw
+            )
+            return None
 
     async def _fetch_ia_metadata(self, identifier: str) -> dict[str, Any] | None:
         """Fetch IA metadata JSON for one identifier. Returns the full top-level JSON dict."""

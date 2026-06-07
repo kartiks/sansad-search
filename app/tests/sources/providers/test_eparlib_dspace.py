@@ -151,8 +151,8 @@ class TestEparlibDspaceProviderDiscover:
         assert "12345" in handle_numbers
         assert "67890" in handle_numbers
 
-    async def test_citation_url_is_item_page_url(self):
-        """citation_url is the DSpace item page URL, not an archive.org URL."""
+    async def test_citation_url_is_none(self):
+        """citation_url is None — DSpace fallback items are absent from IA (Non-Neg #9 v3.0)."""
         browse_resp_1 = MagicMock(status_code=200, text=_browse_html())
         browse_resp_2 = MagicMock(status_code=200, text="<html><body></body></html>")
 
@@ -163,9 +163,7 @@ class TestEparlibDspaceProviderDiscover:
         doc_refs = await provider.discover()
 
         for ref in doc_refs:
-            assert ref.citation_url is not None
-            assert "archive.org" not in ref.citation_url
-            assert EPARLIB_BASE in ref.citation_url
+            assert ref.citation_url is None
 
     async def test_url_without_handle_number_skipped(self):
         """Item URLs that don't contain /handle/N/M are skipped."""
@@ -199,7 +197,7 @@ class TestEparlibDspaceProviderFetch:
             format="pdf",
             fetch_url=item_url,
             canonical_doc_id="12345",
-            citation_url=item_url,
+            citation_url=None,
             metadata={"item_url": item_url},
         )
 

@@ -17,8 +17,9 @@ The DSpace handle number N (from /handle/123456789/{N}) is the cross-provider
 join key shared with the Internet Archive provider (canonical_doc_id = N), so an
 RS document available from both IA and rsdebate is fetched and parsed once.
 
-citation_url is the rsdebate.nic.in item page URL — the canonical RS citation
-(never archive.org; Non-Negotiable #9).
+citation_url is None — items fetched via this DSpace fallback are absent from
+IA, so no archive.org URL exists. Non-Negotiable #9 (v3.0): archive.org is the
+canonical citation when available; None when not derivable.
 """
 from __future__ import annotations
 
@@ -128,7 +129,7 @@ class RsdebateDspaceProvider(Provider):
                     format="pdf",
                     fetch_url=item_url,
                     canonical_doc_id=handle_n,
-                    citation_url=item_url,
+                    citation_url=None,  # absent from IA → no archive.org URL (Non-Neg #9 v3.0)
                     metadata={"item_url": item_url},
                 )
             )

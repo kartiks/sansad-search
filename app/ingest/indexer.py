@@ -43,8 +43,15 @@ _MEILI_EXCLUDED = frozenset({
     "session_number",
     "created_at",
     "dedup_key",
-    "word_count",   # PostgreSQL-only per DATA-MODELS.md §2.2
+    "word_count",          # PostgreSQL-only per DATA-MODELS.md §2.2
+    "lok_sabha_number",    # v3.0: detail-page-only (F09); excluded per §2.2
+    "segments",            # v3.0: PostgreSQL-only (full_text_en carries search text)
+    "canonical_doc_id",    # v3.0: serves F10 debug-raw lookup only
 })
+
+# JSONB columns requiring json.dumps before insert (psycopg2 adapts plain lists
+# to ARRAY, not JSONB, so they must be serialized explicitly).
+_JSONB_COLUMNS = frozenset({"segments"})
 
 # All speeches-table columns (in INSERT order)
 _SPEECH_COLUMNS = (
@@ -54,6 +61,7 @@ _SPEECH_COLUMNS = (
     "full_text_en", "lang_original", "time_of_day", "word_count",
     "is_translated", "has_untranslated_content",
     "speaker_name_unresolved", "source_url", "page_reference", "volume",
+    "lok_sabha_number", "segments", "canonical_doc_id",
     "dedup_key",
 )
 
@@ -65,8 +73,21 @@ _QA_COLUMNS = (
     "sequence_within_sitting",
     "full_text_en", "lang_original", "time_of_day", "word_count",
     "is_translated", "has_untranslated_content",
-    "source_url", "page_reference", "dedup_key",
+    "source_url", "page_reference",
+    "lok_sabha_number", "canonical_doc_id",
+    "dedup_key",
 )
+
+
+def _insert_values(record: dict[str, Any], cols: tuple[str, ...]) -> tuple:
+    """Build the ordered value tuple for an INSERT, serializing JSONB columns."""
+    out = []
+    for c in cols:
+        v = record.get(c)
+        if c in _JSONB_COLUMNS and v is not None:
+            v = json.dumps(v, default=str)
+        out.append(v)
+    return tuple(out)
 
 
 # ── Dedup key construction ─────────────────────────────────────────────────────
@@ -211,7 +232,7 @@ class Indexer:
 
     def _insert_speech(self, cursor: Any, record: dict[str, Any]) -> bool:
         cols = _SPEECH_COLUMNS
-        values = tuple(record.get(c) for c in cols)
+        values = _insert_values(record, cols)
         placeholders = ", ".join(["%s"] * len(cols))
         col_names = ", ".join(cols)
         cursor.execute(
@@ -230,7 +251,7 @@ class Indexer:
 
     def _insert_qa(self, cursor: Any, record: dict[str, Any]) -> bool:
         cols = _QA_COLUMNS
-        values = tuple(record.get(c) for c in cols)
+        values = _insert_values(record, cols)
         placeholders = ", ".join(["%s"] * len(cols))
         col_names = ", ".join(cols)
         cursor.execute(

@@ -212,10 +212,10 @@ class RSOrchestrator:
     The sansad.in/rs path (primary) provides reliable ordering for recent sittings.
     Finding recorded: 2026-06-02.
 
-    Canonical RS citation rule (PRD v1.3): source_url on every indexed record is
-    set to doc_ref.citation_url. For RS-via-IA this is the rsdebate.nic.in URL
-    derived from the DSpace handle (never archive.org — Non-Negotiable #9), or
-    None when no handle is derivable (the v1.3 no-handle edge case). This single
+    Canonical RS citation rule (PRD v3.0 — Non-Negotiable #9 reversal):
+    source_url on every indexed record is set to doc_ref.citation_url.
+    For RS-via-IA this is the archive.org item URL. For RS-via-rsdebate (DSpace
+    fallback, absent from IA) this is None (no IA URL exists). This single
     assignment overrides whatever source_url the parser produced — and is applied
     before writing to raw_documents in Stage 1 so that metadata_json["source_url"]
     is already correct for Stage 2 record construction.
@@ -372,6 +372,8 @@ class RSOrchestrator:
                 record["sequence_within_sitting"] = self._next_seq(
                     self._sitting_key(record)
                 )
+                # PRD v3.0: link each record to its raw_documents row (F10 debug-raw).
+                record["canonical_doc_id"] = canonical_doc_id
 
                 if self._indexer.index_record(record, self._checkpoint):
                     stats["indexed"] += 1
@@ -407,10 +409,9 @@ class RSOrchestrator:
         """Dispatch to the correct parser based on doc_ref.format.
 
         After parsing, source_url is overridden with doc_ref.citation_url to
-        enforce the RS canonical-citation rule (PRD v1.3) uniformly across all
-        providers: rsdebate.nic.in for IA, the sansad.in/rs page URL for HTML,
-        the rsdebate item URL for direct DSpace, or None when no handle is
-        derivable. The archive.org mirror URL is never cited (Non-Negotiable #9).
+        enforce the RS canonical-citation rule (PRD v3.0 — Non-Negotiable #9
+        reversal): archive.org item URL for RS-via-IA, sansad.in/rs page URL
+        for HTML, None for rsdebate DSpace fallback (absent from IA).
         """
         raw_record: dict | None = None
         try:

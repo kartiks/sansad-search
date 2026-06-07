@@ -465,3 +465,202 @@ class TestCASubjectPerSpeech:
         result = segment_speeches(raw, "CA")
         assert len(result) == 1
         assert result[0]["subject"] is None
+
+
+# ── Phase 13: Adjacent Speech Merging (F01, PRD v3.0) ─────────────────────────
+
+class TestAdjacentSpeechMerging:
+    def test_two_consecutive_same_speaker_merge_into_one_record(self):
+        text = (
+            "SHRI NARENDRA MODI :\nFirst part of the speech.\n\n"
+            "SHRI NARENDRA MODI :\nSecond part of the speech.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 1
+        rec = result[0]
+        assert [s["segment_index"] for s in rec["segments"]] == [0, 1]
+        assert rec["segments"][0]["text"] == "First part of the speech."
+        assert rec["segments"][1]["text"] == "Second part of the speech."
+        assert rec["full_text_en"] == (
+            "First part of the speech.\n\nSecond part of the speech."
+        )
+
+    def test_three_consecutive_same_speaker_produce_three_element_segments(self):
+        text = (
+            "SHRI A SPEAKER :\nOne.\n\n"
+            "SHRI A SPEAKER :\nTwo.\n\n"
+            "SHRI A SPEAKER :\nThree.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 1
+        assert [s["segment_index"] for s in result[0]["segments"]] == [0, 1, 2]
+        assert result[0]["full_text_en"] == "One.\n\nTwo.\n\nThree."
+
+    def test_word_count_is_combined_total_for_merged_record(self):
+        text = (
+            "SHRI A SPEAKER :\nTwo words.\n\n"
+            "SHRI A SPEAKER :\nThree more words.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        # "Two words." (2) + "Three more words." (3) = 5
+        assert result[0]["word_count"] == 5
+
+    def test_intervening_different_speaker_breaks_merge(self):
+        text = (
+            "SHRI NARENDRA MODI :\nFirst.\n\n"
+            "SHRI RAHUL GANDHI :\nReply.\n\n"
+            "SHRI NARENDRA MODI :\nRejoinder.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 3
+        for rec in result:
+            assert len(rec["segments"]) == 1
+
+    def test_section_heading_between_same_speaker_breaks_merge(self):
+        text = (
+            "SHRI NARENDRA MODI :\nRemarks on the first topic.\n\n"
+            "NEW ARTICLE 67-A\n\n"
+            "SHRI NARENDRA MODI :\nRemarks on the second topic.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 2
+        assert all(len(r["segments"]) == 1 for r in result)
+
+    def test_procedural_block_header_between_same_speaker_breaks_merge(self):
+        text = (
+            "SHRI NARENDRA MODI :\nDebate remarks.\n\n"
+            "STARRED QUESTION NO. 42\n\n"
+            "SHRI NARENDRA MODI :\nFurther remarks.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 2
+
+    def test_unmerged_speech_has_single_element_segments(self):
+        text = "SHRI SOLO SPEAKER :\nA standalone speech.\n"
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 1
+        assert len(result[0]["segments"]) == 1
+        assert result[0]["segments"][0]["segment_index"] == 0
+        assert result[0]["segments"][0]["text"] == "A standalone speech."
+
+    def test_segments_ordered_by_document_position(self):
+        text = (
+            "SHRI A SPEAKER :\nEarliest.\n\n"
+            "SHRI A SPEAKER :\nMiddle.\n\n"
+            "SHRI A SPEAKER :\nLatest.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        segs = result[0]["segments"]
+        assert segs[0]["text"] == "Earliest."
+        assert segs[-1]["text"] == "Latest."
+        assert [s["segment_index"] for s in segs] == sorted(s["segment_index"] for s in segs)
+
+    def test_merged_record_takes_first_segment_sequence_position(self):
+        """The merged record occupies the first segment's document-order slot.
+
+        The orchestrator assigns sequence_within_sitting by walking the
+        segmenter output in order; the merged record (two MODI speeches) must
+        land at position 1, before the following GANDHI speech at position 2.
+        """
+        text = (
+            "SHRI NARENDRA MODI :\nFirst.\n\n"
+            "SHRI NARENDRA MODI :\nSecond.\n\n"
+            "SHRI RAHUL GANDHI :\nReply.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        # Mimic the orchestrator's 1-based sequence assignment.
+        for i, rec in enumerate(result, start=1):
+            rec["sequence_within_sitting"] = i
+        merged = next(r for r in result if len(r["segments"]) == 2)
+        gandhi = next(r for r in result if r["speaker_name"] == "SHRI RAHUL GANDHI")
+        assert merged["sequence_within_sitting"] == 1
+        assert gandhi["sequence_within_sitting"] == 2
+
+    def test_merged_segments_mixed_english_and_untranslated_hindi(self):
+        """Edge case: first segment English, second Hindi with no translation.
+
+        full_text_en must include the English segment (not be nulled) and
+        has_untranslated_content must be true.
+        """
+        text = (
+            "SHRI A SPEAKER :\nThe policy has been implemented nationwide.\n\n"
+            "SHRI A SPEAKER :\nयह हिस्सा बिना अनुवाद के है।\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 1
+        rec = result[0]
+        assert rec["full_text_en"] is not None
+        assert "policy has been implemented" in rec["full_text_en"]
+        assert rec["has_untranslated_content"] is True
+        # The untranslated segment is preserved as a null-text element.
+        assert len(rec["segments"]) == 2
+        assert rec["segments"][1]["text"] is None
+
+    def test_presiding_officer_interjection_breaks_merge(self):
+        text = (
+            "SHRI NARENDRA MODI :\nFirst point.\n\n"
+            "MR. SPEAKER :\nOrder, order.\n\n"
+            "SHRI NARENDRA MODI :\nSecond point.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        # Presiding officer excluded as a record, but acts as a break signal.
+        assert len(result) == 2
+        assert all(s["speaker_name"] == "SHRI NARENDRA MODI" for s in result)
+
+
+class TestCAAdjacentMerging:
+    def _ca_raw(self, ca_pairs):
+        return {
+            "source": "CA",
+            "proceeding_type": "debate",
+            "date": "1946-12-09",
+            "sitting_number": None,
+            "source_url": None,
+            "page_reference": None,
+            "volume": 1,
+            "time_of_day": None,
+            "raw_text": "",
+            "ca_speech_pairs": ca_pairs,
+        }
+
+    def test_same_speaker_same_subject_merges(self):
+        raw = self._ca_raw([
+            ("Shri Jawaharlal Nehru", "First remark.", "Objectives Resolution"),
+            ("Shri Jawaharlal Nehru", "Second remark.", "Objectives Resolution"),
+        ])
+        result = segment_speeches(raw, "CA")
+        assert len(result) == 1
+        assert len(result[0]["segments"]) == 2
+        assert result[0]["full_text_en"] == "First remark.\n\nSecond remark."
+
+    def test_subject_change_breaks_merge(self):
+        """A new bold section header (subject change) is a section-heading break."""
+        raw = self._ca_raw([
+            ("Shri Jawaharlal Nehru", "On the resolution.", "Objectives Resolution"),
+            ("Shri Jawaharlal Nehru", "On procedure.", "Question of Procedure"),
+        ])
+        result = segment_speeches(raw, "CA")
+        assert len(result) == 2
+        assert all(len(r["segments"]) == 1 for r in result)
+        assert result[0]["subject"] == "Objectives Resolution"
+        assert result[1]["subject"] == "Question of Procedure"
+
+    def test_ca_lok_sabha_number_always_null(self):
+        raw = self._ca_raw([
+            ("Shri Test Speaker", "A speech.", "Topic"),
+        ])
+        result = segment_speeches(raw, "CA")
+        assert result[0]["lok_sabha_number"] is None
+
+
+class TestLokSabhaNumberPassthrough:
+    def test_lok_sabha_number_passed_through_for_ls(self):
+        text = "SHRI TEST :\nA speech in the seventeenth Lok Sabha.\n"
+        record = _raw_record(text, lok_sabha_number=17)
+        result = segment_speeches(record, "LS")
+        assert result[0]["lok_sabha_number"] == 17
+
+    def test_lok_sabha_number_null_when_absent(self):
+        text = "SHRI TEST :\nA speech.\n"
+        result = segment_speeches(_raw_record(text), "LS")
+        assert result[0]["lok_sabha_number"] is None

@@ -557,3 +557,99 @@ class TestIATextFormatQA:
         # Both the seeded name and the supplementary questioner should appear
         names = result[0]["questioner_names"]
         assert "Shri A" in names
+
+
+# ── Phase 13: minister_name extraction rule (F01, PRD v3.0) ───────────────────
+
+class TestMinisterNameExtraction:
+    def test_preamble_only_falls_back_to_ministry(self):
+        """A question with only the preamble (no explicit minister name in the
+        response section) sets minister_name to 'Minister of [Ministry]'."""
+        text = (
+            "STARRED QUESTION NO. 100\n\n"
+            "Will the Minister of Finance be pleased to state:\n"
+            "(a) whether the deficit has narrowed?\n\n"
+            "WRITTEN ANSWER\n"
+            "The fiscal deficit has narrowed in the last year.\n"
+        )
+        record = _raw_record(text, ministry="Ministry of Finance")
+        result = segment_qa(record, "LS", "starred_question")
+        assert len(result) == 1
+        assert result[0]["minister_name"] == "Minister of Ministry of Finance"
+
+    def test_minister_name_never_set_to_preamble_text(self):
+        text = (
+            "STARRED QUESTION NO. 101\n\n"
+            "Will the Minister of Defence be pleased to state:\n"
+            "(a) the status of procurement?\n\n"
+            "WRITTEN ANSWER\n"
+            "Procurement is progressing as planned.\n"
+        )
+        record = _raw_record(text, ministry="Ministry of Defence")
+        result = segment_qa(record, "LS", "starred_question")
+        mn = result[0]["minister_name"] or ""
+        assert not mn.lower().startswith("will the")
+
+    def test_explicit_minister_name_in_response_is_used(self):
+        text = (
+            "STARRED QUESTION NO. 102\n\n"
+            "Will the Minister of Road Transport be pleased to state:\n"
+            "(a) the length of highways built?\n\n"
+            "SHRI NITIN GADKARI MINISTER OF ROAD TRANSPORT AND HIGHWAYS :\n"
+            "Several thousand kilometres of highways have been built.\n"
+        )
+        record = _raw_record(text, ministry="Ministry of Road Transport")
+        result = segment_qa(record, "LS", "starred_question")
+        mn = result[0]["minister_name"] or ""
+        assert "GADKARI" in mn
+        assert not mn.lower().startswith("will the")
+
+    def test_no_minister_name_begins_with_will_the(self):
+        """Across both starred and unstarred, minister_name never begins 'Will the'."""
+        for pt in ("starred_question", "unstarred_question"):
+            text = (
+                "STARRED QUESTION NO. 5\n\n"
+                "Will the Minister of Health be pleased to state:\n"
+                "(a) the coverage of the scheme?\n\n"
+                "WRITTEN ANSWER\n"
+                "Coverage has expanded nationwide.\n"
+            )
+            record = _raw_record(text, ministry="Ministry of Health", proceeding_type=pt)
+            result = segment_qa(record, "LS", pt)
+            for r in result:
+                mn = r["minister_name"] or ""
+                assert not mn.lower().startswith("will the"), pt
+
+    def test_preamble_first_line_does_not_become_minister(self):
+        """When the preamble is the first line of a block, it must not be captured
+        as the minister attribution (the core v3.0 bug fix)."""
+        text = (
+            "STARRED QUESTION NO. 7\n\n"
+            "Will the Minister of Finance be pleased to state whether revenue rose:\n"
+            "(a) details thereof?\n\n"
+            "SHRI NIRMALA SITHARAMAN MINISTER OF FINANCE :\n"
+            "Revenue collections have risen this year.\n"
+        )
+        record = _raw_record(text, ministry="Ministry of Finance")
+        result = segment_qa(record, "LS", "starred_question")
+        mn = result[0]["minister_name"] or ""
+        assert "SITHARAMAN" in mn
+
+    def test_lok_sabha_number_passthrough(self):
+        text = (
+            "STARRED QUESTION NO. 9\n\n"
+            "SHRI Q :\nWhat is the policy?\n\n"
+            "SHRI MINISTER OF X :\nThe policy is in place.\n"
+        )
+        record = _raw_record(text, lok_sabha_number=17)
+        result = segment_qa(record, "LS", "starred_question")
+        assert result[0]["lok_sabha_number"] == 17
+
+    def test_lok_sabha_number_null_when_absent(self):
+        text = (
+            "STARRED QUESTION NO. 10\n\n"
+            "SHRI Q :\nWhat is the policy?\n\n"
+            "SHRI MINISTER OF X :\nThe policy is in place.\n"
+        )
+        result = segment_qa(_raw_record(text), "LS", "starred_question")
+        assert result[0]["lok_sabha_number"] is None

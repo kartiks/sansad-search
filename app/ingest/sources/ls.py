@@ -367,6 +367,8 @@ class LSOrchestrator:
                 record["sequence_within_sitting"] = self._next_seq(
                     self._sitting_key(record)
                 )
+                # PRD v3.0: link each record to its raw_documents row (F10 debug-raw).
+                record["canonical_doc_id"] = canonical_doc_id
 
                 if self._indexer.index_record(record, self._checkpoint):
                     stats["indexed"] += 1
@@ -399,28 +401,42 @@ class LSOrchestrator:
         }
 
     def _parse(self, content: str | bytes, doc_ref) -> dict | None:
-        """Dispatch to the correct parser based on doc_ref.format."""
+        """Dispatch to the correct parser based on doc_ref.format.
+
+        After parsing, source_url is overridden with doc_ref.citation_url to
+        enforce the PRD v3.0 source_url reversal (Non-Negotiable #9): LS records
+        cite the Internet Archive item URL, never eparlib.sansad.in. Applied in
+        Stage 1 so metadata_json["source_url"] is already correct for Stage 2.
+        """
+        raw_record: dict | None = None
         try:
             if doc_ref.format == "ia_text":
-                return parse_ia_text(content, doc_ref.metadata, source="LS")
-            if doc_ref.format == "pdf":
-                return parse_pdf(
+                raw_record = parse_ia_text(content, doc_ref.metadata, source="LS")
+            elif doc_ref.format == "pdf":
+                raw_record = parse_pdf(
                     content,
                     source="LS",
                     source_url=doc_ref.citation_url,
                 )
-            logger.warning(
-                "ls_orchestrator: unrecognised format %r for %s; skipping",
-                doc_ref.format,
-                doc_ref.canonical_doc_id,
-            )
+            else:
+                logger.warning(
+                    "ls_orchestrator: unrecognised format %r for %s; skipping",
+                    doc_ref.format,
+                    doc_ref.canonical_doc_id,
+                )
+                return None
         except Exception as exc:
             logger.error(
                 "ls_orchestrator: parse error for %s: %s; skipping",
                 doc_ref.canonical_doc_id,
                 exc,
             )
-        return None
+            return None
+
+        if raw_record is not None:
+            # PRD v3.0 source_url reversal — archive.org item URL is authoritative.
+            raw_record["source_url"] = doc_ref.citation_url
+        return raw_record
 
     def _segment(self, raw_record: dict) -> list[dict]:
         """Segment a raw record into speech + Q+A units."""

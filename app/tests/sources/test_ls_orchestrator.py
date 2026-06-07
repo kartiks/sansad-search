@@ -105,7 +105,7 @@ def _make_ia_doc_ref(handle_n: str, date: str = "2023-03-15") -> DocumentRef:
         format="ia_text",
         fetch_url=f"https://archive.org/download/{identifier}/{identifier}_djvu.txt",
         canonical_doc_id=handle_n,
-        citation_url=f"https://eparlib.sansad.in/handle/123456789/{handle_n}",
+        citation_url=f"https://archive.org/details/{identifier}",  # Non-Neg #9 v3.0
         metadata={
             "identifier": identifier,
             "eparlib_document_url": f"https://eparlib.sansad.in/handle/123456789/{handle_n}",
@@ -125,7 +125,7 @@ def _make_dspace_doc_ref(handle_n: str) -> DocumentRef:
         format="pdf",
         fetch_url=item_url,
         canonical_doc_id=handle_n,
-        citation_url=item_url,
+        citation_url=None,  # absent from IA → no archive.org URL (Non-Neg #9 v3.0)
         metadata={"item_url": item_url},
     )
 
@@ -316,8 +316,8 @@ class TestLSOrchestratorProviderChain:
         finally:
             checkpoint.close()
 
-    async def test_no_archive_org_url_in_citation_url(self):
-        """citation_url in all records must never be an archive.org URL (Non-Neg #9)."""
+    async def test_source_url_is_archive_org_for_ia_records(self):
+        """Non-Neg #9 v3.0: source_url on LS-via-IA records is the archive.org item URL."""
         ia_ref = _make_ia_doc_ref("12345")
         ia_provider = StubProvider([ia_ref], {"12345": IA_DJVU_TEXT}, name="ia")
 
@@ -334,10 +334,9 @@ class TestLSOrchestratorProviderChain:
         await orchestrator.run()
 
         try:
+            assert len(indexer.indexed_records) >= 1
             for record in indexer.indexed_records:
-                url = record.get("source_url")
-                if url is not None:
-                    assert "archive.org" not in url
+                assert record.get("source_url") == "https://archive.org/details/eparlib.nic.in.12345"
         finally:
             checkpoint.close()
 
@@ -434,8 +433,8 @@ class TestLSOrchestratorProviderChain:
         finally:
             checkpoint.close()
 
-    async def test_source_url_equals_eparlib_document_url_for_ia_records(self):
-        """LS-via-IA records must have source_url == eparlib_document_url (Non-Neg #9 positive)."""
+    async def test_source_url_equals_archive_org_for_ia_records(self):
+        """Non-Neg #9 v3.0: LS-via-IA records must have source_url == archive.org item URL."""
         ia_ref = _make_ia_doc_ref("12345")
         ia_provider = StubProvider([ia_ref], {"12345": IA_DJVU_TEXT}, name="ia")
 
@@ -452,7 +451,7 @@ class TestLSOrchestratorProviderChain:
         await orchestrator.run()
 
         try:
-            expected_url = "https://eparlib.sansad.in/handle/123456789/12345"
+            expected_url = "https://archive.org/details/eparlib.nic.in.12345"
             assert len(indexer.indexed_records) >= 1
             for record in indexer.indexed_records:
                 assert record.get("source_url") == expected_url, (
@@ -481,7 +480,7 @@ class TestLSOrchestratorProviderChain:
             format="ia_text",
             fetch_url=f"https://archive.org/download/{identifier}/{identifier}_djvu.txt",
             canonical_doc_id=handle_n,
-            citation_url=f"https://eparlib.sansad.in/handle/123456789/{handle_n}",
+            citation_url=f"https://archive.org/details/{identifier}",  # Non-Neg #9 v3.0
             metadata={
                 "identifier": identifier,
                 "eparlib_document_url": f"https://eparlib.sansad.in/handle/123456789/{handle_n}",
@@ -612,7 +611,7 @@ class TestLSSharedSequence:
             format="ia_text",
             fetch_url=f"https://archive.org/download/eparlib.nic.in.{handle2}/eparlib.nic.in.{handle2}_djvu.txt",
             canonical_doc_id=handle2,
-            citation_url=f"https://eparlib.sansad.in/handle/123456789/{handle2}",
+            citation_url=f"https://archive.org/details/eparlib.nic.in.{handle2}",  # Non-Neg #9 v3.0
             metadata={
                 "identifier": f"eparlib.nic.in.{handle2}",
                 "eparlib_document_url": f"https://eparlib.sansad.in/handle/123456789/{handle2}",
@@ -665,7 +664,7 @@ class TestLSSharedSequence:
             format="ia_text",
             fetch_url=f"https://archive.org/download/eparlib.nic.in.{qa_handle}/eparlib.nic.in.{qa_handle}_djvu.txt",
             canonical_doc_id=qa_handle,
-            citation_url=f"https://eparlib.sansad.in/handle/123456789/{qa_handle}",
+            citation_url=f"https://archive.org/details/eparlib.nic.in.{qa_handle}",  # Non-Neg #9 v3.0
             metadata={
                 "identifier": f"eparlib.nic.in.{qa_handle}",
                 "eparlib_document_url": f"https://eparlib.sansad.in/handle/123456789/{qa_handle}",

@@ -61,6 +61,74 @@ _HINDI_SCRIPT_RE = re.compile(r"[ऀ-ॿ]")
 # Minimum English characters before first Hindi/marker to classify as bilingual (mixed)
 _BILINGUAL_THRESHOLD = 50
 
+# ── Adjacent Speech Merging break signals (F01, PRD v3.0) ─────────────────────
+#
+# A break signal between two consecutive same-speaker speeches prevents merging.
+# Three kinds:
+#   1. A different speaker (handled structurally — a new attribution / an
+#      excluded speaker resets the merge group).
+#   2. A section heading (H1/H2/H3 in HTML). In the flat text the parsers emit,
+#      HTML markup is gone, so headings are recovered as ALL-CAPS standalone
+#      lines (see _is_section_heading). CA uses the parser-assigned subject
+#      instead (a subject change is the heading boundary) — far more reliable.
+#   3. A procedural entry: a question-number heading, a block header
+#      ("QUESTIONS" / "STARRED QUESTION NO. X"), or a formal marker
+#      ("The House adjourned ...").
+#
+# BUILD-TIME VERIFICATION FINDING (ARCHITECTURE.md §8, item 6 — merge break
+# detection per format): In HTML-derived flat text and IA pre-OCR / PDF text,
+# structural H-tags are not preserved, so section-heading breaks are recovered
+# heuristically from ALL-CAPS standalone lines and the procedural patterns
+# below. Title-case headings in flat text are NOT reliably recoverable and may
+# be under-detected (risking over-merge); ALL-CAPS headers and procedural
+# markers ARE recoverable. CA (coi HTML) carries an explicit per-speech subject,
+# so CA heading boundaries are detected exactly via subject change, not text
+# heuristics. Finding recorded: 2026-06-06.
+_PROCEDURAL_BREAK_RE = re.compile(
+    r"^(?:"
+    r"(?:STARRED\s+|UNSTARRED\s+)?QUESTIONS?\s*$"                 # QUESTIONS / STARRED QUESTIONS
+    r"|(?:STARRED\s+|UNSTARRED\s+)?QUESTION\s+NO[\.:\s]*\d+"       # STARRED QUESTION NO. X
+    r"|Q\.?\s*NO[\.:\s]*\d+"
+    r"|ORAL\s+ANSWERS?\b"
+    r"|WRITTEN\s+ANSWERS?\b"
+    r"|THE\s+HOUSE\s+(?:THEN\s+)?(?:ADJOURNED|RE-?ASSEMBLED|MET)\b"  # formal markers
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_section_heading(line: str) -> bool:
+    """
+    Heuristic ALL-CAPS section-heading detector for flat (non-HTML) text.
+
+    Conservative by design: only an isolated, short, ALL-CAPS line that is not
+    an attribution, not unattributed/presiding boilerplate, and not a full
+    sentence is treated as a heading. Title-case headings are intentionally not
+    matched here (not reliably separable from body text) — see the build-time
+    finding above.
+    """
+    s = line.strip()
+    if not s or len(s) > 80:
+        return False
+    if s.endswith(":"):                      # attribution-like
+        return False
+    if s.endswith((".", "?", "!")):          # sentence/body, not a heading
+        return False
+    if _ATTRIBUTION_RE.match(s) or _is_unattributed(s) or _is_presiding_officer(s):
+        return False
+    words = s.split()
+    if len(words) > 12:
+        return False
+    letters = [c for c in s if c.isalpha()]
+    if not letters:
+        return False
+    return all(c.isupper() for c in letters)
+
+
+def _is_break_line(line: str) -> bool:
+    """True when an isolated line is a procedural marker or a section heading."""
+    return bool(_PROCEDURAL_BREAK_RE.match(line.strip())) or _is_section_heading(line)
+
 
 def _is_unattributed(speaker: str) -> bool:
     return bool(_UNATTRIBUTED_RE.match(speaker.strip()))
@@ -183,23 +251,38 @@ def _count_words(text: str | None) -> int | None:
     return len(text.split())
 
 
-def _split_into_speeches(raw_text: str) -> list[tuple[str, str]]:
+def _tokenize(raw_text: str) -> list[tuple[str, ...]]:
     """
-    Split a block of parliamentary text into (speaker, body) pairs.
-    """
-    results: list[tuple[str, str]] = []
-    lines = raw_text.splitlines()
+    Tokenize parliamentary text into an ordered stream of:
+        ("speech", speaker, body)   — one attributed speech
+        ("break", text)             — a section heading or procedural marker
 
+    A line is treated as a break only when it is *isolated* (preceded and
+    followed by a blank line or a document boundary) and matches a break
+    pattern; this prevents an emphatic ALL-CAPS line inside a speech body from
+    splitting that body. Break tokens belong to no speaker and reset the merge
+    group downstream.
+    """
+    lines = raw_text.splitlines()
+    n = len(lines)
+
+    def is_blank(i: int) -> bool:
+        return i < 0 or i >= n or not lines[i].strip()
+
+    tokens: list[tuple[str, ...]] = []
     current_speaker: str | None = None
     current_lines: list[str] = []
 
     def flush():
-        if current_speaker is not None and current_lines:
+        nonlocal current_speaker, current_lines
+        if current_speaker is not None:
             body = "\n".join(current_lines).strip()
             if body:
-                results.append((current_speaker, body))
+                tokens.append(("speech", current_speaker, body))
+        current_speaker = None
+        current_lines = []
 
-    for line in lines:
+    for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped:
             current_lines.append("")
@@ -207,15 +290,121 @@ def _split_into_speeches(raw_text: str) -> list[tuple[str, str]]:
 
         m = _ATTRIBUTION_RE.match(stripped)
         if m:
-            candidate = m.group(1).strip()
             flush()
-            current_speaker = candidate
+            current_speaker = m.group(1).strip()
             current_lines = []
-        else:
-            current_lines.append(stripped)
+            continue
+
+        if is_blank(i - 1) and is_blank(i + 1) and _is_break_line(stripped):
+            flush()
+            tokens.append(("break", stripped))
+            continue
+
+        current_lines.append(stripped)
 
     flush()
-    return results
+    return tokens
+
+
+def _merge_speech_groups(
+    pairs: list[tuple[str, str]],
+    break_after: set[int],
+) -> list[tuple[str, list[str]]]:
+    """
+    Collapse consecutive same-speaker speeches into merge groups.
+
+    Args:
+        pairs:        ordered (speaker, body) pairs (excluded speakers removed).
+        break_after:  set of indices i such that a break signal occurred
+                      immediately after pairs[i] — the next speech starts a new
+                      group even if the speaker is unchanged.
+
+    Returns ordered list of (speaker, [body, ...]) groups, one per output record.
+    """
+    groups: list[tuple[str, list[str]]] = []
+    prev_speaker: str | None = None
+    broken = False
+
+    for idx, (speaker, body) in enumerate(pairs):
+        if groups and speaker == prev_speaker and not broken:
+            groups[-1][1].append(body)
+        else:
+            groups.append((speaker, [body]))
+        prev_speaker = speaker
+        broken = idx in break_after
+
+    return groups
+
+
+def _build_speech_record(
+    speaker_raw: str,
+    bodies: list[str],
+    *,
+    source: str,
+    proceeding_type: str,
+    date: Any,
+    session_name: str | None,
+    session_number: int | None,
+    sitting_number: int | None,
+    subject: str | None,
+    time_of_day: str | None,
+    source_url: str | None,
+    page_reference: int | None,
+    volume: int | None,
+    lok_sabha_number: int | None,
+) -> dict[str, Any]:
+    """
+    Build one Speech unit dict from a merge group of one or more body texts.
+
+    Per-segment language handling preserves the F01 edge case: when one merged
+    segment has English and another does not, full_text_en includes the
+    available English segments and has_untranslated_content is set true (it is
+    not nulled just because one segment lacked a translation). The `segments`
+    JSONB array carries one element per original speech; full_text_en is the
+    non-null segment texts joined with "\n\n"; word_count is the combined total.
+    """
+    seg_texts: list[str | None] = []
+    is_translated_any = False
+    has_untranslated_any = False
+    for body in bodies:
+        ft, is_translated, has_untranslated = _detect_language_handling(body)
+        seg_texts.append(ft)
+        is_translated_any = is_translated_any or is_translated
+        has_untranslated_any = has_untranslated_any or has_untranslated
+
+    non_null = [t for t in seg_texts if t]
+    full_text_en = "\n\n".join(non_null) if non_null else None
+    word_count = _count_words(full_text_en)
+    lang_original = _compute_lang_original("\n\n".join(bodies))
+    segments = [
+        {"text": seg_texts[i], "segment_index": i} for i in range(len(seg_texts))
+    ]
+
+    return {
+        "source": source,
+        "proceeding_type": proceeding_type or "debate",
+        "date": date,
+        "session_name": session_name,
+        "session_number": session_number,
+        "sitting_number": sitting_number,
+        "subject": subject,
+        "speaker_name": speaker_raw,          # canonicalized in Stage 2
+        "speaker_party": None,                 # populated from source in Stage 2
+        "speaker_constituency_or_state": None,
+        "speaker_role": _speaker_role(speaker_raw),
+        "full_text_en": full_text_en,
+        "segments": segments,
+        "lang_original": lang_original,
+        "time_of_day": time_of_day,
+        "word_count": word_count,
+        "is_translated": is_translated_any,
+        "has_untranslated_content": has_untranslated_any,
+        "speaker_name_unresolved": True,       # set False after canonicalization
+        "source_url": source_url,
+        "page_reference": page_reference,
+        "volume": volume,
+        "lok_sabha_number": lok_sabha_number,
+    }
 
 
 def segment_speeches(
@@ -225,13 +414,20 @@ def segment_speeches(
     """
     Convert a raw record dict into a list of Speech unit dicts.
 
+    Applies Adjacent Speech Merging (F01, PRD v3.0): consecutive speeches by the
+    same speaker within this document (same sitting + same proceeding_type) with
+    no break signal between them are merged into one record carrying a multi-
+    element `segments` array. A different/excluded speaker, a section heading, or
+    a procedural entry between two same-speaker speeches breaks the merge.
+
     Args:
         raw_record:  Output from html_parser.parse_html or pdf_parser.parse_pdf.
         source:      "CA", "LS", or "RS".
 
     Returns:
         List of speech dicts ready for canonicalization + indexing.
-        sequence_within_sitting is NOT set here; the orchestrator assigns it.
+        sequence_within_sitting is NOT set here; the orchestrator assigns it (the
+        merged record naturally occupies the first segment's document position).
     """
     if source == "CA":
         ca_pairs: list[tuple[str, str, str | None]] | None = raw_record.get("ca_speech_pairs")
@@ -239,48 +435,46 @@ def segment_speeches(
             return _segment_ca_speeches(raw_record, ca_pairs)
 
     raw_text: str = raw_record.get("raw_text", "")
-    speech_pairs = _split_into_speeches(raw_text)
-    time_of_day = raw_record.get("time_of_day")
+    tokens = _tokenize(raw_text)
 
-    speeches: list[dict[str, Any]] = []
-
-    for speaker_raw, body in speech_pairs:
-        if _is_unattributed(speaker_raw):
+    # Build attributed (speaker, body) pairs and record break positions. A break
+    # token OR an excluded speaker (unattributed / presiding officer) between two
+    # speeches is a break signal for the preceding speech's merge group.
+    pairs: list[tuple[str, str]] = []
+    break_after: set[int] = set()
+    for tok in tokens:
+        if tok[0] == "break":
+            if pairs:
+                break_after.add(len(pairs) - 1)
             continue
-        if _is_presiding_officer(speaker_raw):
+        _, speaker_raw, body = tok
+        if _is_unattributed(speaker_raw) or _is_presiding_officer(speaker_raw):
+            if pairs:
+                break_after.add(len(pairs) - 1)
             continue
+        pairs.append((speaker_raw, body))
 
-        role = _speaker_role(speaker_raw)
-        full_text_en, is_translated, has_untranslated = _detect_language_handling(body)
-        lang_original = _compute_lang_original(body)
-        word_count = _count_words(full_text_en)
+    groups = _merge_speech_groups(pairs, break_after)
 
-        speech: dict[str, Any] = {
-            "source": source,
-            "proceeding_type": raw_record.get("proceeding_type") or "debate",
-            "date": raw_record.get("date"),
-            "session_name": raw_record.get("session_name"),
-            "session_number": raw_record.get("session_number"),
-            "sitting_number": raw_record.get("sitting_number"),
-            "subject": raw_record.get("subject"),
-            "speaker_name": speaker_raw,          # canonicalized in Phase 2
-            "speaker_party": None,                 # populated from source in Phase 2
-            "speaker_constituency_or_state": None,
-            "speaker_role": role,
-            "full_text_en": full_text_en,
-            "lang_original": lang_original,
-            "time_of_day": time_of_day,
-            "word_count": word_count,
-            "is_translated": is_translated,
-            "has_untranslated_content": has_untranslated,
-            "speaker_name_unresolved": True,       # set to False after canonicalization
-            "source_url": raw_record.get("source_url"),
-            "page_reference": raw_record.get("page_reference"),
-            "volume": raw_record.get("volume"),
-        }
-        speeches.append(speech)
-
-    return speeches
+    return [
+        _build_speech_record(
+            speaker_raw,
+            bodies,
+            source=source,
+            proceeding_type=raw_record.get("proceeding_type") or "debate",
+            date=raw_record.get("date"),
+            session_name=raw_record.get("session_name"),
+            session_number=raw_record.get("session_number"),
+            sitting_number=raw_record.get("sitting_number"),
+            subject=raw_record.get("subject"),
+            time_of_day=raw_record.get("time_of_day"),
+            source_url=raw_record.get("source_url"),
+            page_reference=raw_record.get("page_reference"),
+            volume=raw_record.get("volume"),
+            lok_sabha_number=raw_record.get("lok_sabha_number"),
+        )
+        for speaker_raw, bodies in groups
+    ]
 
 
 def _segment_ca_speeches(
@@ -288,46 +482,47 @@ def _segment_ca_speeches(
     ca_pairs: list[tuple[str, str, str | None]],
 ) -> list[dict[str, Any]]:
     """
-    Build speech dicts for CA records using pre-extracted (speaker, text, subject) triples.
+    Build speech dicts for CA records using pre-extracted (speaker, text, subject)
+    triples. Each triple carries the per-speech subject assigned by the
+    html_parser's section-header DOM walk.
 
-    Each triple carries the per-speech subject assigned by the html_parser's
-    section-header DOM walk. Skips presiding officer interventions; runs
-    language detection on each body.
+    Adjacent Speech Merging for CA uses the explicit subject as the section-
+    heading signal: consecutive same-speaker speeches under the *same* subject
+    merge; a subject change (a new bold section header) or an excluded speaker
+    breaks the group. CA has no lok_sabha_number (always null).
     """
-    speeches: list[dict[str, Any]] = []
     time_of_day = raw_record.get("time_of_day")
 
+    groups: list[tuple[str, str | None, list[str]]] = []  # (speaker, subject, bodies)
+    prev_speaker: str | None = None
+    prev_subject: str | None = None
     for speaker_raw, body, subject in ca_pairs:
         if _is_presiding_officer(speaker_raw):
+            prev_speaker = None  # excluded speaker breaks the merge group
             continue
+        if groups and speaker_raw == prev_speaker and subject == prev_subject:
+            groups[-1][2].append(body)
+        else:
+            groups.append((speaker_raw, subject, [body]))
+        prev_speaker = speaker_raw
+        prev_subject = subject
 
-        full_text_en, is_translated, has_untranslated = _detect_language_handling(body)
-        lang_original = _compute_lang_original(body)
-        word_count = _count_words(full_text_en)
-
-        speech: dict[str, Any] = {
-            "source": raw_record.get("source", "CA"),
-            "proceeding_type": raw_record.get("proceeding_type") or "debate",
-            "date": raw_record.get("date"),
-            "session_name": None,
-            "session_number": None,
-            "sitting_number": raw_record.get("sitting_number"),
-            "subject": subject,
-            "speaker_name": speaker_raw,
-            "speaker_party": None,
-            "speaker_constituency_or_state": None,
-            "speaker_role": _speaker_role(speaker_raw),
-            "full_text_en": full_text_en,
-            "lang_original": lang_original,
-            "time_of_day": time_of_day,
-            "word_count": word_count,
-            "is_translated": is_translated,
-            "has_untranslated_content": has_untranslated,
-            "speaker_name_unresolved": True,
-            "source_url": raw_record.get("source_url"),
-            "page_reference": raw_record.get("page_reference"),
-            "volume": raw_record.get("volume"),
-        }
-        speeches.append(speech)
-
-    return speeches
+    return [
+        _build_speech_record(
+            speaker_raw,
+            bodies,
+            source=raw_record.get("source", "CA"),
+            proceeding_type=raw_record.get("proceeding_type") or "debate",
+            date=raw_record.get("date"),
+            session_name=None,
+            session_number=None,
+            sitting_number=raw_record.get("sitting_number"),
+            subject=subject,
+            time_of_day=time_of_day,
+            source_url=raw_record.get("source_url"),
+            page_reference=raw_record.get("page_reference"),
+            volume=raw_record.get("volume"),
+            lok_sabha_number=None,
+        )
+        for speaker_raw, subject, bodies in groups
+    ]

@@ -162,3 +162,60 @@ def test_schema_executes_against_postgres(pg_available):
         text=True,
     )
     assert result.returncode == 0, f"schema.sql failed:\n{result.stderr}"
+
+
+# ── Phase 13: v3.0 columns ────────────────────────────────────────────────────
+
+def test_schema_speeches_has_v3_columns():
+    """speeches gains lok_sabha_number, segments (JSONB), canonical_doc_id (PRD v3.0)."""
+    content = SCHEMA_PATH.read_text()
+    speeches_block = content.split("CREATE TABLE IF NOT EXISTS qa_exchanges")[0]
+    assert "lok_sabha_number" in speeches_block
+    assert "segments" in speeches_block
+    assert "JSONB" in speeches_block
+    assert "canonical_doc_id" in speeches_block
+
+
+def test_schema_qa_has_v3_columns():
+    """qa_exchanges gains lok_sabha_number and canonical_doc_id (no segments)."""
+    content = SCHEMA_PATH.read_text()
+    qa_block = content.split("CREATE TABLE IF NOT EXISTS qa_exchanges")[1].split(
+        "CREATE TABLE IF NOT EXISTS raw_documents"
+    )[0]
+    assert "lok_sabha_number" in qa_block
+    assert "canonical_doc_id" in qa_block
+
+
+def test_schema_has_idempotent_alter_statements():
+    """ALTER TABLE ... ADD COLUMN IF NOT EXISTS for safe migration of existing DBs."""
+    content = SCHEMA_PATH.read_text()
+    assert "ALTER TABLE speeches ADD COLUMN IF NOT EXISTS lok_sabha_number" in content
+    assert "ALTER TABLE speeches ADD COLUMN IF NOT EXISTS segments" in content
+    assert "ALTER TABLE speeches ADD COLUMN IF NOT EXISTS canonical_doc_id" in content
+    assert "ALTER TABLE qa_exchanges ADD COLUMN IF NOT EXISTS lok_sabha_number" in content
+    assert "ALTER TABLE qa_exchanges ADD COLUMN IF NOT EXISTS canonical_doc_id" in content
+
+
+def test_schema_executes_with_v3_columns(pg_available):
+    """Schema (including ALTER statements) applies cleanly on a live PostgreSQL instance."""
+    import psycopg2
+    content = SCHEMA_PATH.read_text()
+    conn = psycopg2.connect(pg_available)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(content)
+            conn.commit()
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'speeches'"
+            )
+            speech_cols = {r[0] for r in cur.fetchall()}
+            assert {"lok_sabha_number", "segments", "canonical_doc_id"} <= speech_cols
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'qa_exchanges'"
+            )
+            qa_cols = {r[0] for r in cur.fetchall()}
+            assert {"lok_sabha_number", "canonical_doc_id"} <= qa_cols
+    finally:
+        conn.close()

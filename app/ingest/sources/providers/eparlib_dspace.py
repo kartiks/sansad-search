@@ -124,7 +124,7 @@ class EparlibDspaceProvider(Provider):
                     format="pdf",
                     fetch_url=item_url,
                     canonical_doc_id=handle_n,
-                    citation_url=item_url,
+                    citation_url=None,  # absent from IA → no archive.org URL (Non-Neg #9 v3.0)
                     metadata={"item_url": item_url},
                 )
             )

@@ -1,7 +1,7 @@
 # SansadSearch — Phase Plan
 
-PRD version: v2.1
-Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes); updated 2026-06-02 (Phases 10–11 added — PRD v2.0: new ingestion fields, CA parsing rules, shared sequence, F05 badge changes, F09 record detail page; merge-conflict marker in header resolved); updated 2026-06-03 (Phase 12 added — two-stage pipeline + raw_documents table per ARCH 2026-06-03 update); updated 2026-06-04 (Phase 12 main.py: --date-from/--date-to scope both stages — Stage 1 applies post-parse date-window gate; routing updated to run_stage1(date_from, date_to); stop condition for Stage 1 date filter added)
+PRD version: v3.0
+Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes); updated 2026-06-02 (Phases 10–11 added — PRD v2.0: new ingestion fields, CA parsing rules, shared sequence, F05 badge changes, F09 record detail page; merge-conflict marker in header resolved); updated 2026-06-03 (Phase 12 added — two-stage pipeline + raw_documents table per ARCH 2026-06-03 update); updated 2026-06-04 (Phase 12 main.py: --date-from/--date-to scope both stages — Stage 1 applies post-parse date-window gate; routing updated to run_stage1(date_from, date_to); stop condition for Stage 1 date filter added); updated 2026-06-06 (Phases 13–15 added — PRD v3.0: F01 adjacent speech merging + lok_sabha_number + segments + canonical_doc_id + source_url reversal; F09 inline adjacent loading redesign + F05 ≥400-word snippets + lok_sabha_number display; F10 debug mode)
 
 ---
 
@@ -258,4 +258,65 @@ Implement:
 
 Stop when: `schema.sql` creates the `raw_documents` table and `idx_raw_documents_corpus_date` index without error on a clean PostgreSQL instance; `indexer.write_raw_document()` inserts a row and is a no-op on PK conflict; `indexer.check_raw_document_exists()` returns True for an existing `canonical_doc_id` and False for an absent one; `--stage fetch` against mocked providers writes exactly one `raw_documents` row per document; `--stage process` against mocked `raw_documents` rows produces correct `speeches`/`qa_exchanges` records; Stage 1 re-run against an already-fetched corpus writes zero new rows (PK dedup skips all); Stage 2 re-run after interruption resumes from SQLite `processed_documents` checkpoint, skipping already-processed docs; `--stage process --date-from 2024-01-01 --date-to 2024-12-31` reads only the matching date range from `raw_documents` and writes no records outside that range; `--stage fetch --date-from 2024-01-01 --date-to 2024-12-31` writes only documents with dates within that range to `raw_documents` and skips all out-of-range documents; `--stage fetch` without a date filter writes all discovered documents regardless of date; `--stage all` produces identical final `speeches`/`qa_exchanges` state to running `--stage fetch` then `--stage process` separately; all existing Phase 1–11 tests pass without modification.
 Do not implement anything beyond Phase 12.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 13 — F01 v3.0: Schema, Adjacent Speech Merging, Source URL + lok_sabha_number
+
+PRD sections: F01 (lok_sabha_number, segments, canonical_doc_id columns; adjacent speech merging; source_url reversal — Non-Negotiable #9; minister_name extraction rule; lok_sabha_number extraction from IA metadata)
+UI sections: none
+
+Implement:
+- `app/db/schema.sql` — add `lok_sabha_number INTEGER NULL` and `canonical_doc_id TEXT NULL` to `speeches` and `qa_exchanges`; add `segments JSONB NULL` to `speeches`
+- `app/ingest/segmenters/speech.py` — Adjacent Speech Merging: consecutive same-speaker speeches in the same sitting and same `proceeding_type` with no break signal are merged into one record; `segments` JSONB array, one element per original speech (`{text, segment_index}`, 0-based); `full_text_en` = segment texts joined with `\n\n`; `word_count` = combined total; `sequence_within_sitting` = position of first segment in merge group; break signals: speech or interjection by a different speaker; section heading (H1/H2/H3 or equivalent structural heading); procedural entry (new question-number heading, block header such as "QUESTIONS" / "STARRED QUESTION NO. X", formal marker such as "The House adjourned for lunch"); all unmerged speeches store a single-element `segments` array
+- `app/ingest/segmenters/qa.py` — `minister_name` extracted from the minister's response section only; falls back to `"Minister of [Ministry]"` when name not identifiable; must never be set to question-preamble text
+- `app/ingest/sources/providers/internet_archive.py` — `citation_url` set to the Internet Archive item URL (`https://archive.org/details/eparlib.nic.in.{N}`) for both LS and RS (Non-Negotiable #9 reversal — was `eparlib_document_url` for LS, `rsdebate.nic.in`-derived URL for RS); null only when no IA identifier derivable; `lok_sabha_number` extracted from `eparlib_lok_sabha_number` in the IA metadata JSON (LS only; RS and CA always null)
+- `app/ingest/indexer.py` — Stage 2 writes `lok_sabha_number`, `segments`, and `canonical_doc_id` to `speeches` and `qa_exchanges` (where applicable); all three excluded from the Meilisearch document push
+
+Stop when: `schema.sql` ALTER TABLE statements add the new columns to both tables without error on a clean PostgreSQL instance; speech segmenter tests cover all merge cases — 2 consecutive same-speaker speeches with no break signal produce one record with a 2-element `segments` array and `full_text_en` containing both texts joined with `\n\n`; 3 consecutive produce a 3-element array; an intervening speech by a different speaker produces two separate records; a section heading (H-tag) between two same-speaker speeches produces two separate records; a procedural block header produces two separate records; merged record `sequence_within_sitting` equals the first segment's original position; `minister_name` tests confirm it is never set to preamble text and falls back to `"Minister of [Ministry]"` correctly; IA provider tests confirm `citation_url` is the `archive.org` item URL for both LS and RS paths (not `eparlib.sansad.in`, not `rsdebate.nic.in`), and null when no IA identifier is derivable; `lok_sabha_number` present on LS records, null on RS records; indexer tests confirm `lok_sabha_number`, `segments`, and `canonical_doc_id` written to PostgreSQL and absent from the Meilisearch document; all existing Phase 1–12 tests pass without modification.
+Do not implement anything from Phase 14 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 14 — F09 Redesign + F05 Snippet + lok_sabha_number Display
+
+PRD sections: F09 (inline adjacent loading — "Load 5 previous" / "Load 5 next"; `has_prev`/`has_next` flags in `GET /api/record/{id}`; new `GET /api/record/{id}/adjacent` range-fetch endpoint; `lok_sabha_number` display), F05 (snippet ≥400 words)
+UI sections: 02-ui-ux-spec.md (visual identity and interaction patterns — detail page)
+
+Implement:
+- `app/api/services/record.py` — update `GET /api/record/{id}` response: replace `adjacent.{prev_id, next_id}` with `has_prev` (bool) and `has_next` (bool) boundary flags; add adjacent range-fetch query: given `direction` (`prev`/`next`), exclusive `from_seq`, and `limit` (default 5, max 5), return up to 5 same-sitting records from both `speeches` and `qa_exchanges` (UNION ALL) strictly below/above `from_seq` ordered by `sequence_within_sitting`; response always in ascending sequence order (DESC fetch reversed before returning for `prev`); include `has_more` flag (true when at least one further record exists beyond the returned batch)
+- `app/api/routes/record.py` — add `GET /api/record/{id}/adjacent` route; validation error (400) when `direction` not in `{prev, next}` or `from_seq` is not an integer; 404 when focal `id` not found (cannot resolve sitting)
+- `app/api/main.py` — register the adjacent route
+- `app/api/services/search.py` — add `attributesToCrop: ["full_text_en"]`, `cropLength: 400`, `cropMarker: "…"` to the Meilisearch query (F05 ≥400-word snippets)
+- `app/ui/src/lib/ordinal.js` — integer → English ordinal string (e.g. 17→"17th", 18→"18th", 11→"11th", 21→"21st", 22→"22nd", 23→"23rd")
+- `app/ui/src/hooks/useAdjacent.js` — `GET /api/record/{id}/adjacent` calls with `direction`, `from_seq`, and `limit=5`; accumulates prepended (prev) and appended (next) batches inline; tracks per-direction `has_more` and in-flight/error state; `from_seq` advances to the lowest (prev) or highest (next) loaded sequence after each batch
+- `app/ui/src/pages/RecordDetail.jsx` — replace single Prev/Next navigation with "Load 5 previous" control (prepends records above focal) and "Load 5 next" control (appends records below focal); initial enabled state from `has_prev`/`has_next`; after each batch load, enabled state from `has_more`; URL unchanged on adjacent loads; `lok_sabha_number` displayed as `"[N]th/st/nd/rd Lok Sabha"` using ordinal.js for LS records; omitted entirely for RS and CA
+
+Stop when: `GET /api/record/{id}` no longer returns `adjacent.prev_id` or `adjacent.next_id` and does return `has_prev` and `has_next`; `GET /api/record/{id}/adjacent` returns correct ascending-order records and correct `has_more` for fixture sittings (batch of 5 with 3 remaining → `has_more: true`; loading those 3 → `has_more: false`); 404 returned and client-handled when focal `id` not found; validation errors returned for invalid `direction` and non-integer `from_seq`; ordinal.js tests cover: 11→"11th", 12→"12th", 13→"13th", 17→"17th", 18→"18th", 21→"21st", 22→"22nd", 23→"23rd"; `RecordDetail.jsx` tests: "Load 5 next" appends without page navigation; "Load 5 previous" prepends with focal record remaining in DOM; controls disabled (not hidden) at sitting boundary; both controls disabled when only one record in sitting; `lok_sabha_number: 17` renders "17th Lok Sabha"; RS record has no "Lok Sabha" text in metadata area; Meilisearch query in `services/search.py` tests confirm `attributesToCrop` and `cropLength: 400` present; all existing Phase 1–13 tests pass without modification.
+Do not implement anything from Phase 15.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 15 — F10: Debug Mode
+
+PRD sections: F10 (debug mode — `?debug=1` activation; per-result 4-section panel; global 5-section search trace; lazy fetch for processed record and raw document; backend debug envelope; debug endpoints)
+UI sections: 02-ui-ux-spec.md (visual identity and component interaction patterns)
+
+Implement:
+- `app/api/routes/search.py` — detect `?debug=1` (or `?debug=true`) query parameter; pass debug flag to `services/search.py`
+- `app/api/services/search.py` — when debug active: add `showRankingScore: true`, `showRankingScoreDetails: true`, `attributesToRetrieve: ["*"]` to the Meilisearch query; pass `_rankingScore` and `_rankingScoreDetails` through on each result; assemble and return top-level `debug` envelope (`processed_query`, `meilisearch_request`, `meilisearch_response`); in normal mode none of these three parameters is sent
+- `app/api/routes/debug.py` — `GET /api/debug/processed/{id}` and `GET /api/debug/raw/{id}` routes; no authentication (SEC-1)
+- `app/api/services/debug.py` — processed: fetch full row from `speeches WHERE id` then `qa_exchanges WHERE id`; 404 if neither; return with `table` discriminator; raw: fetch processed record by `id` to obtain `canonical_doc_id` + `source`; fetch `raw_documents WHERE canonical_doc_id = $1 AND corpus = $2`; 404 when processed record not found, `canonical_doc_id` is null, or no matching raw row
+- `app/api/main.py` — register both debug routes
+- `app/ui/src/components/ResultDebugPanel.jsx` — 4 collapsible sections, all collapsed by default: (1) Scoring details — `_rankingScore` and `_rankingScoreDetails` from initial search response; (2) Document in index — full Meilisearch document from initial search response; (3) Processed record — lazy `GET /api/debug/processed/{id}` on first expand, cached; (4) Raw document — lazy `GET /api/debug/raw/{id}` on first expand, cached, fetched independently of section 3; per-section error message on 404 or failure
+- `app/ui/src/components/SearchDebugPanel.jsx` — 5 collapsible sections, all independently collapsible: Processed query, API request, API response, Meilisearch request, Meilisearch response; global panel data sourced from the response debug envelope and the frontend's own captured request/response
+- `app/ui/src/hooks/useDebugDetail.js` — lazy `GET /api/debug/processed/{id}` and `GET /api/debug/raw/{id}`; one fetch per section; cached after first expand; 404/error state tracked per section
+- `app/ui/src/pages/Results.jsx` — reads `?debug=1` from URL; renders `SearchDebugPanel` above results; passes debug flag to each `ResultCard`
+- `app/ui/src/components/ResultCard.jsx` — in debug mode: render `ResultDebugPanel` toggle below each card; in normal mode: no debug elements in DOM (not merely hidden)
+
+Stop when: normal-mode search requests do not include `_rankingScore`, `_rankingScoreDetails`, or `attributesToRetrieve: ["*"]` in Meilisearch query; `?debug=1` requests include all three; debug envelope (`debug` key) present in response only when `?debug=1`, absent in normal mode; `GET /api/debug/processed/{id}` returns full `speeches`/`qa_exchanges` row with correct `table` discriminator; `GET /api/debug/raw/{id}` returns full `raw_documents` row resolved via `canonical_doc_id`; 404 returned when id not found, `canonical_doc_id` null, or no matching raw row; first expand of Processed record triggers exactly 1 fetch; second expand triggers 0 additional fetches; expanding Processed record does not trigger a Raw document fetch (and vice versa); all 4 per-result sections independently collapsible; all 5 global sections independently collapsible; no debug DOM elements (panel containers, toggles, or score fields) present in normal mode; `?debug=1` on one page does not affect other tabs; all existing Phase 1–14 tests pass without modification.
+Do not implement anything beyond Phase 15.
 Tests: write and run tests for all items above before finishing.

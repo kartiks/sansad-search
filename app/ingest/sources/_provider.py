@@ -29,9 +29,10 @@ class DocumentRef:
 
     citation_url
         The canonical URL that appears as source_url in indexed records.
-        Must NOT be an archive.org URL (ARCHITECTURE.md Non-Negotiable #9).
-        None when no derivable canonical URL exists (e.g. RS-via-IA with no
-        DSpace handle — PRD v1.3 edge case).
+        Non-Negotiable #9 (PRD v3.0 reversal): archive.org IS the correct
+        citation for LS and RS records fetched via the Internet Archive.
+        None when no IA URL is derivable (DSpace-fallback records absent from
+        IA, or RS-via-IA with no extractable handle).
 
     metadata
         Discovered metadata from the provider (date, session number, title,
@@ -43,7 +44,7 @@ class DocumentRef:
     format: str                          # "html", "pdf", or "ia_text"
     fetch_url: str                       # URL to retrieve document content
     canonical_doc_id: str                # checkpoint/dedup key
-    citation_url: str | None             # source_url in records; never archive.org
+    citation_url: str | None             # source_url in records; archive.org for IA path (Non-Neg #9 v3.0)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

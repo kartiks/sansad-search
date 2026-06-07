@@ -330,6 +330,8 @@ class CAOrchestrator:
                 speech["session_number"] = None
                 speech["record_type"] = "speech"
                 speech["sequence_within_sitting"] = self._next_seq(sitting_key)
+                # PRD v3.0: link each record to its raw_documents row (F10 debug-raw).
+                speech["canonical_doc_id"] = canonical_doc_id
 
                 if self._indexer.index_record(speech, self._checkpoint):
                     stats["indexed"] += 1

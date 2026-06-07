@@ -2,6 +2,9 @@
 -- Run this against a fresh database to create all tables and indexes.
 -- PRD v2.0: added lang_original, time_of_day, word_count to both tables;
 -- sequence_within_sitting added to qa_exchanges; sitting composite indexes added.
+-- PRD v3.0: added lok_sabha_number + canonical_doc_id to both tables;
+-- segments JSONB added to speeches (Adjacent Speech Merging). All three are
+-- PostgreSQL-only (excluded from the Meilisearch document).
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
@@ -31,9 +34,17 @@ CREATE TABLE IF NOT EXISTS speeches (
     source_url                  TEXT,
     page_reference              INTEGER,
     volume                      INTEGER,
+    lok_sabha_number            INTEGER,
+    segments                    JSONB,
+    canonical_doc_id            TEXT,
     dedup_key                   VARCHAR(500) UNIQUE NOT NULL,
     created_at                  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- v3.0 columns, idempotent for existing databases.
+ALTER TABLE speeches ADD COLUMN IF NOT EXISTS lok_sabha_number INTEGER;
+ALTER TABLE speeches ADD COLUMN IF NOT EXISTS segments         JSONB;
+ALTER TABLE speeches ADD COLUMN IF NOT EXISTS canonical_doc_id TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_speeches_source          ON speeches(source);
 CREATE INDEX IF NOT EXISTS idx_speeches_date            ON speeches(date);
@@ -69,9 +80,15 @@ CREATE TABLE IF NOT EXISTS qa_exchanges (
     has_untranslated_content BOOLEAN     NOT NULL DEFAULT FALSE,
     source_url               TEXT,
     page_reference           INTEGER,
+    lok_sabha_number         INTEGER,
+    canonical_doc_id         TEXT,
     dedup_key                VARCHAR(500) UNIQUE NOT NULL,
     created_at               TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- v3.0 columns, idempotent for existing databases.
+ALTER TABLE qa_exchanges ADD COLUMN IF NOT EXISTS lok_sabha_number INTEGER;
+ALTER TABLE qa_exchanges ADD COLUMN IF NOT EXISTS canonical_doc_id TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_qa_source           ON qa_exchanges(source);
 CREATE INDEX IF NOT EXISTS idx_qa_date             ON qa_exchanges(date);

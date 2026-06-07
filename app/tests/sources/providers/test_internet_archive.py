@@ -117,7 +117,7 @@ class TestInternetArchiveProviderDiscover:
     async def test_enumerates_fixture_ia_results_and_fetches_metadata(self):
         """
         Enumerate fixture IA search results, fetch fixture metadata JSON,
-        and return DocumentRef with citation_url = eparlib_document_url (never archive.org).
+        and return DocumentRef with citation_url = archive.org item URL (Non-Neg #9 v3.0).
         """
         identifiers = ["eparlib.nic.in.12345", "eparlib.nic.in.67890"]
         doc_url_1 = "https://eparlib.sansad.in/handle/123456789/12345"
@@ -136,8 +136,8 @@ class TestInternetArchiveProviderDiscover:
 
         assert len(doc_refs) == 2
 
-    async def test_citation_url_is_eparlib_document_url_not_archive_org(self):
-        """citation_url must be eparlib_document_url — never archive.org (Non-Neg #9)."""
+    async def test_citation_url_is_ia_item_url_for_ls(self):
+        """PRD v3.0 (Non-Neg #9 reversal): LS citation_url is the archive.org item URL."""
         search_resp_1 = _ia_search_response(["eparlib.nic.in.12345"])
         meta_resp = _ia_metadata_response(
             "eparlib.nic.in.12345",
@@ -153,8 +153,25 @@ class TestInternetArchiveProviderDiscover:
 
         assert len(doc_refs) == 1
         ref = doc_refs[0]
-        assert ref.citation_url == "https://eparlib.sansad.in/handle/123456789/12345"
-        assert "archive.org" not in (ref.citation_url or "")
+        assert ref.citation_url == "https://archive.org/details/eparlib.nic.in.12345"
+        assert "eparlib.sansad.in" not in (ref.citation_url or "")
+
+    async def test_lok_sabha_number_on_ls_metadata(self):
+        """PRD v3.0: lok_sabha_number is parsed to an int and surfaced on LS DocumentRefs."""
+        search_resp_1 = _ia_search_response(["eparlib.nic.in.12345"])
+        meta_resp = _ia_metadata_response(
+            "eparlib.nic.in.12345",
+            "https://eparlib.sansad.in/handle/123456789/12345",
+        )
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [search_resp_1, meta_resp]
+
+        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
+            provider = InternetArchiveProvider(client, corpus="LS", rate_delay=0.0)
+            doc_refs = await provider.discover()
+
+        assert doc_refs[0].metadata["lok_sabha_number"] == 17
 
     async def test_canonical_doc_id_is_handle_number_N(self):
         """canonical_doc_id must be the DSpace handle number N (not the full identifier)."""
@@ -280,8 +297,12 @@ class TestInternetArchiveProviderDiscover:
         assert doc_refs[0].corpus == "LS"
         assert doc_refs[0].provider == "internet_archive"
 
-    async def test_missing_eparlib_document_url_produces_none_citation_url(self):
-        """If eparlib_document_url is absent from metadata, citation_url is None."""
+    async def test_citation_url_independent_of_eparlib_document_url(self):
+        """PRD v3.0: citation_url derives from the IA identifier, not eparlib_document_url.
+
+        Even when eparlib_document_url is absent, the archive.org item URL is
+        cited (it is null only when no IA identifier is derivable).
+        """
         search_resp_1 = _ia_search_response(["eparlib.nic.in.12345"])
         meta_no_url = MagicMock(status_code=200)
         meta_no_url.json.return_value = {
@@ -302,7 +323,7 @@ class TestInternetArchiveProviderDiscover:
             doc_refs = await provider.discover()
 
         assert len(doc_refs) == 1
-        assert doc_refs[0].citation_url is None
+        assert doc_refs[0].citation_url == "https://archive.org/details/eparlib.nic.in.12345"
 
     async def test_metadata_fetch_failure_skips_document(self):
         """If metadata API returns non-200 for an identifier, that identifier is skipped."""
@@ -328,10 +349,9 @@ class TestInternetArchiveProviderDiscover:
 # ── InternetArchiveProvider.discover() — RS corpus (Phase 9, PRD v1.3) ───────
 
 class TestInternetArchiveProviderDiscoverRS:
-    async def test_rs_citation_url_is_rsdebate_derived_from_handle(self):
-        """For RS, citation_url = rsdebate.nic.in URL derived from handle N (never archive.org)."""
+    async def test_rs_citation_url_is_ia_item_url(self):
+        """PRD v3.0 (Non-Neg #9 reversal): RS citation_url is the archive.org item URL."""
         search_resp_1 = _ia_search_response(["eparlib.nic.in.55501"])
-        # RS items have no eparlib_document_url; the URL is derived from handle N.
         meta_resp = MagicMock(status_code=200)
         meta_resp.json.return_value = {
             "server": "ia801205.us.archive.org",
@@ -354,15 +374,42 @@ class TestInternetArchiveProviderDiscoverRS:
         assert len(doc_refs) == 1
         ref = doc_refs[0]
         assert ref.corpus == "RS"
-        assert ref.citation_url == RSDEBATE_ITEM_PATTERN.format(handle="55501")
-        assert ref.citation_url == "https://rsdebate.nic.in/handle/123456789/55501"
-        assert RSDEBATE_BASE in ref.citation_url
-        assert "archive.org" not in ref.citation_url
+        assert ref.citation_url == "https://archive.org/details/eparlib.nic.in.55501"
+        assert "rsdebate.nic.in" not in (ref.citation_url or "")
         assert ref.canonical_doc_id == "55501"
 
-    async def test_rs_no_derivable_handle_yields_null_citation_and_warns(self, caplog):
-        """PRD v1.3 edge case: RS IA item with no derivable handle → citation_url=None + warning, never archive.org."""
-        # Identifier does not match eparlib.nic.in.{N}, so no DSpace handle is derivable.
+    async def test_rs_lok_sabha_number_always_null(self):
+        """PRD v3.0: lok_sabha_number is LS-only; RS DocumentRefs carry null even if present in metadata."""
+        search_resp_1 = _ia_search_response(["eparlib.nic.in.55501"])
+        meta_resp = MagicMock(status_code=200)
+        meta_resp.json.return_value = {
+            "server": "ia801205.us.archive.org",
+            "dir": "/5/items/eparlib.nic.in.55501",
+            "files": [{"name": "RS_20_02_12_djvu.txt", "format": "DjVuTXT"}],
+            "metadata": {
+                "identifier": "eparlib.nic.in.55501",
+                "eparlib_date": "2020-02-12",
+                "eparlib_lok_sabha_number": "17",  # spurious on an RS item — must be ignored
+                "title": "Rajya Sabha Debates",
+            },
+        }
+
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [search_resp_1, meta_resp]
+
+        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
+            provider = InternetArchiveProvider(client, corpus="RS", rate_delay=0.0)
+            doc_refs = await provider.discover()
+
+        assert doc_refs[0].metadata["lok_sabha_number"] is None
+
+    async def test_rs_no_derivable_handle_still_cites_ia_item(self, caplog):
+        """PRD v3.0: an RS IA item with no derivable handle still cites the archive.org item URL.
+
+        citation_url is null only when no IA identifier exists; here the
+        identifier is present (just not an eparlib.nic.in.{N} handle), so the
+        IA item URL is used and the item is tracked via the identifier.
+        """
         search_resp_1 = _ia_search_response(["rs_misc_item_no_handle"])
         meta_resp = MagicMock(status_code=200)
         meta_resp.json.return_value = {
@@ -386,11 +433,9 @@ class TestInternetArchiveProviderDiscoverRS:
                 provider = InternetArchiveProvider(client, corpus="RS", rate_delay=0.0)
                 doc_refs = await provider.discover()
 
-        # RS does NOT skip the item (unlike LS) — it is retained with no citation.
         assert len(doc_refs) == 1
         ref = doc_refs[0]
-        assert ref.citation_url is None
-        assert "no derivable DSpace handle" in caplog.text
+        assert ref.citation_url == "https://archive.org/details/rs_misc_item_no_handle"
         # The item is still tracked via the IA identifier as canonical id.
         assert ref.canonical_doc_id == "rs_misc_item_no_handle"
 
@@ -433,7 +478,7 @@ class TestInternetArchiveProviderFetch:
             format="ia_text",
             fetch_url=f"https://ia801205.us.archive.org/5/items/{identifier}/LSD_djvu.txt",
             canonical_doc_id=handle_n,
-            citation_url=f"https://eparlib.sansad.in/handle/123456789/{handle_n}",
+            citation_url=f"https://archive.org/details/eparlib.nic.in.{handle_n}",
             metadata={"identifier": identifier},
         )
 
