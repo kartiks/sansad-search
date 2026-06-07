@@ -125,4 +125,24 @@ describe('postSearch', () => {
       filters: { sources: ['RS'] },
     })
   })
+
+  it('appends ?debug=1 to URL when debug is true', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ total: 0, results: [] }),
+    })
+    await postSearch({ query: 'rights', filters: null, sort: 'relevance', page: 1, debug: true })
+    expect(global.fetch.mock.calls[0][0]).toBe(`${SEARCH_ENDPOINT}?debug=1`)
+  })
+
+  it('does not append ?debug=1 when debug is falsy', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ total: 0, results: [] }),
+    })
+    await postSearch({ query: 'rights', filters: null, sort: 'relevance', page: 1 })
+    expect(global.fetch.mock.calls[0][0]).toBe(SEARCH_ENDPOINT)
+  })
 })

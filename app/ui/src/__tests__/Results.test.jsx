@@ -951,3 +951,124 @@ describe('Results — F08 Search History wiring', () => {
     })
   })
 })
+
+// ── F10 Debug mode ────────────────────────────────────────────────────────────
+
+describe('Results — debug mode activation (?debug=1)', () => {
+  function makeDebugResult(overrides = {}) {
+    return {
+      ...makeSpeechResult({ id: 'debug-res-1' }),
+      _rankingScore: 0.87,
+      _meili_document: { id: 'debug-res-1', source: 'LS' },
+      ...overrides,
+    }
+  }
+
+  function makeDebugSearchResponse(overrides = {}) {
+    return {
+      ...makeSearchResponse({ results: [makeDebugResult()] }),
+      debug: {
+        processed_query: 'rights',
+        meilisearch_request: {
+          method: 'POST',
+          url: 'https://xxx.meilisearch.io/indexes/parliamentary_records/search',
+          body: { q: 'rights', showRankingScore: true },
+        },
+        meilisearch_response: { hits: [{ id: 'debug-res-1' }], totalHits: 1 },
+      },
+      ...overrides,
+    }
+  }
+
+  it('renders SearchDebugPanel above results when ?debug=1 is in URL', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeDebugSearchResponse(),
+    })
+    renderResults('/search?q=rights&page=1&debug=1')
+    await screen.findByTestId('results-list')
+    expect(screen.getByTestId('search-debug-panel')).toBeInTheDocument()
+  })
+
+  it('renders SearchDebugPanel when ?debug=true is in URL', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeDebugSearchResponse(),
+    })
+    renderResults('/search?q=rights&page=1&debug=true')
+    await screen.findByTestId('results-list')
+    expect(screen.getByTestId('search-debug-panel')).toBeInTheDocument()
+  })
+
+  it('does NOT render SearchDebugPanel in normal mode (no ?debug param)', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeSearchResponse(),
+    })
+    renderResults('/search?q=rights&page=1')
+    await screen.findByTestId('results-list')
+    expect(screen.queryByTestId('search-debug-panel')).not.toBeInTheDocument()
+  })
+
+  it('each ResultCard shows a debug-panel-toggle in debug mode', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeDebugSearchResponse(),
+    })
+    renderResults('/search?q=rights&page=1&debug=1')
+    await screen.findByTestId('results-list')
+    const toggles = screen.getAllByTestId('debug-panel-toggle')
+    expect(toggles.length).toBeGreaterThan(0)
+  })
+
+  it('ResultCard has no debug-panel-toggle in normal mode', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeSearchResponse({ results: [makeSpeechResult()] }),
+    })
+    renderResults('/search?q=rights&page=1')
+    await screen.findByTestId('results-list')
+    expect(screen.queryByTestId('debug-panel-toggle')).not.toBeInTheDocument()
+  })
+
+  it('no calls to /api/debug/* when debug mode is inactive', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeSearchResponse(),
+    })
+    renderResults('/search?q=rights&page=1')
+    await screen.findByTestId('results-list')
+    const debugCalls = global.fetch.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('/api/debug/')
+    )
+    expect(debugCalls).toHaveLength(0)
+  })
+
+  it('POSTs to /api/search?debug=1 when ?debug=1 is in the URL', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeSearchResponse(),
+    })
+    renderResults('/search?q=rights&page=1&debug=1')
+    await screen.findByTestId('results-list')
+    const searchCalls = global.fetch.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('/api/search')
+    )
+    expect(searchCalls.length).toBeGreaterThan(0)
+    expect(searchCalls[0][0]).toBe('/api/search?debug=1')
+  })
+
+  it('POSTs to plain /api/search when no debug param is present', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeSearchResponse(),
+    })
+    renderResults('/search?q=rights&page=1')
+    await screen.findByTestId('results-list')
+    const searchCalls = global.fetch.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('/api/search')
+    )
+    expect(searchCalls.length).toBeGreaterThan(0)
+    expect(searchCalls[0][0]).toBe('/api/search')
+  })
+})

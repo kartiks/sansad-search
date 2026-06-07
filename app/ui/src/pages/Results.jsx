@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
-import { useSearch } from '../hooks/useSearch.js'
+import { useSearch, buildSearchRequestBody, SEARCH_ENDPOINT } from '../hooks/useSearch.js'
 import { useCookieHistory } from '../hooks/useCookieHistory.js'
 import { useSavedSearches, sanitizeStoredFilters } from '../hooks/useSavedSearches.js'
 import {
@@ -24,6 +24,7 @@ import {
 } from '../lib/filterState.js'
 import { formatExpansionNotice, hasExpansion } from '../lib/expansionNotice.js'
 import ResultCard from '../components/ResultCard.jsx'
+import SearchDebugPanel from '../components/SearchDebugPanel.jsx'
 import Pagination, { formatResultCount } from '../components/Pagination.jsx'
 import SkeletonCard from '../components/SkeletonCard.jsx'
 import FilterChip from '../components/FilterChip.jsx'
@@ -124,11 +125,15 @@ export default function Results() {
 
   const enabled = urlQuery.trim().length > 0
 
+  // F10: debug mode activated by ?debug=1 or ?debug=true in the URL
+  const debugMode = params.get('debug') === '1' || params.get('debug') === 'true'
+
   const { data, error, loading, retry } = useSearch({
     query: urlQuery,
     filters,
     sort: urlSort,
     page: urlPage,
+    debug: debugMode,
     enabled,
   })
 
@@ -483,13 +488,25 @@ export default function Results() {
           </div>
         )}
 
+        {!loading && !error && data && debugMode && (
+          <SearchDebugPanel
+            debugEnvelope={data.debug}
+            apiRequest={{
+              method: 'POST',
+              url: `${SEARCH_ENDPOINT}?debug=1`,
+              body: buildSearchRequestBody({ query: urlQuery, filters, sort: urlSort, page: urlPage }),
+            }}
+            apiResponse={data}
+          />
+        )}
+
         {!loading && !error && data && (
           <>
             {data.results && data.results.length > 0 ? (
               <>
                 <div data-testid="results-list">
                   {data.results.map((r) => (
-                    <ResultCard key={r.id} result={r} filters={filters} />
+                    <ResultCard key={r.id} result={r} filters={filters} debug={debugMode} />
                   ))}
                 </div>
                 <Pagination

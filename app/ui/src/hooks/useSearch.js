@@ -14,12 +14,13 @@ export function buildSearchRequestBody({ query, filters, sort, page }) {
   return body
 }
 
-export async function postSearch({ query, filters, sort, page, signal }) {
+export async function postSearch({ query, filters, sort, page, debug, signal }) {
   const body = buildSearchRequestBody({ query, filters, sort, page })
+  const url = debug ? `${SEARCH_ENDPOINT}?debug=1` : SEARCH_ENDPOINT
 
   let response
   try {
-    response = await fetch(SEARCH_ENDPOINT, {
+    response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -49,7 +50,7 @@ export async function postSearch({ query, filters, sort, page, signal }) {
   return payload
 }
 
-export function useSearch({ query, filters, sort, page, enabled = true }) {
+export function useSearch({ query, filters, sort, page, debug = false, enabled = true }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -72,7 +73,7 @@ export function useSearch({ query, filters, sort, page, enabled = true }) {
     setLoading(true)
     setError(null)
 
-    postSearch({ query, filters, sort, page, signal: controller.signal })
+    postSearch({ query, filters, sort, page, debug, signal: controller.signal })
       .then((result) => {
         if (controller.signal.aborted) return
         if (lastKey.current !== key) return
@@ -94,6 +95,7 @@ export function useSearch({ query, filters, sort, page, enabled = true }) {
     query,
     sort,
     page,
+    debug,
     JSON.stringify(toApiFilters(filters)),
     reloadToken,
   ])

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -148,9 +148,13 @@ def _validate_request(
 async def search(
     body: SearchRequest,
     meili_client: Any = Depends(get_client),
+    debug: Optional[str] = Query(default=None),
 ) -> Any:
     """
     POST /api/search — execute a full-text search and return paginated results.
+
+    ?debug=1 (or ?debug=true) activates F10 debug mode: adds ranking score
+    retrieval to the Meilisearch query and returns a top-level debug envelope.
     """
     # 1. Truncate query to 500 characters (silent)
     raw_query = body.query[:_MAX_QUERY_LEN]
@@ -186,6 +190,7 @@ async def search(
             filter_dict["session"] = filters.session.strip()
 
     # 5. Execute search
+    debug_active = debug in ("1", "true", "True")
     try:
         result = await execute_search(
             query=clean_query,
@@ -194,6 +199,7 @@ async def search(
             page=body.page,
             meili_client=meili_client,
             expansion_notice=expansion_notice,
+            debug=debug_active,
         )
     except Exception as exc:
         logger.exception("Search failed: %s", exc)

@@ -11,6 +11,7 @@ from api.lib.db import init_pool, close_pool
 from api.routes import search as search_router
 from api.routes import status as status_router
 from api.routes import record as record_router
+from api.routes import debug as debug_router
 
 
 def _allowed_origins() -> list:
@@ -38,3 +39,4 @@ app.add_middleware(
 app.include_router(search_router.router)
 app.include_router(status_router.router)
 app.include_router(record_router.router)
+app.include_router(debug_router.router)

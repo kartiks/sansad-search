@@ -7,10 +7,13 @@ Responsibilities:
 - Call the Meilisearch parliamentary_records index.
 - Format raw Meilisearch hits into API result dicts (snippet, date_display,
   proceeding_type_label, total_display).
+- When debug=True: augment Meilisearch query with score/full-doc retrieval
+  parameters; assemble and return the debug envelope (F10, PRD v3.0).
 """
 from __future__ import annotations
 
 import html
+import os
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -279,11 +282,66 @@ def build_sort_params(sort: str) -> List[str]:
     return _SORT_MAP.get(sort, [])
 
 
+# ── Debug helpers ─────────────────────────────────────────────────────────────
+
+# snake_case SDK param → camelCase Meilisearch API param
+_PARAM_CAMEL: Dict[str, str] = {
+    "hits_per_page": "hitsPerPage",
+    "page": "page",
+    "filter": "filter",
+    "sort": "sort",
+    "attributes_to_crop": "attributesToCrop",
+    "crop_length": "cropLength",
+    "crop_marker": "cropMarker",
+    "show_ranking_score": "showRankingScore",
+    "show_ranking_score_details": "showRankingScoreDetails",
+    "attributes_to_retrieve": "attributesToRetrieve",
+}
+
+
+def _build_debug_request_body(query: str, search_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the camelCase Meilisearch request body for the debug envelope."""
+    body: Dict[str, Any] = {"q": query}
+    for k, v in search_kwargs.items():
+        body[_PARAM_CAMEL.get(k, k)] = v
+    return body
+
+
+def _meili_result_to_dict(raw: Any) -> Any:
+    """Convert a SearchResults object to a JSON-serializable dict."""
+    try:
+        return raw.model_dump()
+    except AttributeError:
+        pass
+    try:
+        return raw.dict()
+    except AttributeError:
+        pass
+    # Manual fallback using known attributes
+    result: Dict[str, Any] = {}
+    for attr, key in [
+        ("hits", "hits"),
+        ("total_hits", "totalHits"),
+        ("total_pages", "totalPages"),
+        ("page", "page"),
+        ("hits_per_page", "hitsPerPage"),
+        ("query", "query"),
+        ("processing_time_ms", "processingTimeMs"),
+    ]:
+        val = getattr(raw, attr, None)
+        if val is not None:
+            result[key] = val
+    return result
+
+
 # ── Result formatter ──────────────────────────────────────────────────────────
 
-def format_result(hit: Dict[str, Any], query_terms: List[str]) -> Dict[str, Any]:
+def format_result(hit: Dict[str, Any], query_terms: List[str], debug: bool = False) -> Dict[str, Any]:
     """
     Convert a raw Meilisearch hit dict into the API result shape.
+
+    When debug=True, adds _rankingScore, _rankingScoreDetails (if present),
+    and _meili_document (the full index document) for the ResultDebugPanel.
     """
     full_text = hit.get("full_text_en")
     date_val = hit.get("date")
@@ -323,6 +381,13 @@ def format_result(hit: Dict[str, Any], query_terms: List[str]) -> Dict[str, Any]
         result["snippet"] = snippet_html
         result["snippet_from_supplementary"] = snippet_from_sup
 
+    if debug:
+        result["_rankingScore"] = hit.get("_rankingScore")
+        if "_rankingScoreDetails" in hit:
+            result["_rankingScoreDetails"] = hit["_rankingScoreDetails"]
+        # Full index document for the "Document in index" debug section
+        result["_meili_document"] = hit
+
     return result
 
 
@@ -335,6 +400,7 @@ async def execute_search(
     page: int,
     meili_client: Any,
     expansion_notice: Optional[List[str]] = None,
+    debug: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute a search against the Meilisearch parliamentary_records index.
@@ -346,6 +412,8 @@ async def execute_search(
         page:             1-based page number.
         meili_client:     meilisearch.AsyncClient instance.
         expansion_notice: Pre-computed expansion notice list from query_expander.
+        debug:            When True, adds score retrieval params + returns debug
+                          envelope (F10, PRD v3.0).  Exempt from PERF-1 (PERF-3).
 
     Returns:
         API-shaped response dict.
@@ -372,6 +440,11 @@ async def execute_search(
     if sort_params:
         search_kwargs["sort"] = sort_params
 
+    if debug:
+        search_kwargs["show_ranking_score"] = True
+        search_kwargs["show_ranking_score_details"] = True
+        search_kwargs["attributes_to_retrieve"] = ["*"]
+
     raw = await index.search(query, **search_kwargs)
 
     hits = raw.hits or []
@@ -382,9 +455,9 @@ async def execute_search(
 
     query_terms = _tokenize_query(query)
     all_terms = _merge_expansion_terms(query_terms, expansion_notice)
-    results = [format_result(hit, all_terms) for hit in hits]
+    results = [format_result(hit, all_terms, debug=debug) for hit in hits]
 
-    return {
+    response: Dict[str, Any] = {
         "total": total,
         "total_display": format_total_display(total),
         "page": current_page,
@@ -393,3 +466,19 @@ async def execute_search(
         "expansion_notice": expansion_notice or [],
         "results": results,
     }
+
+    if debug:
+        meili_url = os.environ.get("MEILISEARCH_URL", "")
+        search_url = f"{meili_url}/indexes/{MEILI_INDEX_NAME}/search"
+        debug_body = _build_debug_request_body(query, search_kwargs)
+        response["debug"] = {
+            "processed_query": query,
+            "meilisearch_request": {
+                "method": "POST",
+                "url": search_url,
+                "body": debug_body,
+            },
+            "meilisearch_response": _meili_result_to_dict(raw),
+        }
+
+    return response

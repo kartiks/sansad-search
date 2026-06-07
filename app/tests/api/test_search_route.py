@@ -933,3 +933,200 @@ class TestSearchUnavailable:
         # Error body must be a bare top-level object (DATA-MODELS.md 3.1)
         assert body["error"] == "search_unavailable"
         assert "detail" not in body
+
+
+# ── F10 Debug mode ────────────────────────────────────────────────────────────
+
+class TestDebugMode:
+    """
+    Tests for POST /api/search?debug=1 (F10, PRD v3.0).
+
+    Normal-mode search must NOT include showRankingScore, showRankingScoreDetails,
+    or attributesToRetrieve in the Meilisearch query.
+    Debug-mode search must include all three, and the response must contain a
+    top-level `debug` envelope with processed_query, meilisearch_request,
+    meilisearch_response.
+    """
+
+    def _captured_search_params(self):
+        """Return (meili_mock, captured_params_list)."""
+        captured = []
+
+        async def fake_search(query, **kwargs):
+            captured.append({"query": query, "params": kwargs})
+            return _meili_ns()
+
+        mock_index = AsyncMock()
+        mock_index.search = fake_search
+        mock_client = MagicMock()
+        mock_client.index = MagicMock(return_value=mock_index)
+        return mock_client, captured
+
+    # ── Normal mode ───────────────────────────────────────────────────────────
+
+    def test_normal_mode_does_not_include_ranking_score_params(self):
+        """In normal mode, showRankingScore/showRankingScoreDetails/attributesToRetrieve
+        must NOT be sent to Meilisearch."""
+        mock_client, captured = self._captured_search_params()
+        mock_pool = make_mock_pool()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_client
+        with TestClient(app) as client:
+            client.post("/api/search", json={"query": "infrastructure"})
+        params = captured[0]["params"]
+        assert "show_ranking_score" not in params
+        assert "show_ranking_score_details" not in params
+        assert "attributes_to_retrieve" not in params
+
+    def test_normal_mode_response_has_no_debug_key(self):
+        """In normal mode, the response must not contain a top-level `debug` key."""
+        mock_pool = make_mock_pool()
+        mock_meili = make_mock_meili_client()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_meili
+        with TestClient(app) as client:
+            resp = client.post("/api/search", json={"query": "infrastructure"})
+        assert resp.status_code == 200
+        assert "debug" not in resp.json()
+
+    def test_normal_mode_results_have_no_ranking_score_fields(self):
+        """In normal mode, result objects must not contain _rankingScore or
+        _rankingScoreDetails."""
+        hit = _make_hit(_rankingScore=0.95, _rankingScoreDetails={"words": {"order": 0}})
+        meili_resp = _meili_response(hits=[hit], total=1)
+        mock_pool = make_mock_pool()
+        mock_meili = make_mock_meili_client(search_result=meili_resp)
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_meili
+        with TestClient(app) as client:
+            resp = client.post("/api/search", json={"query": "infrastructure"})
+        result = resp.json()["results"][0]
+        assert "_rankingScore" not in result
+        assert "_rankingScoreDetails" not in result
+
+    # ── Debug mode ────────────────────────────────────────────────────────────
+
+    def test_debug_1_sends_ranking_score_params_to_meilisearch(self):
+        """?debug=1 adds showRankingScore, showRankingScoreDetails, and
+        attributesToRetrieve=["*"] to the Meilisearch query."""
+        mock_client, captured = self._captured_search_params()
+        mock_pool = make_mock_pool()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_client
+        with TestClient(app) as client:
+            client.post("/api/search?debug=1", json={"query": "infrastructure"})
+        params = captured[0]["params"]
+        assert params.get("show_ranking_score") is True
+        assert params.get("show_ranking_score_details") is True
+        assert params.get("attributes_to_retrieve") == ["*"]
+
+    def test_debug_true_also_activates_debug_mode(self):
+        """?debug=true (string) also activates debug mode."""
+        mock_client, captured = self._captured_search_params()
+        mock_pool = make_mock_pool()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_client
+        with TestClient(app) as client:
+            client.post("/api/search?debug=true", json={"query": "infrastructure"})
+        params = captured[0]["params"]
+        assert params.get("show_ranking_score") is True
+
+    def test_debug_mode_response_contains_debug_envelope(self):
+        """?debug=1 adds a top-level `debug` key with processed_query,
+        meilisearch_request, and meilisearch_response."""
+        mock_pool = make_mock_pool()
+        mock_meili = make_mock_meili_client()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_meili
+        with TestClient(app) as client:
+            resp = client.post("/api/search?debug=1", json={"query": "infrastructure"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "debug" in body
+        envelope = body["debug"]
+        assert "processed_query" in envelope
+        assert "meilisearch_request" in envelope
+        assert "meilisearch_response" in envelope
+
+    def test_debug_envelope_meilisearch_request_has_required_fields(self):
+        """The debug envelope's meilisearch_request contains method, url, and body."""
+        mock_pool = make_mock_pool()
+        mock_meili = make_mock_meili_client()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_meili
+        with TestClient(app) as client:
+            resp = client.post("/api/search?debug=1", json={"query": "infrastructure"})
+        body = resp.json()
+        req = body["debug"]["meilisearch_request"]
+        assert req["method"] == "POST"
+        assert "indexes/parliamentary_records/search" in req["url"]
+        assert "body" in req
+
+    def test_debug_envelope_request_body_contains_debug_params(self):
+        """The debug envelope's request body includes showRankingScore,
+        showRankingScoreDetails, and attributesToRetrieve."""
+        mock_pool = make_mock_pool()
+        mock_meili = make_mock_meili_client()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_meili
+        with TestClient(app) as client:
+            resp = client.post("/api/search?debug=1", json={"query": "infrastructure"})
+        body_req = resp.json()["debug"]["meilisearch_request"]["body"]
+        assert body_req.get("showRankingScore") is True
+        assert body_req.get("showRankingScoreDetails") is True
+        assert body_req.get("attributesToRetrieve") == ["*"]
+
+    def test_debug_result_contains_ranking_score(self):
+        """When debug=1, each result object includes _rankingScore."""
+        hit = _make_hit(_rankingScore=0.87)
+        meili_resp = _meili_response(hits=[hit], total=1)
+        mock_pool = make_mock_pool()
+        mock_meili = make_mock_meili_client(search_result=meili_resp)
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_meili
+        with TestClient(app) as client:
+            resp = client.post("/api/search?debug=1", json={"query": "infrastructure"})
+        result = resp.json()["results"][0]
+        assert "_rankingScore" in result
+        assert result["_rankingScore"] == pytest.approx(0.87)
+
+    def test_debug_result_contains_ranking_score_details_when_present(self):
+        """When _rankingScoreDetails is in the hit, it is included in the result."""
+        details = {"words": {"order": 0, "matchingWords": 1}}
+        hit = _make_hit(_rankingScore=0.9, _rankingScoreDetails=details)
+        meili_resp = _meili_response(hits=[hit], total=1)
+        mock_pool = make_mock_pool()
+        mock_meili = make_mock_meili_client(search_result=meili_resp)
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_meili
+        with TestClient(app) as client:
+            resp = client.post("/api/search?debug=1", json={"query": "infrastructure"})
+        result = resp.json()["results"][0]
+        assert "_rankingScoreDetails" in result
+
+    def test_debug_result_contains_meili_document(self):
+        """When debug=1, each result includes _meili_document (the full hit)."""
+        hit = _make_hit(custom_field="custom_value")
+        meili_resp = _meili_response(hits=[hit], total=1)
+        mock_pool = make_mock_pool()
+        mock_meili = make_mock_meili_client(search_result=meili_resp)
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_meili
+        with TestClient(app) as client:
+            resp = client.post("/api/search?debug=1", json={"query": "infrastructure"})
+        result = resp.json()["results"][0]
+        assert "_meili_document" in result
+        # Full document should include the custom field
+        assert result["_meili_document"].get("custom_field") == "custom_value"
+
+    def test_debug_envelope_processed_query_matches_submitted_query(self):
+        """The debug envelope's processed_query reflects the expanded query sent
+        to Meilisearch (after stop-word stripping and synonym expansion)."""
+        mock_pool = make_mock_pool()
+        mock_meili = make_mock_meili_client()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_meili
+        with TestClient(app) as client:
+            resp = client.post("/api/search?debug=1", json={"query": "infrastructure"})
+        body = resp.json()
+        assert body["debug"]["processed_query"] != ""

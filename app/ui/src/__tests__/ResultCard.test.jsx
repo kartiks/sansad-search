@@ -80,3 +80,80 @@ describe('ResultCard — Details link navigates to /record/:id', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/record/custom-id-xyz')
   })
 })
+
+// ── Debug mode (F10) ──────────────────────────────────────────────────────────
+
+import { vi, beforeEach, afterEach } from 'vitest'
+import { act, waitFor } from '@testing-library/react'
+
+function mockFetchOk() {
+  global.fetch = vi.fn(() =>
+    Promise.resolve({ ok: true, status: 200, json: async () => ({}) })
+  )
+}
+
+beforeEach(() => { vi.clearAllMocks() })
+afterEach(() => { if (global.fetch) delete global.fetch })
+
+function makeDebugResult(overrides = {}) {
+  return {
+    ...makeSpeechResult({ id: 'debug-1' }),
+    _rankingScore: 0.9,
+    _meili_document: { id: 'debug-1', source: 'LS' },
+    ...overrides,
+  }
+}
+
+describe('ResultCard — normal mode has no debug DOM elements', () => {
+  it('renders no debug panel toggle when debug=false (default)', () => {
+    renderCard(makeSpeechResult())
+    expect(screen.queryByTestId('debug-panel-toggle')).toBeNull()
+  })
+
+  it('renders no debug panel container when debug=false', () => {
+    renderCard(makeSpeechResult())
+    expect(screen.queryByTestId('result-debug-panel-wrap')).toBeNull()
+  })
+
+  it('renders no debug section headers when debug=false', () => {
+    renderCard(makeSpeechResult())
+    expect(screen.queryByTestId('debug-section-scoring')).toBeNull()
+    expect(screen.queryByTestId('debug-section-processed')).toBeNull()
+    expect(screen.queryByTestId('debug-section-raw')).toBeNull()
+  })
+})
+
+describe('ResultCard — debug mode renders debug panel', () => {
+  function renderDebugCard(result, overrides = {}) {
+    return render(
+      <MemoryRouter>
+        <ResultCard result={result} debug={true} {...overrides} />
+      </MemoryRouter>
+    )
+  }
+
+  it('renders the debug toggle when debug=true', () => {
+    mockFetchOk()
+    renderDebugCard(makeDebugResult())
+    expect(screen.getByTestId('debug-panel-toggle')).toBeInTheDocument()
+  })
+
+  it('debug panel wrap is in the DOM when debug=true', () => {
+    mockFetchOk()
+    renderDebugCard(makeDebugResult())
+    expect(screen.getByTestId('result-debug-panel-wrap')).toBeInTheDocument()
+  })
+
+  it('panel opens when Debug toggle is clicked', () => {
+    mockFetchOk()
+    renderDebugCard(makeDebugResult())
+    fireEvent.click(screen.getByTestId('debug-panel-toggle'))
+    expect(screen.getByTestId('result-debug-panel')).toBeInTheDocument()
+  })
+
+  it('card content (speech card) still renders in debug mode', () => {
+    mockFetchOk()
+    renderDebugCard(makeDebugResult())
+    expect(screen.getByTestId('speech-card')).toBeInTheDocument()
+  })
+})
