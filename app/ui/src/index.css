@@ -500,7 +500,6 @@ mark {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 16px;
-  margin-bottom: 12px;
   transition: box-shadow 150ms ease;
   position: relative;
 }
@@ -1171,11 +1170,12 @@ mark {
   margin-left: 4px;
 }
 
-/* ResultCard: Link wrapper — remove link default styling so the card looks as before */
+/* ResultCard: Link wrapper — contains card + debug panel as a single visual unit */
 .result-card-link {
   display: block;
   color: inherit;
   text-decoration: none;
+  margin-bottom: 12px;
 }
 
 .result-card-link:hover {
@@ -1325,4 +1325,194 @@ mark {
   font-size: 14px;
   cursor: pointer;
   margin-bottom: 12px;
+}
+
+/* ── Adjacent record cards (F09 inline loading) ──────────── */
+
+.record-adjacent-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+}
+
+.record-adjacent-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.record-adjacent-date {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.record-adjacent-attribution {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.record-adjacent-subject {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+
+/* ── Debug panels (F10) ──────────────────────────────────── */
+
+.debug-panel-toggle {
+  width: 100%;
+  background: var(--status-strip);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  padding: 5px 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.debug-panel-toggle:hover {
+  background: #EDE8E0;
+  color: var(--text-primary);
+}
+
+.result-debug-panel,
+.search-debug-panel {
+  background: #F0EDE8;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 4px;
+}
+
+.search-debug-panel {
+  margin-bottom: 16px;
+}
+
+.search-debug-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 8px 6px;
+}
+
+.debug-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  overflow: hidden;
+}
+
+.debug-section:last-child {
+  margin-bottom: 0;
+}
+
+.debug-section-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.debug-section-header:hover {
+  background: #F7F4EF;
+}
+
+.debug-section-chevron {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.debug-section-body {
+  border-top: 1px solid var(--border);
+}
+
+.debug-pre {
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ── JSON tree (F10 debug) ───────────────────────────────── */
+
+.json-tree {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.json-node {
+  display: inline;
+}
+
+.json-key {
+  color: #1C3461;
+}
+
+.json-string {
+  color: #1e7e34;
+}
+
+.json-number {
+  color: #c96a1e;
+}
+
+.json-boolean {
+  color: #6f42c1;
+}
+
+.json-null {
+  color: #6c757d;
+}
+
+.json-toggle {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 9px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  vertical-align: middle;
+  line-height: 1;
+  font-family: inherit;
+}
+
+.json-toggle:hover {
+  color: var(--text-primary);
+}
+
+.json-children {
+  padding-left: 16px;
+}
+
+.json-line {
+  display: block;
+}
+
+.json-collapsed {
+  color: var(--text-secondary);
 }

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import JsonTree from './JsonTree.jsx'
 
 function DebugSection({ title, isOpen, onToggle, testId, children }) {
   return (
@@ -51,9 +52,9 @@ export default function SearchDebugPanel({ debugEnvelope, apiRequest, apiRespons
         onToggle={() => setProcessedQueryOpen((o) => !o)}
         testId="search-debug-processed-query"
       >
-        <pre className="debug-pre" data-testid="search-debug-processed-query-content">
-          {debugEnvelope?.processed_query ?? ''}
-        </pre>
+        <div className="debug-pre" data-testid="search-debug-processed-query-content">
+          <JsonTree data={debugEnvelope?.processed_query ?? ''} />
+        </div>
       </DebugSection>
 
       <DebugSection
@@ -62,9 +63,9 @@ export default function SearchDebugPanel({ debugEnvelope, apiRequest, apiRespons
         onToggle={() => setApiRequestOpen((o) => !o)}
         testId="search-debug-api-request"
       >
-        <pre className="debug-pre" data-testid="search-debug-api-request-content">
-          {JSON.stringify(apiRequest, null, 2)}
-        </pre>
+        <div className="debug-pre" data-testid="search-debug-api-request-content">
+          <JsonTree data={apiRequest} />
+        </div>
       </DebugSection>
 
       <DebugSection
@@ -73,9 +74,9 @@ export default function SearchDebugPanel({ debugEnvelope, apiRequest, apiRespons
         onToggle={() => setApiResponseOpen((o) => !o)}
         testId="search-debug-api-response"
       >
-        <pre className="debug-pre" data-testid="search-debug-api-response-content">
-          {JSON.stringify(apiResponse, null, 2)}
-        </pre>
+        <div className="debug-pre" data-testid="search-debug-api-response-content">
+          <JsonTree data={apiResponse} />
+        </div>
       </DebugSection>
 
       <DebugSection
@@ -84,9 +85,9 @@ export default function SearchDebugPanel({ debugEnvelope, apiRequest, apiRespons
         onToggle={() => setMeiliRequestOpen((o) => !o)}
         testId="search-debug-meili-request"
       >
-        <pre className="debug-pre" data-testid="search-debug-meili-request-content">
-          {JSON.stringify(debugEnvelope?.meilisearch_request, null, 2)}
-        </pre>
+        <div className="debug-pre" data-testid="search-debug-meili-request-content">
+          <JsonTree data={debugEnvelope?.meilisearch_request} />
+        </div>
       </DebugSection>
 
       <DebugSection
@@ -95,9 +96,9 @@ export default function SearchDebugPanel({ debugEnvelope, apiRequest, apiRespons
         onToggle={() => setMeiliResponseOpen((o) => !o)}
         testId="search-debug-meili-response"
       >
-        <pre className="debug-pre" data-testid="search-debug-meili-response-content">
-          {JSON.stringify(debugEnvelope?.meilisearch_response, null, 2)}
-        </pre>
+        <div className="debug-pre" data-testid="search-debug-meili-response-content">
+          <JsonTree data={debugEnvelope?.meilisearch_response} />
+        </div>
       </DebugSection>
     </div>
   )

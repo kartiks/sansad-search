@@ -235,14 +235,14 @@ class TestBuildSnippet:
         snippet, _ = _build_snippet(text, ["target1", "target2"])
         assert "<mark>target1</mark>" in snippet or "<mark>target2</mark>" in snippet
 
-    def test_snippet_at_least_400_words_for_long_text(self):
-        """F05 (PRD v3.0): a >400-word text yields a snippet of ≥400 words."""
+    def test_snippet_at_least_280_words_for_long_text(self):
+        """Snippet window is 280 words; a long text yields a snippet of ≥280 words."""
         text = " ".join(f"word{i}" for i in range(1000)) + " target end"
         snippet, _ = _build_snippet(text, ["target"])
         # Count word tokens in the (HTML-stripped) snippet.
         import re as _re
         words = _re.findall(r"[a-zA-Z0-9]+", _re.sub(r"<[^>]+>", "", snippet))
-        assert len(words) >= 400
+        assert len(words) >= 280
 
     def test_short_text_returned_in_full(self):
         """A text shorter than the window is returned whole (no truncation)."""

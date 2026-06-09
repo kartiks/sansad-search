@@ -47,10 +47,10 @@ function renderParagraphs(fullText) {
     ))
 }
 
-// One inline adjacent record: speaker (or questioner/minister), date, subject,
-// proceeding type, and full text.
+// One adjacent record card: styled card with metadata, attribution, subject, and full text.
 function AdjacentRecord({ record }) {
   const proceedingLabel = getProceedingTypeLabel(record.proceeding_type)
+  const sourceLabel = getSourceLabel(record.source)
   const attribution =
     record.record_type === 'qa'
       ? [
@@ -69,14 +69,15 @@ function AdjacentRecord({ record }) {
       data-testid={`adjacent-record-${record.id}`}
     >
       <div className="record-adjacent-meta">
-        <span className="record-adjacent-attribution">{attribution}</span>
+        {sourceLabel && <span>{sourceLabel}</span>}
         {proceedingLabel && (
-          <span className="record-adjacent-proceeding">{proceedingLabel}</span>
+          <span className="proceeding-badge">{proceedingLabel}</span>
         )}
         {record.date_display && (
           <span className="record-adjacent-date">{record.date_display}</span>
         )}
       </div>
+      <div className="record-adjacent-attribution">{attribution}</div>
       {record.subject && (
         <div className="record-adjacent-subject">{record.subject}</div>
       )}

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useDebugDetail } from '../hooks/useDebugDetail.js'
+import JsonTree from './JsonTree.jsx'
 
 function DebugSection({ title, isOpen, onToggle, testId, children }) {
   return (
@@ -76,18 +77,16 @@ export default function ResultDebugPanel({ result }) {
             onToggle={() => setScoringOpen((o) => !o)}
             testId="debug-section-scoring"
           >
-            <pre className="debug-pre" data-testid="debug-scoring-content">
-              {JSON.stringify(
-                {
+            <div className="debug-pre" data-testid="debug-scoring-content">
+              <JsonTree
+                data={{
                   _rankingScore: result._rankingScore,
                   ...(result._rankingScoreDetails !== undefined
                     ? { _rankingScoreDetails: result._rankingScoreDetails }
                     : {}),
-                },
-                null,
-                2,
-              )}
-            </pre>
+                }}
+              />
+            </div>
           </DebugSection>
 
           <DebugSection
@@ -96,9 +95,9 @@ export default function ResultDebugPanel({ result }) {
             onToggle={() => setDocumentOpen((o) => !o)}
             testId="debug-section-document"
           >
-            <pre className="debug-pre" data-testid="debug-document-content">
-              {JSON.stringify(result._meili_document ?? result, null, 2)}
-            </pre>
+            <div className="debug-pre" data-testid="debug-document-content">
+              <JsonTree data={result._meili_document ?? result} />
+            </div>
           </DebugSection>
 
           <DebugSection
@@ -120,9 +119,9 @@ export default function ResultDebugPanel({ result }) {
               </span>
             )}
             {processedData && (
-              <pre className="debug-pre" data-testid="debug-processed-content">
-                {JSON.stringify(processedData, null, 2)}
-              </pre>
+              <div className="debug-pre" data-testid="debug-processed-content">
+                <JsonTree data={processedData} />
+              </div>
             )}
           </DebugSection>
 
@@ -143,9 +142,9 @@ export default function ResultDebugPanel({ result }) {
               </span>
             )}
             {rawData && (
-              <pre className="debug-pre" data-testid="debug-raw-content">
-                {JSON.stringify(rawData, null, 2)}
-              </pre>
+              <div className="debug-pre" data-testid="debug-raw-content">
+                <JsonTree data={rawData} />
+              </div>
             )}
           </DebugSection>
         </div>

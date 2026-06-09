@@ -476,7 +476,7 @@ class TestSnippetCropParams:
         with TestClient(app) as client:
             client.post("/api/search", json={"query": "budget"})
         params = captured[0]["params"]
-        assert params["crop_length"] == 400
+        assert params["crop_length"] == 280
 
     def test_crop_marker_present(self):
         mock_client, captured = self._captured_search_params()

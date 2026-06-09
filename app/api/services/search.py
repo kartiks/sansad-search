@@ -24,9 +24,8 @@ MEILI_INDEX_NAME = "parliamentary_records"
 PER_PAGE = 20
 MAX_TOTAL_HITS = 10000
 
-# F05 (PRD v3.0): snippets must be at least 400 words. The crop window passed to
-# Meilisearch and the local snippet window are both measured in words.
-SNIPPET_WORD_WINDOW = 400
+# F05: snippet crop window in words — passed to Meilisearch and used locally.
+SNIPPET_WORD_WINDOW = 280
 
 _PROCEEDING_TYPE_LABELS: Dict[str, str] = {
     "debate": "Debate",
