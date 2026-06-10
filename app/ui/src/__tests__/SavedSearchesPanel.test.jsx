@@ -83,6 +83,20 @@ describe('SavedSearchesPanel — entries', () => {
     renderPanel({ entries: [makeEntry({ filters })] })
     expect(screen.getByText(/2020–2024/)).toBeInTheDocument()
   })
+
+  it('shows subject in filter summary as "Subject: [value]"', () => {
+    const filters = { ...defaultFilterState(), subject: 'MGNREGA' }
+    renderPanel({ entries: [makeEntry({ filters })] })
+    expect(screen.getByText(/Subject: MGNREGA/)).toBeInTheDocument()
+  })
+
+  it('includes subject alongside other active filters in summary', () => {
+    const filters = { ...defaultFilterState(), sources: ['LS'], subject: 'farm laws 2020' }
+    renderPanel({ entries: [makeEntry({ filters })] })
+    const summary = screen.getAllByTestId('saved-search-run-btn')[0]
+    expect(summary.textContent).toContain('Lok Sabha')
+    expect(summary.textContent).toContain('Subject: farm laws 2020')
+  })
 })
 
 describe('SavedSearchesPanel — run search', () => {

@@ -217,6 +217,28 @@ describe('SpeechCard — F05 v2.0: lang_original badge', () => {
   })
 })
 
+describe('SpeechCard — body badge and left border', () => {
+  it('renders a body badge for LS source', () => {
+    renderCard(makeSpeechResult({ source: 'LS' }))
+    expect(screen.getByTestId('body-badge')).toHaveTextContent('Lok Sabha')
+  })
+
+  it('renders a body badge for CA source', () => {
+    renderCard(makeSpeechResult({ source: 'CA' }))
+    expect(screen.getByTestId('body-badge')).toHaveTextContent('Constituent Assembly')
+  })
+
+  it('renders a body badge for RS source', () => {
+    renderCard(makeSpeechResult({ source: 'RS' }))
+    expect(screen.getByTestId('body-badge')).toHaveTextContent('Rajya Sabha')
+  })
+
+  it('adds body-color class to the card based on source', () => {
+    const { container } = renderCard(makeSpeechResult({ source: 'LS' }))
+    expect(container.querySelector('[data-testid="speech-card"]').className).toContain('result-card--LS')
+  })
+})
+
 describe('SpeechCard — F05 v2.0: time_of_day', () => {
   it('renders time_of_day verbatim when present', () => {
     renderCard(makeSpeechResult({ time_of_day: '14:35' }))

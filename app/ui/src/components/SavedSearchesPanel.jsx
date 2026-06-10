@@ -44,6 +44,9 @@ function buildFilterSummary(filters) {
   if (filters.session && filters.session.trim()) {
     parts.push(filters.session.trim())
   }
+  if (filters.subject && filters.subject.trim()) {
+    parts.push(`Subject: ${filters.subject.trim()}`)
+  }
 
   if (
     Array.isArray(filters.proceeding_types) &&

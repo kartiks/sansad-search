@@ -4,6 +4,8 @@ import {
   ALL_PROCEEDING_TYPES,
   SOURCE_LABELS,
   PROCEEDING_TYPE_LABELS,
+  BODY_BADGE_STYLES,
+  BODY_COLORS,
 } from '../lib/constants.js'
 import { validateFilterState, defaultFilterState } from '../lib/filterState.js'
 
@@ -39,6 +41,23 @@ function localReducer(state, action) {
         ? state.proceeding_types.filter((t) => t !== pt)
         : [...state.proceeding_types, pt]
       return { ...state, proceeding_types: next }
+    }
+    case 'SELECT_ALL_TYPES': {
+      const caOnly = state.sources.length === 1 && state.sources[0] === 'CA'
+      const selectable = caOnly
+        ? ALL_PROCEEDING_TYPES.filter((pt) => pt === 'debate')
+        : [...ALL_PROCEEDING_TYPES]
+      return { ...state, proceeding_types: selectable }
+    }
+    case 'CLEAR_TYPES': {
+      const caOnly = state.sources.length === 1 && state.sources[0] === 'CA'
+      const selectable = caOnly
+        ? ALL_PROCEEDING_TYPES.filter((pt) => pt === 'debate')
+        : ALL_PROCEEDING_TYPES
+      const remaining = state.proceeding_types.filter(
+        (pt) => !selectable.includes(pt)
+      )
+      return { ...state, proceeding_types: remaining }
     }
     case 'SET_DATE_FROM':
       return { ...state, date_from: action.value }
@@ -142,21 +161,31 @@ export default function AdvancedSearchModal({ isOpen, initialFilters, onApply, o
         </div>
 
         <div className="modal-body">
-          {/* 1. Legislative Body */}
+          {/* 1. Legislative Body — toggle chips with body colors */}
           <div className="filter-field">
             <div className="filter-label">Legislative Body</div>
-            <div className="filter-checkboxes" role="group" aria-label="Legislative Body">
-              {ALL_SOURCES.map((src) => (
-                <label key={src} className="filter-checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={state.sources.includes(src)}
-                    onChange={() => dispatch({ type: 'TOGGLE_SOURCE', source: src })}
-                    data-testid={`source-checkbox-${src}`}
-                  />
-                  {SOURCE_LABELS[src]}
-                </label>
-              ))}
+            <div className="modal-toggle-chips" role="group" aria-label="Legislative Body">
+              {ALL_SOURCES.map((src) => {
+                const selected = state.sources.includes(src)
+                const badge = BODY_BADGE_STYLES[src] || {}
+                const accentColor = BODY_COLORS[src]
+                const chipStyle = selected
+                  ? { background: accentColor, color: '#FFFFFF', borderColor: accentColor }
+                  : { background: badge.background, color: badge.color, borderColor: badge.background }
+                return (
+                  <button
+                    key={src}
+                    type="button"
+                    className="modal-toggle-chip"
+                    style={chipStyle}
+                    aria-pressed={selected}
+                    onClick={() => dispatch({ type: 'TOGGLE_SOURCE', source: src })}
+                    data-testid={`source-chip-${src}`}
+                  >
+                    {SOURCE_LABELS[src]}
+                  </button>
+                )
+              })}
             </div>
             {errors.sources && (
               <p
@@ -253,7 +282,7 @@ export default function AdvancedSearchModal({ isOpen, initialFilters, onApply, o
             <input
               type="text"
               className="filter-text-input"
-              placeholder="e.g. Railways"
+              placeholder="e.g. MGNREGA"
               value={state.subject}
               onChange={(e) =>
                 dispatch({ type: 'SET_SUBJECT', value: e.target.value })
@@ -261,36 +290,56 @@ export default function AdvancedSearchModal({ isOpen, initialFilters, onApply, o
               data-testid="subject-input"
             />
             <p className="filter-helper">
-              Filters by the official debate or question subject heading.
+              Matches records whose subject contains this text (case-insensitive).
             </p>
           </div>
 
-          {/* 6. Proceeding Type */}
+          {/* 6. Proceeding Type — toggle chips with Select all / Clear */}
           <div className="filter-field">
-            <div className="filter-label">Proceeding Type</div>
-            <div
-              className="filter-checkboxes filter-checkboxes-grid"
-              role="group"
-              aria-label="Proceeding Type"
-            >
+            <div className="modal-chip-group-header">
+              <div className="filter-label">Proceeding Type</div>
+              <div className="modal-chip-group-actions">
+                <button
+                  type="button"
+                  className="modal-chip-action-btn"
+                  onClick={() => dispatch({ type: 'SELECT_ALL_TYPES' })}
+                  data-testid="type-select-all"
+                >
+                  Select all
+                </button>
+                <span>·</span>
+                <button
+                  type="button"
+                  className="modal-chip-action-btn"
+                  onClick={() => dispatch({ type: 'CLEAR_TYPES' })}
+                  data-testid="type-clear"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <div className="modal-toggle-chips" role="group" aria-label="Proceeding Type">
               {ALL_PROCEEDING_TYPES.map((pt) => {
                 const disabled = caOnly && pt !== 'debate'
+                const selected = state.proceeding_types.includes(pt)
+                const chipStyle = selected && !disabled
+                  ? { background: '#1C3461', color: '#FFFFFF', borderColor: '#1C3461' }
+                  : { background: '#EDF0F7', color: '#1C3461', borderColor: '#EDF0F7' }
                 return (
-                  <label
+                  <button
                     key={pt}
-                    className={`filter-checkbox-row${disabled ? ' filter-checkbox-disabled' : ''}`}
+                    type="button"
+                    className={`modal-toggle-chip modal-toggle-chip--sm${disabled ? ' modal-toggle-chip--disabled' : ''}`}
+                    style={chipStyle}
+                    aria-pressed={selected && !disabled}
+                    disabled={disabled}
+                    onClick={() =>
+                      !disabled && dispatch({ type: 'TOGGLE_TYPE', pt })
+                    }
+                    data-testid={`type-chip-${pt}`}
                   >
-                    <input
-                      type="checkbox"
-                      checked={state.proceeding_types.includes(pt)}
-                      disabled={disabled}
-                      onChange={() =>
-                        !disabled && dispatch({ type: 'TOGGLE_TYPE', pt })
-                      }
-                      data-testid={`type-checkbox-${pt}`}
-                    />
                     {PROCEEDING_TYPE_LABELS[pt]}
-                  </label>
+                  </button>
                 )
               })}
             </div>

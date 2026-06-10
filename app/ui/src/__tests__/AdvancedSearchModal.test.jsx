@@ -28,26 +28,27 @@ describe('AdvancedSearchModal — rendering', () => {
     expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
   })
 
-  it('renders all 5 filter sections', () => {
+  it('renders all 6 filter sections', () => {
     renderModal()
     expect(screen.getByText('Legislative Body')).toBeInTheDocument()
     expect(screen.getByText('Date Range')).toBeInTheDocument()
     expect(screen.getByText('Speaker')).toBeInTheDocument()
     expect(screen.getByText('Session')).toBeInTheDocument()
+    expect(screen.getByText('Subject')).toBeInTheDocument()
     expect(screen.getByText('Proceeding Type')).toBeInTheDocument()
   })
 
-  it('renders all 3 source checkboxes checked by default', () => {
+  it('renders all 3 source chips selected by default', () => {
     renderModal()
-    expect(screen.getByTestId('source-checkbox-CA')).toBeChecked()
-    expect(screen.getByTestId('source-checkbox-LS')).toBeChecked()
-    expect(screen.getByTestId('source-checkbox-RS')).toBeChecked()
+    expect(screen.getByTestId('source-chip-CA')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('source-chip-LS')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('source-chip-RS')).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('renders all proceeding type checkboxes checked by default', () => {
+  it('renders all proceeding type chips selected by default', () => {
     renderModal()
     ALL_PROCEEDING_TYPES.forEach((pt) => {
-      expect(screen.getByTestId(`type-checkbox-${pt}`)).toBeChecked()
+      expect(screen.getByTestId(`type-chip-${pt}`)).toHaveAttribute('aria-pressed', 'true')
     })
   })
 })
@@ -79,30 +80,30 @@ describe('AdvancedSearchModal — close behavior', () => {
   })
 })
 
-describe('AdvancedSearchModal — source checkboxes', () => {
-  it('unchecking a source removes it', () => {
+describe('AdvancedSearchModal — source chips', () => {
+  it('clicking a selected source chip deselects it', () => {
     renderModal()
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
-    expect(screen.getByTestId('source-checkbox-CA')).not.toBeChecked()
-    expect(screen.getByTestId('source-checkbox-LS')).toBeChecked()
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
+    expect(screen.getByTestId('source-chip-CA')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('source-chip-LS')).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('unchecking all sources shows validation message', () => {
+  it('deselecting all sources shows validation message', () => {
     renderModal()
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
-    fireEvent.click(screen.getByTestId('source-checkbox-RS'))
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
+    fireEvent.click(screen.getByTestId('source-chip-RS'))
     expect(screen.getByTestId('source-validation')).toBeInTheDocument()
     expect(screen.getByTestId('source-validation').textContent).toContain(
       'Select at least one source'
     )
   })
 
-  it('Apply button is disabled when all sources unchecked', () => {
+  it('Apply button is disabled when all sources deselected', () => {
     renderModal()
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
-    fireEvent.click(screen.getByTestId('source-checkbox-RS'))
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
+    fireEvent.click(screen.getByTestId('source-chip-RS'))
     expect(screen.getByTestId('modal-apply')).toBeDisabled()
   })
 })
@@ -136,39 +137,53 @@ describe('AdvancedSearchModal — date range', () => {
   })
 })
 
-describe('AdvancedSearchModal — proceeding types', () => {
-  it('unchecking all types shows validation message and disables Apply', () => {
+describe('AdvancedSearchModal — proceeding type chips', () => {
+  it('deselecting all types shows validation message and disables Apply', () => {
     renderModal()
     ALL_PROCEEDING_TYPES.forEach((pt) => {
-      fireEvent.click(screen.getByTestId(`type-checkbox-${pt}`))
+      fireEvent.click(screen.getByTestId(`type-chip-${pt}`))
     })
     expect(screen.getByTestId('type-validation')).toBeInTheDocument()
     expect(screen.getByTestId('modal-apply')).toBeDisabled()
   })
 
-  it('CA-only selected disables all non-Debate proceeding type checkboxes', () => {
+  it('CA-only selected disables all non-Debate proceeding type chips', () => {
     renderModal()
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
-    fireEvent.click(screen.getByTestId('source-checkbox-RS'))
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
+    fireEvent.click(screen.getByTestId('source-chip-RS'))
 
     ALL_PROCEEDING_TYPES.forEach((pt) => {
-      const checkbox = screen.getByTestId(`type-checkbox-${pt}`)
+      const chip = screen.getByTestId(`type-chip-${pt}`)
       if (pt === 'debate') {
-        expect(checkbox).not.toBeDisabled()
+        expect(chip).not.toBeDisabled()
       } else {
-        expect(checkbox).toBeDisabled()
+        expect(chip).toBeDisabled()
       }
     })
   })
 
-  it('adding LS back re-enables all proceeding type checkboxes', () => {
+  it('adding LS back re-enables all proceeding type chips', () => {
     renderModal()
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
-    fireEvent.click(screen.getByTestId('source-checkbox-RS'))
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
+    fireEvent.click(screen.getByTestId('source-chip-RS'))
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
     ALL_PROCEEDING_TYPES.forEach((pt) => {
-      expect(screen.getByTestId(`type-checkbox-${pt}`)).not.toBeDisabled()
+      expect(screen.getByTestId(`type-chip-${pt}`)).not.toBeDisabled()
     })
+  })
+
+  it('"Select all" selects all non-disabled proceeding type chips', () => {
+    renderModal()
+    // First deselect all
+    ALL_PROCEEDING_TYPES.forEach((pt) => {
+      fireEvent.click(screen.getByTestId(`type-chip-${pt}`))
+    })
+    expect(screen.getByTestId('modal-apply')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('type-select-all'))
+    ALL_PROCEEDING_TYPES.forEach((pt) => {
+      expect(screen.getByTestId(`type-chip-${pt}`)).toHaveAttribute('aria-pressed', 'true')
+    })
+    expect(screen.getByTestId('modal-apply')).not.toBeDisabled()
   })
 })
 
@@ -192,11 +207,11 @@ describe('AdvancedSearchModal — Apply', () => {
   it('subject input appears and is included in onApply', () => {
     const { onApply } = renderModal()
     fireEvent.change(screen.getByTestId('subject-input'), {
-      target: { value: 'Railways' },
+      target: { value: 'MGNREGA' },
     })
     fireEvent.click(screen.getByTestId('modal-apply'))
     const arg = onApply.mock.calls[0][0]
-    expect(arg.subject).toBe('Railways')
+    expect(arg.subject).toBe('MGNREGA')
   })
 
   it('subject with only whitespace is treated as no subject filter', () => {
@@ -221,7 +236,7 @@ describe('AdvancedSearchModal — Apply', () => {
 
   it('Apply with source subset sends only those sources', () => {
     const { onApply } = renderModal()
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
     const arg = onApply.mock.calls[0][0]
     expect(arg.sources).not.toContain('CA')
@@ -239,21 +254,21 @@ describe('AdvancedSearchModal — Clear all', () => {
     fireEvent.change(screen.getByTestId('subject-input'), {
       target: { value: 'Railways' },
     })
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-clear-all'))
 
     expect(screen.getByTestId('speaker-input')).toHaveValue('')
     expect(screen.getByTestId('subject-input')).toHaveValue('')
-    expect(screen.getByTestId('source-checkbox-CA')).toBeChecked()
-    expect(screen.getByTestId('source-checkbox-LS')).toBeChecked()
-    expect(screen.getByTestId('source-checkbox-RS')).toBeChecked()
+    expect(screen.getByTestId('source-chip-CA')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('source-chip-LS')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('source-chip-RS')).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('Apply button is enabled after Clear all', () => {
     renderModal()
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
-    fireEvent.click(screen.getByTestId('source-checkbox-RS'))
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
+    fireEvent.click(screen.getByTestId('source-chip-RS'))
     expect(screen.getByTestId('modal-apply')).toBeDisabled()
     fireEvent.click(screen.getByTestId('modal-clear-all'))
     expect(screen.getByTestId('modal-apply')).not.toBeDisabled()
@@ -271,9 +286,9 @@ describe('AdvancedSearchModal — pre-population', () => {
         date_to: '2023-12-31',
       },
     })
-    expect(screen.getByTestId('source-checkbox-CA')).not.toBeChecked()
-    expect(screen.getByTestId('source-checkbox-LS')).not.toBeChecked()
-    expect(screen.getByTestId('source-checkbox-RS')).toBeChecked()
+    expect(screen.getByTestId('source-chip-CA')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('source-chip-LS')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('source-chip-RS')).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByTestId('speaker-input')).toHaveValue('Manmohan Singh')
     expect(screen.getByTestId('date-from-input')).toHaveValue('2020-01-01')
     expect(screen.getByTestId('date-to-input')).toHaveValue('2023-12-31')

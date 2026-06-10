@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   SEARCH_PLACEHOLDER,
@@ -7,7 +7,31 @@ import {
   MIN_QUERY_CHARS,
   MAX_QUERY_LEN,
   STATUS_ENDPOINT,
+  BODY_BADGE_STYLES,
 } from '../lib/constants.js'
+
+const CORPUS_PILLS = [
+  { label: 'Constituent Assembly 1946–1950', source: 'CA' },
+  { label: 'Lok Sabha', source: 'LS' },
+  { label: 'Rajya Sabha', source: 'RS' },
+]
+
+const QUERY_POOLS = [
+  [
+    'fundamental rights constituent assembly',
+    'partition of Bengal',
+    'language of the union',
+    'directive principles of state policy',
+    'minorities constituent assembly',
+  ],
+  ['Ambedkar', 'Nehru', 'Sardar Patel', 'Vajpayee', 'Manmohan Singh', 'Sushma Swaraj'],
+  ['MGNREGA', 'demonetisation', 'farm laws 2020', 'right to education', 'women reservation bill'],
+  ['no confidence motion', 'emergency powers', 'budget health allocation', 'electoral reform', 'climate change'],
+]
+
+function pickRandom(pool) {
+  return pool[Math.floor(Math.random() * pool.length)]
+}
 import { defaultFilterState, isDefaultFilterState } from '../lib/filterState.js'
 import { formatCount, formatLongDate } from '../lib/statusFormat.js'
 import { useCookieHistory } from '../hooks/useCookieHistory.js'
@@ -59,6 +83,7 @@ function StatusStrip() {
 export default function Home() {
   const navigate = useNavigate()
   const [value, setValue] = useState('')
+  const [suggestedQueries] = useState(() => QUERY_POOLS.map(pickRandom))
   const [validation, setValidation] = useState('')
   const [filters, setFilters] = useState(defaultFilterState())
   const [modalOpen, setModalOpen] = useState(false)
@@ -125,6 +150,19 @@ export default function Home() {
         <div className="home-column">
           <h1 className="wordmark-home">SansadSearch</h1>
           <p className="tagline">{TAGLINE}</p>
+
+          <div className="corpus-pills-row" data-testid="corpus-pills">
+            {CORPUS_PILLS.map((pill) => (
+              <span
+                key={pill.source}
+                className="corpus-pill"
+                style={BODY_BADGE_STYLES[pill.source]}
+                data-testid={`corpus-pill-${pill.source}`}
+              >
+                {pill.label}
+              </span>
+            ))}
+          </div>
 
           <form onSubmit={onSubmit} role="search" aria-label="Site search">
             <div className="search-bar-wrap" ref={searchBarRef}>
@@ -236,6 +274,27 @@ export default function Home() {
               />
             </div>
           </div>
+
+          {value.length === 0 && (
+            <div className="suggested-queries-row" data-testid="suggested-queries">
+              <span className="suggested-queries-label">Try:</span>
+              {suggestedQueries.map((query, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="suggested-query-chip"
+                  onClick={() => {
+                    setValue(query)
+                    recordSearch(query)
+                    submitSearch(query, filters)
+                  }}
+                  data-testid="suggested-query-chip"
+                >
+                  {query}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </main>
       <StatusStrip />

@@ -360,8 +360,8 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
       </MemoryRouter>
     )
     fireEvent.click(screen.getByTestId('home-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
     await waitFor(() => {
       expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
@@ -380,8 +380,8 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
 
     // Open modal, uncheck CA so only LS + RS remain, then Apply.
     fireEvent.click(screen.getByTestId('home-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
     await waitFor(() => {
       expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
@@ -399,6 +399,57 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
     expect(navState.filters).toBeDefined()
     expect([...navState.filters.sources].sort()).toEqual(['LS', 'RS'])
     expect(navState.filters.sources).not.toContain('CA')
+  })
+})
+
+describe('Home — corpus pills', () => {
+  it('renders three corpus pills', () => {
+    global.fetch.mockResolvedValue({ ok: true, json: async () => makeStatusResponse() })
+    render(<MemoryRouter><Home /></MemoryRouter>)
+    expect(screen.getByTestId('corpus-pill-CA')).toHaveTextContent('Constituent Assembly 1946–1950')
+    expect(screen.getByTestId('corpus-pill-LS')).toHaveTextContent('Lok Sabha')
+    expect(screen.getByTestId('corpus-pill-RS')).toHaveTextContent('Rajya Sabha')
+  })
+
+  it('corpus pills are not buttons (non-interactive)', () => {
+    global.fetch.mockResolvedValue({ ok: true, json: async () => makeStatusResponse() })
+    render(<MemoryRouter><Home /></MemoryRouter>)
+    const ca = screen.getByTestId('corpus-pill-CA')
+    expect(ca.tagName).not.toBe('BUTTON')
+  })
+})
+
+describe('Home — suggested queries', () => {
+  it('renders four suggested query chips when search bar is empty', () => {
+    global.fetch.mockResolvedValue({ ok: true, json: async () => makeStatusResponse() })
+    render(<MemoryRouter><Routes><Route path="/" element={<Home />} /><Route path="/search" element={<div data-testid="results-page" />} /></Routes></MemoryRouter>)
+    const chips = screen.getAllByTestId('suggested-query-chip')
+    expect(chips).toHaveLength(4)
+  })
+
+  it('hides suggested queries when user types in search bar', () => {
+    global.fetch.mockResolvedValue({ ok: true, json: async () => makeStatusResponse() })
+    render(<MemoryRouter><Routes><Route path="/" element={<Home />} /><Route path="/search" element={<div data-testid="results-page" />} /></Routes></MemoryRouter>)
+    expect(screen.getByTestId('suggested-queries')).toBeInTheDocument()
+    fireEvent.change(screen.getByTestId('home-search-input'), { target: { value: 'a' } })
+    expect(screen.queryByTestId('suggested-queries')).toBeNull()
+  })
+
+  it('clicking a suggested query chip auto-submits and navigates to search', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: async () => makeStatusResponse() })
+    const { container } = render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/search" element={<div data-testid="results-page" />} />
+        </Routes>
+      </MemoryRouter>
+    )
+    const chips = screen.getAllByTestId('suggested-query-chip')
+    fireEvent.click(chips[0])
+    await waitFor(() => {
+      expect(screen.getByTestId('results-page')).toBeInTheDocument()
+    })
   })
 })
 

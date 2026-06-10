@@ -77,7 +77,7 @@ Both web fonts available on Google Fonts. Fallback stack: `Merriweather, Georgia
 
 ### 1. Homepage
 
-**Mockup:** `mockups/homepage.png` *(regeneration needed — corpus pills and suggested queries added)*
+**Mockup:** `mockups/homepage.png`
 
 **Layout:** Single centered column, max-width 680px, vertically centered in the viewport. Page background `#F7F4EF`. Indexing status strip pinned to bottom.
 
@@ -118,7 +118,7 @@ Both web fonts available on Google Fonts. Fallback stack: `Merriweather, Georgia
 
 ### 2. Results Page
 
-**Mockup:** `mockups/results-page-with-filters.png` *(regeneration needed — body color borders, colored body badges, debug toggle)*
+**Mockup:** `mockups/results-page-with-filters.png`
 
 **Layout:** Full-width page. Sticky header at top. Content column max-width 860px, horizontally centered. Page background `#F7F4EF`.
 
@@ -215,7 +215,7 @@ All four sections collapsed by default when panel opens.
 
 ### 3. Advanced Search Modal
 
-**Mockup:** `mockups/advanced-search-modal-ca-only.png` *(regeneration needed — toggle chips, Subject field)*
+**Mockup:** `mockups/advanced-search-modal-ca-only.png` *(shows CA-only selected state with Proceeding Type chips conditionally disabled)*
 
 **Trigger:** "Advanced Search" link in header or homepage.
 
@@ -312,6 +312,8 @@ Up to 20 items. Each item: two lines. Item padding 10px 16px. Hover bg `#F7F4EF`
 ---
 
 ### 6. Record Detail Page
+
+**Mockup:** `mockups/record-detail-page.png` *(shows Lok Sabha speech record with metadata panel, disabled load-previous at sitting boundary, focal record full text, enabled load-next with appended adjacent record)*
 
 **Route:** `/record/:id`
 

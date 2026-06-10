@@ -79,3 +79,30 @@ export function getSourceLabel(value) {
   if (value == null) return ''
   return SOURCE_LABELS[value] || value
 }
+
+// Body color palette (CA ochre, LS green, RS crimson)
+export const BODY_COLORS = {
+  CA: '#8B6914',
+  LS: '#1E6B35',
+  RS: '#9B1D20',
+}
+
+export const BODY_BADGE_STYLES = {
+  CA: { background: '#F9F3E3', color: '#8B6914' },
+  LS: { background: '#EAF4EE', color: '#1E6B35' },
+  RS: { background: '#F9ECEC', color: '#9B1D20' },
+}
+
+// Canonical text strings
+export const NO_ENGLISH_TEXT_RECORD =
+  'This record was delivered in Hindi. No English text is available.'
+export const RECORD_NOT_FOUND = 'Record not found'
+export const RECORD_NOT_FOUND_DETAIL =
+  "The record you're looking for does not exist or has been removed."
+export const BACK_TO_RESULTS = '← Back to results'
+export const BACK_TO_SEARCH = '← Search'
+export const LOAD_PREVIOUS = '↑ Load 5 previous'
+export const LOAD_NEXT = '↓ Load 5 next'
+export const ADJACENT_ERROR = 'Could not load records. Try again.'
+export const RAW_DOC_NOT_AVAILABLE = 'Raw document not available'
+export const DEBUG_BADGE_LABEL = 'Debug'

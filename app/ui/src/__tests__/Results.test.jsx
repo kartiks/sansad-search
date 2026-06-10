@@ -528,8 +528,8 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
     await waitFor(() => {
@@ -546,8 +546,8 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
     await waitFor(() => {
@@ -564,8 +564,8 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
     await waitFor(() => {
@@ -589,8 +589,8 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
     await waitFor(() => {
@@ -609,9 +609,9 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
     await waitFor(() => {
@@ -640,10 +640,10 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     const fetchCallsBefore = global.fetch.mock.calls.length
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
-    fireEvent.click(screen.getByTestId('source-checkbox-RS'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
+    fireEvent.click(screen.getByTestId('source-chip-RS'))
 
     const applyBtn = screen.getByTestId('modal-apply')
     expect(applyBtn).toBeDisabled()
@@ -740,8 +740,8 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('empty-state')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
     await waitFor(() => {
@@ -757,9 +757,9 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     await screen.findByTestId('results-list')
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
-    fireEvent.click(screen.getByTestId('source-checkbox-LS'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
     fireEvent.click(screen.getByTestId('modal-apply'))
 
     await waitFor(() => {
@@ -767,11 +767,11 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     })
 
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
+    await screen.findByTestId('source-chip-CA')
 
-    expect(screen.getByTestId('source-checkbox-CA')).not.toBeChecked()
-    expect(screen.getByTestId('source-checkbox-LS')).not.toBeChecked()
-    expect(screen.getByTestId('source-checkbox-RS')).toBeChecked()
+    expect(screen.getByTestId('source-chip-CA')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('source-chip-LS')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('source-chip-RS')).toHaveAttribute('aria-pressed', 'true')
   })
 })
 
@@ -917,8 +917,8 @@ describe('Results — F08 Search History wiring', () => {
 
     // Apply a non-default filter via the modal (uncheck CA, leaving LS + RS)
     fireEvent.click(screen.getByTestId('results-advanced-search-link'))
-    await screen.findByTestId('source-checkbox-CA')
-    fireEvent.click(screen.getByTestId('source-checkbox-CA'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
     fireEvent.click(screen.getByTestId('modal-apply'))
     await waitFor(() => {
       expect(screen.queryByTestId('advanced-search-modal')).toBeNull()

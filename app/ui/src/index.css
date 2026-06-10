@@ -104,7 +104,59 @@ mark {
   font-size: 14px;
   color: var(--text-secondary);
   text-align: center;
-  margin: 0 0 20px 0;
+  margin: 0 0 8px 0;
+}
+
+/* ── Corpus pills row (homepage) ────────────────────────── */
+
+.corpus-pills-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.corpus-pill {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 20px;
+}
+
+/* ── Suggested queries row (homepage) ───────────────────── */
+
+.suggested-queries-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.suggested-queries-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.suggested-query-chip {
+  background: var(--chip-bg);
+  color: var(--chip-text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.suggested-query-chip:hover {
+  background: #E0E5F2;
 }
 
 .below-bar-row {
@@ -521,11 +573,28 @@ mark {
   display: inline-block;
   background: var(--chip-bg);
   color: var(--chip-text);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 12px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid #C5CADC;
 }
+
+/* ── Body badge (colored source pill on cards) ───────────── */
+
+.body-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 20px;
+}
+
+/* ── Card body-color left border variants ────────────────── */
+
+.result-card--CA { border-left: 3px solid #8B6914; }
+.result-card--LS { border-left: 3px solid #1E6B35; }
+.result-card--RS { border-left: 3px solid #9B1D20; }
 
 .metadata-sep {
   color: var(--text-secondary);
@@ -1008,6 +1077,82 @@ mark {
   flex: 0 0 auto;
 }
 
+/* ── Debug badge (results header, debug mode only) ─────── */
+
+.debug-badge {
+  background: rgba(201, 106, 30, 0.1);
+  color: #C96A1E;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ── Modal toggle chips (body + proceeding type) ──────── */
+
+.modal-toggle-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modal-toggle-chip {
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+
+.modal-toggle-chip--sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.modal-toggle-chip:disabled,
+.modal-toggle-chip--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.modal-chip-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.modal-chip-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.modal-chip-action-btn {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.modal-chip-action-btn:hover {
+  text-decoration: underline;
+  color: var(--text-primary);
+}
+
 /* Filter fields */
 
 .filter-field {
@@ -1254,7 +1399,7 @@ mark {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 16px 20px;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1299,6 +1444,7 @@ mark {
   border-radius: 8px;
   padding: 20px 24px;
   line-height: 1.7;
+  margin-bottom: 12px;
 }
 
 .record-text-para {
@@ -1327,6 +1473,62 @@ mark {
   margin-bottom: 12px;
 }
 
+/* ── Load 5 previous / next controls ─────────────────────── */
+
+.record-adjacent-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.record-adjacent-error {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--secondary);
+  text-align: center;
+}
+
+.record-load-btn {
+  height: 36px;
+  min-width: 160px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--primary);
+  font-size: 14px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0 20px;
+}
+
+.record-load-btn:hover:not(:disabled) {
+  background: var(--chip-bg);
+  border-color: #C5CADC;
+}
+
+.record-load-btn:disabled {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  cursor: default;
+  background: var(--surface);
+}
+
+/* ── Record detail body-color left borders ───────────────── */
+
+.record-detail-metadata--CA,
+.record-detail-fulltext--CA,
+.record-adjacent-item--CA { border-left: 3px solid #8B6914; }
+
+.record-detail-metadata--LS,
+.record-detail-fulltext--LS,
+.record-adjacent-item--LS { border-left: 3px solid #1E6B35; }
+
+.record-detail-metadata--RS,
+.record-detail-fulltext--RS,
+.record-adjacent-item--RS { border-left: 3px solid #9B1D20; }
+
 /* ── Adjacent record cards (F09 inline loading) ──────────── */
 
 .record-adjacent-item {
@@ -1334,7 +1536,7 @@ mark {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 16px;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .record-adjacent-meta {

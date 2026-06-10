@@ -258,3 +258,20 @@ describe('QACard — F05 v2.0: time_of_day', () => {
     expect(screen.queryByTestId('time-of-day')).toBeNull()
   })
 })
+
+describe('QACard — body badge and left border', () => {
+  it('renders a body badge for LS source', () => {
+    renderCard(makeQAResult({ source: 'LS' }))
+    expect(screen.getByTestId('body-badge')).toHaveTextContent('Lok Sabha')
+  })
+
+  it('renders a body badge for RS source', () => {
+    renderCard(makeQAResult({ source: 'RS' }))
+    expect(screen.getByTestId('body-badge')).toHaveTextContent('Rajya Sabha')
+  })
+
+  it('adds body-color class to the card based on source', () => {
+    const { container } = renderCard(makeQAResult({ source: 'RS' }))
+    expect(container.querySelector('[data-testid="qa-card"]').className).toContain('result-card--RS')
+  })
+})

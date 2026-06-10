@@ -17,6 +17,7 @@ import {
   ERROR_STATE_TITLE,
   ERROR_STATE_BODY,
   NO_RESULTS_BODY,
+  DEBUG_BADGE_LABEL,
 } from '../lib/constants.js'
 import {
   defaultFilterState,
@@ -407,6 +408,11 @@ export default function Results() {
                 onDismiss={() => setSavedPanelOpen(false)}
               />
             </div>
+            {debugMode && (
+              <span className="debug-badge" data-testid="debug-badge">
+                {DEBUG_BADGE_LABEL}
+              </span>
+            )}
           </div>
         </div>
       </header>

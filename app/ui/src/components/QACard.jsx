@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom'
 import {
   getProceedingTypeLabel,
-  getSourceLabel,
+  SOURCE_LABELS,
+  BODY_BADGE_STYLES,
   UNTRANSLATED_SPEECH_MESSAGE,
   SUPPLEMENTARY_PREFIX,
 } from '../lib/constants.js'
@@ -27,7 +28,8 @@ function LangBadge({ lang_original }) {
 
 function MetadataRow({ result }) {
   const ptypeLabel = getProceedingTypeLabel(result.proceeding_type)
-  const bodyLabel = getSourceLabel(result.source)
+  const bodyLabel = SOURCE_LABELS[result.source] || result.source || ''
+  const badgeStyle = BODY_BADGE_STYLES[result.source] || {}
   const dateLabel = result.date_display || ''
   const sessionLabel = result.session_name || ''
 
@@ -37,7 +39,13 @@ function MetadataRow({ result }) {
       {bodyLabel && (
         <>
           <span className="metadata-sep">·</span>
-          <span>{bodyLabel}</span>
+          <span
+            className="body-badge"
+            style={badgeStyle}
+            data-testid="body-badge"
+          >
+            {bodyLabel}
+          </span>
         </>
       )}
       {dateLabel && (
@@ -92,7 +100,10 @@ export default function QACard({ result, detailTo, detailState }) {
           : null
 
   return (
-    <article className="result-card" data-testid="qa-card">
+    <article
+      className={`result-card${result.source ? ` result-card--${result.source}` : ''}`}
+      data-testid="qa-card"
+    >
       <MetadataRow result={result} />
 
       {subject && (

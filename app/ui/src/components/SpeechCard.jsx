@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom'
 import {
   getProceedingTypeLabel,
-  getSourceLabel,
+  SOURCE_LABELS,
+  BODY_BADGE_STYLES,
   UNTRANSLATED_SPEECH_MESSAGE,
 } from '../lib/constants.js'
 import { sanitizeSnippet } from '../lib/sanitizeSnippet.js'
@@ -25,9 +26,9 @@ function LangBadge({ lang_original }) {
 }
 
 function MetadataRow({ result }) {
-  const parts = []
   const ptypeLabel = getProceedingTypeLabel(result.proceeding_type)
-  const bodyLabel = getSourceLabel(result.source)
+  const bodyLabel = SOURCE_LABELS[result.source] || result.source || ''
+  const badgeStyle = BODY_BADGE_STYLES[result.source] || {}
   const dateLabel = result.date_display || ''
   const sessionLabel = result.session_name || ''
 
@@ -37,7 +38,13 @@ function MetadataRow({ result }) {
       {bodyLabel && (
         <>
           <span className="metadata-sep">·</span>
-          <span>{bodyLabel}</span>
+          <span
+            className="body-badge"
+            style={badgeStyle}
+            data-testid="body-badge"
+          >
+            {bodyLabel}
+          </span>
         </>
       )}
       {dateLabel && (
@@ -77,7 +84,10 @@ export default function SpeechCard({ result, detailTo, detailState }) {
   const metaText = meta.join(' · ')
 
   return (
-    <article className="result-card" data-testid="speech-card">
+    <article
+      className={`result-card${result.source ? ` result-card--${result.source}` : ''}`}
+      data-testid="speech-card"
+    >
       <MetadataRow result={result} />
 
       <div className="speaker-row">

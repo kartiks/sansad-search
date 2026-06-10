@@ -4,6 +4,17 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import RecordDetail from '../pages/RecordDetail.jsx'
 import { makeRecordDetail, makeAdjacentRecord } from './fixtures.js'
 
+vi.mock('../lib/cookie.js', () => ({
+  areCookiesEnabled: vi.fn().mockReturnValue(false),
+  readCookie: vi.fn().mockReturnValue(null),
+  writeCookie: vi.fn(),
+  deleteCookie: vi.fn(),
+  trimRecentToFit: vi.fn((entries) => entries),
+  RECENT_COOKIE: 'ss_recent',
+  SAVED_COOKIE: 'ss_saved',
+  MAX_COMBINED_BYTES: 4096,
+}))
+
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -603,7 +614,7 @@ describe('RecordDetail — adjacent load error UI', () => {
     fireEvent.click(screen.getByTestId('load-next-button'))
 
     await waitFor(() => expect(screen.getByTestId('adjacent-error-next')).toBeInTheDocument())
-    expect(screen.getByTestId('adjacent-error-next')).toHaveTextContent('Unable to load next records.')
+    expect(screen.getByTestId('adjacent-error-next')).toHaveTextContent('Could not load records. Try again.')
   })
 
   it('renders adjacent-error-prev message when a prev load fails', async () => {
@@ -617,7 +628,7 @@ describe('RecordDetail — adjacent load error UI', () => {
     fireEvent.click(screen.getByTestId('load-prev-button'))
 
     await waitFor(() => expect(screen.getByTestId('adjacent-error-prev')).toBeInTheDocument())
-    expect(screen.getByTestId('adjacent-error-prev')).toHaveTextContent('Unable to load previous records.')
+    expect(screen.getByTestId('adjacent-error-prev')).toHaveTextContent('Could not load records. Try again.')
   })
 
   it('first batch records remain in DOM after a subsequent failed batch', async () => {
