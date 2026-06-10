@@ -5,9 +5,20 @@ Provides two components:
   - RSSource  — legacy Phase 1-2 fetcher (HTML/PDF from rajyasabha.gov.in index
                 page). Kept for backward compatibility; superseded by
                 RSOrchestrator.
-  - RSOrchestrator — Phase 9 orchestrator using the multi-provider chain
-                     [SansadRsHtmlProvider, InternetArchiveProvider(RS),
-                     RsdebateDspaceProvider].
+  - RSOrchestrator — orchestrator using the multi-provider chain:
+                     [InternetArchiveProvider(RS)].
+
+Provider coverage:
+  InternetArchiveProvider(RS) — IA eparlib.nic.in.* collection (1947-08-15 to
+                                Aug 2018, djvu.txt pre-OCR text).
+
+RS coverage gap (post-Aug 2018):
+  - SansadRsHtmlProvider is removed: sansad.in/rs/debates/officials was redesigned
+    as a JavaScript SPA around 2019; the static HTML scraper returns zero records.
+  - RsdebateDspaceProvider is removed: rsdebate.nic.in is unresponsive as of 2026-06.
+  - elibrary.sansad.in has no modern Rajya Sabha debates collection.
+  RS data after August 2018 is currently unavailable from accessible sources.
+  These providers remain as classes in their modules for future reactivation.
 """
 from __future__ import annotations
 
@@ -36,13 +47,14 @@ from ingest.sources._http import (
 )
 from ingest.sources._provider import DocumentRef, Provider, extract_stage1_fields
 from ingest.sources.providers.internet_archive import InternetArchiveProvider
-from ingest.sources.providers.rsdebate_dspace import RsdebateDspaceProvider
-from ingest.sources.providers.sansad_rs_html import SansadRsHtmlProvider
 
 logger = logging.getLogger(__name__)
 
 
-RS_SCOPE_FROM: date = date(2014, 1, 1)
+# Expanded to 15 August 1947 (Independence Day).  The IA eparlib collection
+# contains RS (Council of States) records from 1921; 1947-08-15 is the lower
+# bound for this application.  Modern Rajya Sabha sessions begin in 1952.
+RS_SCOPE_FROM: date = date(1947, 8, 15)
 RS_INDEX_URL: str = "https://rajyasabha.gov.in/rsnew/business/parlamentary_business.asp"
 
 # URL path fragments → proceeding type (RS may use different URL patterns)
@@ -244,10 +256,19 @@ class RSOrchestrator:
             _df["date_from"] = date_from
         if date_to is not None:
             _df["date_to"] = date_to
+        # RS_SCOPE_FROM as a string — used as the effective default date_from for
+        # the IA provider when the caller does not supply one.
+        _rs_scope_str = RS_SCOPE_FROM.isoformat()
         self._providers: list[Provider] = providers or [
-            SansadRsHtmlProvider(client, rate_delay=rate_delay, **_df),
-            InternetArchiveProvider(client, corpus="RS", rate_delay=rate_delay, **_df),
-            RsdebateDspaceProvider(client, rate_delay=rate_delay, **_df),
+            # IA: covers 1947-08-15 to Aug 2018.
+            # SansadRsHtmlProvider and RsdebateDspaceProvider removed — see module docstring.
+            InternetArchiveProvider(
+                client,
+                corpus="RS",
+                rate_delay=rate_delay,
+                date_from=_df.get("date_from", _rs_scope_str),
+                date_to=_df.get("date_to"),
+            ),
         ]
         # Per-sitting sequence counter shared across all providers and record types
         self._sitting_seq: dict[str, int] = {}

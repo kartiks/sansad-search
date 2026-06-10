@@ -8,7 +8,8 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 
 ## Date Range Gap
 
-- A date range of 1948-01-01 to 2015-12-31 must return CA records dated 1948-01-01 to 1950-12-31 and LS/RS records dated 2014-01-01 to 2015-12-31; no records from 1951–2013 must appear; no error must be shown for the gap years
+- A date range spanning the gap between CA proceedings and LS/RS sittings (e.g., 1951-01-01 to 1951-12-31, after CA ended and before Parliament was constituted) must return zero results without error
+- A date range that spans records from multiple sources with a gap between them must return the union of records from each source within the range; no error must be shown for the gap years
 
 ## Proceeding Type Constraint When Only CA Is Selected
 
@@ -32,6 +33,11 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 ## Date Validation Ordering
 
 - Setting From = 2022-06-01 and To = 2021-01-01 (From after To) must show an inline validation error and must not modify the displayed result set
+
+## Subject Filter Substring Matching
+
+- A subject filter value that is a substring of a longer subject (e.g., "Water" matching a record with subject "Water Resources Management") must produce a match; an exact-only match implementation is a bug
+- A subject filter value containing only whitespace must be treated as an empty filter; the result set must be identical to the unfiltered result set
 
 ## Combined Filter AND Logic
 

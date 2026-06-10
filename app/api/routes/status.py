@@ -1,15 +1,18 @@
 """
-GET /api/status route — returns the most recent ingestion run summary from
-the index_status PostgreSQL table.  Three possible response shapes:
+GET /api/status route — returns live document counts from the speeches and
+qa_exchanges tables, grouped by source.  Three possible response shapes:
 
-  1. Populated  — a completed ingestion run exists.
-  2. Never-run  — index_status table is empty (ingestion never ran).
-  3. Unavailable — table is unreadable or malformed.
+  1. Populated  — at least one indexed record exists.
+  2. Never-run  — both tables are empty (ingestion never ran).
+  3. Unavailable — tables are unreadable or malformed.
+
+last_updated is taken from the most recent index_status run timestamp (when
+present) and reflects when ingestion last completed, not the count query time.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends
 
@@ -18,7 +21,25 @@ from api.lib.db import get_pool
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-_QUERY = "SELECT * FROM index_status ORDER BY run_completed_at DESC LIMIT 1"
+# Live per-source counts and date ranges from the actual indexed tables.
+_LIVE_COUNTS_QUERY = """
+SELECT
+    source,
+    COUNT(*)    AS count,
+    MIN(date)   AS date_from,
+    MAX(date)   AS date_to
+FROM (
+    SELECT source, date FROM speeches
+    UNION ALL
+    SELECT source, date FROM qa_exchanges
+) combined
+GROUP BY source
+"""
+
+_LAST_UPDATED_QUERY = (
+    "SELECT run_completed_at FROM index_status "
+    "ORDER BY run_completed_at DESC LIMIT 1"
+)
 
 # ── Response builders ─────────────────────────────────────────────────────────
 
@@ -43,34 +64,31 @@ def _never_run_response() -> dict:
     }
 
 
-def _populated_response(row: Any) -> dict:
-    """
-    Build the populated response from an asyncpg Record (or dict-like row).
-    """
-    def _get(key: str) -> Any:
-        try:
-            return row[key]
-        except (KeyError, TypeError, IndexError):
-            return None
+def _build_response(rows: list[Any], last_updated: Any) -> dict:
+    by_source: dict[str, dict] = {}
+    for row in rows:
+        src = str(row["source"]).lower()
+        by_source[src] = {
+            "count": row["count"] or 0,
+            "date_from": row["date_from"],
+            "date_to": row["date_to"],
+        }
 
-    run_at = _get("run_completed_at")
-    last_updated = run_at.isoformat() if run_at else None
+    sources = {}
+    total = 0
+    for key in ("ca", "ls", "rs"):
+        entry = by_source.get(key, {})
+        count = entry.get("count", 0)
+        total += count
+        sources[key] = _source_block(count, entry.get("date_from"), entry.get("date_to"))
+
+    last_updated_str = last_updated.isoformat() if last_updated else None
 
     return {
         "status": "ok",
-        "total_records": _get("total_records") or 0,
-        "sources": {
-            "ca": _source_block(
-                _get("ca_count"), _get("ca_date_from"), _get("ca_date_to")
-            ),
-            "ls": _source_block(
-                _get("ls_count"), _get("ls_date_from"), _get("ls_date_to")
-            ),
-            "rs": _source_block(
-                _get("rs_count"), _get("rs_date_from"), _get("rs_date_to")
-            ),
-        },
-        "last_updated": last_updated,
+        "total_records": total,
+        "sources": sources,
+        "last_updated": last_updated_str,
     }
 
 
@@ -79,20 +97,22 @@ def _populated_response(row: Any) -> dict:
 @router.get("/api/status")
 async def get_status(pool: Any = Depends(get_pool)) -> Any:
     """
-    GET /api/status — return the most recent ingestion run summary.
+    GET /api/status — return live record counts from speeches + qa_exchanges.
     """
     try:
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(_QUERY)
+            rows = await conn.fetch(_LIVE_COUNTS_QUERY)
+            last_updated_row = await conn.fetchrow(_LAST_UPDATED_QUERY)
     except Exception as exc:
-        logger.warning("index_status query failed: %s", exc)
+        logger.warning("status query failed: %s", exc)
         return {"status": "unavailable"}
 
-    if row is None:
+    if not rows:
         return _never_run_response()
 
     try:
-        return _populated_response(row)
+        last_updated = last_updated_row["run_completed_at"] if last_updated_row else None
+        return _build_response(rows, last_updated)
     except Exception as exc:
-        logger.warning("index_status row malformed: %s", exc)
+        logger.warning("status response build failed: %s", exc)
         return {"status": "unavailable"}

@@ -2,6 +2,10 @@
 
 Supplements the feature spec. Does not repeat acceptance criteria or edge cases already stated there.
 
+## Curly Quote Normalization
+
+- A query string containing U+201C (") and U+201D (") around a phrase must result in those characters being converted to ASCII straight double quotes before the query is transmitted to Meilisearch; U+201C and U+201D must not appear in the query string sent to the search engine
+
 ## Bidirectionality
 
 - A query for "House of the People" must expand to include "Lok Sabha" at synonym weight; a query for "Lok Sabha" must expand to include "House of the People" at synonym weight

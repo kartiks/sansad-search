@@ -30,7 +30,7 @@ Cookie-based recent searches and saved searches. No sign-in is required. All dat
 ### What is stored per saved search
 - Name: defaults to the query text; user can rename to a custom label (max 60 characters)
 - Query text
-- Active filter state at the time of saving (legislative body, date range, speaker, session, proceeding type selections)
+- Active filter state at the time of saving (legislative body, date range, speaker, session, subject, proceeding type selections)
 - Save timestamp
 
 ### Actions

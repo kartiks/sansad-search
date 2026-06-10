@@ -674,3 +674,113 @@ class TestLokSabhaNumberPassthrough:
         text = "SHRI TEST :\nA speech.\n"
         result = segment_speeches(_raw_record(text), "LS")
         assert result[0]["lok_sabha_number"] is None
+
+
+# ── Inline attribution format (elibrary.sansad.in Tika text) ─────────────────
+
+class TestInlineAttribution:
+    """
+    segment_speeches() handles the elibrary Tika-extracted format where the
+    speaker name and the first sentence of the speech appear on the same line:
+        SHRI NAME (CONSTITUENCY): text...
+    This is distinct from the standalone-attribution format used in IA djvu.txt
+    and HTML-parsed texts (NAME:\ntext).
+    """
+
+    def test_inline_attribution_produces_record(self):
+        """A single inline attribution line yields one speech record."""
+        text = "SHRI KRISHNAPAL SINGH YADAV: Hon. Speaker, Sir, I would like to raise a point."
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 1
+        assert "KRISHNAPAL SINGH YADAV" in result[0]["speaker_name"]
+
+    def test_constituency_stripped_from_inline_name(self):
+        """Trailing (CONSTITUENCY) is removed from the extracted speaker name."""
+        text = "SHRI B. MANICKAM TAGORE (VIRUDHUNAGAR): Sir, atrocities are taking place."
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 1
+        assert "VIRUDHUNAGAR" not in result[0]["speaker_name"]
+        assert "MANICKAM TAGORE" in result[0]["speaker_name"]
+
+    def test_inline_speech_body_captured(self):
+        """Text after the colon on the attribution line is included in the speech body."""
+        text = (
+            "SHRI NARANBHAI KACHHADIYA (AMRELI): At present, the government has not\n"
+            "announced any relief for the farmers.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 1
+        body = result[0]["full_text_en"]
+        assert "At present" in body
+        assert "farmers" in body
+
+    def test_multiple_inline_speakers_yield_multiple_records(self):
+        """Multiple inline attributions in sequence each produce a record."""
+        text = (
+            "SHRI RAMCHARAN BOHRA: Hon. Speaker, Sir, I would like to know the status.\n"
+            "\n"
+            "DR. BHARATI PRAVIN PAWAR: Hon. Speaker, Sir, as regards the question,\n"
+            "the government has taken steps.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 2
+        names = [r["speaker_name"] for r in result]
+        assert any("BOHRA" in n for n in names)
+        assert any("PAWAR" in n for n in names)
+
+    def test_hon_speaker_inline_excluded(self):
+        """HON. SPEAKER inline attributions are excluded as presiding officer."""
+        text = (
+            "HON. SPEAKER: Question Hour.\n"
+            "\n"
+            "SHRI MANOJ TIWARI: Hon. Speaker, Sir, I would like to ask.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 1
+        assert "TIWARI" in result[0]["speaker_name"]
+
+    def test_wrapped_minister_name_fragment_handled(self):
+        """A wrapped minister name ending in ): is attributed to the partial name."""
+        # In Tika text, multi-line minister names produce fragments like "JOSHI): text"
+        text = (
+            "PRALHAD JOSHI): Sir, he has spoken about breaking the law.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 1
+        # Trailing ) stripped; speaker name should not contain a bare ")"
+        assert ")" not in result[0]["speaker_name"]
+        assert "JOSHI" in result[0]["speaker_name"]
+
+    def test_inline_and_standalone_in_same_document(self):
+        """A document mixing standalone (IA-format) and inline (Tika-format)
+        attributions produces records for both."""
+        text = (
+            "SHRI STANDALONE SPEAKER :\n"
+            "This is the old format.\n"
+            "\n"
+            "SHRI INLINE SPEAKER (CONSTITUENCY): This is the new format.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        assert len(result) == 2
+
+    def test_presiding_officer_inline_does_not_break_adjacent_merge(self):
+        """A HON. SPEAKER line between two same-speaker speeches acts as a
+        break signal (excluded speaker → break_after)."""
+        text = (
+            "SHRI MANOJ TIWARI: I would like to ask about the first issue.\n"
+            "\n"
+            "HON. SPEAKER: Please be brief.\n"
+            "\n"
+            "SHRI MANOJ TIWARI: And now the second issue.\n"
+        )
+        result = segment_speeches(_raw_record(text), "LS")
+        # HON. SPEAKER is excluded; the two TIWARI speeches are NOT merged
+        # because an excluded speaker between them acts as a break signal.
+        assert len(result) == 2
+        assert all("TIWARI" in r["speaker_name"] for r in result)
+
+    def test_is_presiding_officer_hon_speaker(self):
+        """_is_presiding_officer now recognises HON. SPEAKER and HON. DEPUTY SPEAKER."""
+        assert _is_presiding_officer("HON. SPEAKER") is True
+        assert _is_presiding_officer("HON SPEAKER") is True
+        assert _is_presiding_officer("HON. DEPUTY SPEAKER") is True

@@ -4,8 +4,9 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 
 ## Date Range Boundary
 
-- Records dated exactly 2014-01-01 are included in scope; records dated 2013-12-31 are excluded
-- Scope is fixed at 2014-01-01, not a rolling window recalculated at run time
+- LS records dated exactly 1947-08-15 are included in scope; LS records dated 1947-08-14 are excluded
+- RS records dated exactly 1947-08-15 are included in scope; RS records dated 1947-08-14 are excluded
+- Scope boundaries are fixed constants, not rolling windows recalculated at run time
 
 ## Deduplication
 
@@ -82,9 +83,8 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 
 ## Source URL Rules
 
-- An LS record (regardless of which provider fetched it) must have `source_url` set to an Internet Archive URL (archive.org domain); it must not contain "eparlib.sansad.in"
-- An RS record fetched via Internet Archive or rsdebate.nic.in must have `source_url` set to an Internet Archive URL; it must not contain "rsdebate.nic.in"
-- An RS record fetched from sansad.in HTML must have `source_url` containing "sansad.in"
+- An LS record (regardless of which provider fetched it) must have `source_url` set to an Internet Archive URL (archive.org domain)
+- An RS record must have `source_url` set to an Internet Archive URL (archive.org domain); the current RS chain contains Internet Archive only
 - A CA record must have `source_url` containing "constitutionofindia.net"
 
 ## Adjacent Speech Merging

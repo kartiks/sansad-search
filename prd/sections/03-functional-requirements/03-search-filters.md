@@ -37,7 +37,7 @@ Filters allow users to narrow search results by legislative body, date range, sp
 - Both are optional; leaving one or both empty applies no date bound on that side
 - Date range is constrained to the indexed scope:
   - When only CA is selected in the body filter: picker restricts to 1946-01-01 – 1950-12-31
-  - When only LS and/or RS is selected: minimum selectable date is 2014-01-01
+  - When only LS and/or RS is selected: minimum selectable date is 1947-08-15
   - When CA and LS/RS are both selected: full range 1946-01-01 to present is selectable; records from each body are included within their respective indexed scope
 - From date must not be later than To date; if it is, an inline validation message is shown and the filter is not applied
 
@@ -55,7 +55,13 @@ Filters allow users to narrow search results by legislative body, date range, sp
 - CA records have null `session_name` and will not match any session filter query; when a session filter is active, CA records are excluded from results
 - No autocomplete in v1
 
-### 5. Proceeding type
+### 5. Subject
+- Free text input; case-insensitive substring match against the `subject` field
+- Matches records whose subject contains the entered string anywhere
+- Empty field: no subject filter applied
+- No autocomplete in v1
+
+### 6. Proceeding type
 - Multi-select: Debate, Starred Question, Unstarred Question, Zero Hour, Short Notice Question, Calling Attention, Short Duration Discussion, Adjournment Motion, Private Member Bill
 - Default: all types selected (no type restriction)
 - Available options are constrained by the legislative body selection:
@@ -74,7 +80,8 @@ Examples:
 
 ## Acceptance Criteria
 
-- All five filter dimensions are available on the results page
+- All six filter dimensions are available on the results page
+- Subject filter applies a case-insensitive substring match against the `subject` field; empty value applies no subject restriction
 - Each filter can be set independently or in any combination
 - Active filters are visibly indicated on the results page (e.g., filter chips or highlighted state)
 - A "clear filters" control resets all filters to their defaults in a single action
@@ -91,7 +98,7 @@ Examples:
 - All legislative bodies deselected: show validation message ("Select at least one source"); do not execute search with zero bodies selected
 - Speaker filter with no matching canonical name in the index: show no-results state; do not error
 - Session filter value that partially matches multiple sessions (e.g., "Session 2022" matches Monsoon Session 2022, Budget Session 2022, Winter Session 2022): all matching sessions are included in results
-- Date range spans the gap between CA (1946–1950) and LS/RS (2014–present): no records exist in the gap years; result set is the union of CA records within range and LS/RS records within range; no error
+- Date range spans years with no indexed records (e.g., between the end of CA proceedings and the first LS/RS sittings, or RS years not covered by the current provider chain): result set is the union of records that exist within the range from each indexed source; no error is shown for the gaps
 
 ## Dependencies
 

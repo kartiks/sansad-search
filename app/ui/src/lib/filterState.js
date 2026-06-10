@@ -8,6 +8,7 @@ export function defaultFilterState() {
     date_to: null,
     speaker: null,
     session: null,
+    subject: null,
   }
 }
 
@@ -20,7 +21,8 @@ export function isDefaultFilterState(state) {
     !state.date_from &&
     !state.date_to &&
     !state.speaker &&
-    !state.session
+    !state.session &&
+    !state.subject
   )
 }
 
@@ -79,5 +81,6 @@ export function toApiFilters(state) {
   if (state.date_to) out.date_to = state.date_to
   if (state.speaker && state.speaker.trim()) out.speaker = state.speaker.trim()
   if (state.session && state.session.trim()) out.session = state.session.trim()
+  if (state.subject && state.subject.trim()) out.subject = state.subject.trim()
   return Object.keys(out).length === 0 ? null : out
 }

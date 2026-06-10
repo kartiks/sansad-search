@@ -71,8 +71,10 @@ When neither flag is provided, both stages operate on the full corpus without da
 | Source | Content | Date scope | Format | Base URL |
 |--------|---------|------------|--------|----------|
 | Constituent Assembly | Plenary debates | All 12 volumes, 1946–1950 | HTML | constitutionofindia.net |
-| Lok Sabha | Debates and questions | 2014-01-01 to present | Pre-OCR plain text (_djvu.txt); PDF | eparlib.sansad.in (primary); Internet Archive _djvu.txt pre-OCR text (fallback) |
-| Rajya Sabha | Debates and questions | 2014-01-01 to present | HTML and PDF | sansad.in/rs HTML (primary); Internet Archive; rsdebate.nic.in DSpace (fallback) |
+| Lok Sabha | Debates and questions | 1947-08-15 to present | Pre-OCR plain text (_djvu.txt); Tika-extracted PDF text | Internet Archive _djvu.txt pre-OCR text; elibrary.sansad.in DSpace 7 Text of Debates English (2019-01-01 to present) |
+| Rajya Sabha | Debates and questions | 1947-08-15 to present | Pre-OCR plain text (_djvu.txt) | Internet Archive (see RS coverage note below) |
+
+**RS coverage note:** The Rajya Sabha provider chain currently contains Internet Archive only. `sansad.in/rs` was removed because it is JavaScript-rendered and not crawlable; `rsdebate.nic.in` was removed because it is unresponsive. RS coverage therefore reflects what Internet Archive holds, which does not currently extend to post-2018 records. The provider chain is designed to be extended — adding a new RS provider restores coverage for the periods it serves without requiring changes to this spec.
 
 ## Proceeding Types Indexed
 
@@ -115,7 +117,7 @@ When neither flag is provided, both stages operate on the full corpus without da
 | `is_translated` | true if `full_text_en` contains or includes official English translation of Hindi portions |
 | `has_untranslated_content` | true if any portion of the speech could not be indexed due to absent translation |
 | `speaker_name_unresolved` | true if `speaker_name` could not be matched to a canonical form in the names dictionary |
-| `source_url` | URL of the original source document. For LS records: always the Internet Archive URL (eparlib.sansad.in is not reliably accessible and must not be used). For RS records fetched via Internet Archive or rsdebate.nic.in: the Internet Archive URL. For RS records fetched from sansad.in HTML: the sansad.in URL. For CA records: the constitutionofindia.net URL. Null if no accessible URL can be derived for the record. |
+| `source_url` | URL of the original source document. For LS records: the Internet Archive URL. For RS records: the Internet Archive URL (current chain contains Internet Archive only). For CA records: the constitutionofindia.net URL. Null if no accessible URL can be derived for the record. |
 | `page_reference` | Page number in source PDF; null for HTML sources |
 | `sequence_within_sitting` | Integer position of this speech within the sitting's proceedings, derived from document order (1-based); for merged speeches, the position of the first segment in the merge group |
 | `volume` | CA volume number (1–12); null for LS/RS |
@@ -144,7 +146,7 @@ When neither flag is provided, both stages operate on the full corpus without da
 | `word_count` | Integer word count of `full_text_en` computed at ingest; null if `full_text_en` is null |
 | `is_translated` | true if any portion was translated from Hindi |
 | `has_untranslated_content` | true if any portion could not be indexed due to absent translation |
-| `source_url` | URL of the original source document. For LS records: always the Internet Archive URL (eparlib.sansad.in is not reliably accessible and must not be used). For RS records fetched via Internet Archive or rsdebate.nic.in: the Internet Archive URL. For RS records fetched from sansad.in HTML: the sansad.in URL. Null if no accessible URL can be derived. |
+| `source_url` | URL of the original source document. For LS records: the Internet Archive URL. For RS records: the Internet Archive URL (current chain contains Internet Archive only). Null if no accessible URL can be derived. |
 | `page_reference` | Page number in source PDF; null for HTML sources |
 | `sequence_within_sitting` | Integer position of this Q+A exchange within the sitting's proceedings, derived from document order (1-based); shared sequence space with speech units within the same sitting |
 | `lok_sabha_number` | Lok Sabha term number (e.g., 17 for the 17th Lok Sabha); INTEGER; extracted from source data at ingestion time; null for RS records |
@@ -249,7 +251,8 @@ When the same proceeding is available as both HTML and PDF from the source site,
 ## Acceptance Criteria
 
 - All 12 volumes of CA debates are ingested; speeches indexed per individual member contribution
-- All LS and RS records dated 2014-01-01 or later are ingested across all proceeding types listed above
+- All LS records dated 1947-08-15 or later available in the LS provider chain are ingested across all proceeding types listed above
+- RS records are ingested from all providers in the RS provider chain; coverage reflects what those providers make accessible
 - Every indexed record has: id, source, proceeding_type, date, subject, full_text_en (or null with has_untranslated_content flag), source_url, lang_original
 - `id` is a stable UUID that does not change across re-runs for the same record
 - `word_count` is present and non-null for all records where `full_text_en` is not null; null where `full_text_en` is null
@@ -265,7 +268,7 @@ When the same proceeding is available as both HTML and PDF from the source site,
 - `--stage all --date-from X --date-to Y` produces `speeches`/`qa_exchanges` records only for dates within the specified range
 - LS speech and Q+A records have `lok_sabha_number` populated with the correct Lok Sabha term number; RS and CA records have `lok_sabha_number: null`
 - `minister_name` never contains question preamble text (e.g., "Will the minister of [Ministry] be pleased to state…"); Q+A records where the minister's name is not identifiable from the response section have `minister_name` set to "Minister of [Ministry]"
-- For LS records, `source_url` is the Internet Archive URL; for RS records fetched via IA or rsdebate.nic.in, `source_url` is the Internet Archive URL; for RS records from sansad.in HTML, `source_url` is the sansad.in URL; for CA records, `source_url` is the constitutionofindia.net URL
+- For LS records, `source_url` is the Internet Archive URL; for RS records, `source_url` is the Internet Archive URL; for CA records, `source_url` is the constitutionofindia.net URL
 - Adjacent speeches by the same speaker with no break signal between them are merged into a single record; the merged record's `segments` array contains one element per original speech; `full_text_en` is the concatenation of all segment texts separated by `\n\n`
 - Adjacent speeches by the same speaker separated by a different speaker's speech, a section heading, or a procedural entry are stored as separate records with distinct `sequence_within_sitting` values
 
@@ -278,7 +281,6 @@ When the same proceeding is available as both HTML and PDF from the source site,
 - HTTP 5xx errors: retry up to 3 times with exponential backoff; log and skip if all retries fail
 - HTTP 429 (rate limited): back off with exponential delay and retry; do not skip
 - Malformed or unparseable HTML/PDF: log parsing error with document URL; skip
-- RS record fetched from Internet Archive with no derivable DSpace handle: set `source_url` to null; log a warning; do not use the archive.org URL as a fallback to this rule
 - Records outside the date scope appearing within an in-scope document: skip those records; continue processing in-scope records in the same document
 - Q+A record where the minister's name is not present in the response section: `minister_name` is set to "Minister of [Ministry]" using the value of the `ministry` field; must never be set to question preamble text such as "Will the minister of [Ministry] be pleased to state…"
 - Merged speech where some segments have English text and others do not (e.g., first segment in English, subsequent segment in Hindi with no translation): `full_text_en` must include the available English segments; `has_untranslated_content` must be set to true; `full_text_en` must not be null solely because one segment lacked a translation

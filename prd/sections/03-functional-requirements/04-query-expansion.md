@@ -4,6 +4,14 @@
 
 Query expansion augments user queries with synonyms and spell corrections before search execution, improving recall for users who search with different terminology than what appears in the indexed records. Expanded terms are OR alternatives carrying reduced relevance weights — see Feature 02 for how weights are integrated into result ranking. The expansion dictionary is seeded with parliamentary domain-specific terms and maintained as a static file in the codebase; updates require a re-deployment.
 
+## Query Preprocessing
+
+Before synonym expansion and spell correction, the query string is normalized:
+
+- U+201C (") and U+201D (") curly double quotes are converted to ASCII straight double quotes (`"`)
+
+This ensures that phrase queries typed on macOS and iOS — which auto-substitute typographic curly quotes for `"` — are correctly interpreted as phrase search syntax by Meilisearch, which uses ASCII straight double quotes to delimit phrase queries.
+
 ## Synonym Dictionary
 
 ### Coverage
@@ -93,6 +101,7 @@ Edit-distance based correction: terms within a configurable edit distance from i
 - A query for "fundamental rights" returns records containing "basic rights" at a lower relevance weight than records containing "fundamental rights"
 - A query for "Parliment" (misspelled) returns records containing "Parliament" at a reduced weight
 - A quoted phrase query ("fundamental rights") applies phrase-level synonyms only; individual term synonyms are not applied to terms inside the quotes
+- A query string containing U+201C or U+201D curly quotes around a phrase is treated as a phrase query equivalent to the same phrase enclosed in ASCII straight double quotes
 - Terms shorter than 4 characters are not spell-corrected
 - Synonyms and spell corrections apply to LS, RS, and CA records equally
 - The synonym dictionary file is the only source of synonym definitions; no synonyms are hardcoded elsewhere in the application

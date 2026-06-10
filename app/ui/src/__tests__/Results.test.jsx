@@ -705,6 +705,24 @@ describe('Results — filter chips and modal (F03 UI)', () => {
     })
   })
 
+  it('subject chip shows when subject filter applied', async () => {
+    renderResults()
+    await screen.findByTestId('results-list')
+
+    fireEvent.click(screen.getByTestId('results-advanced-search-link'))
+    await screen.findByTestId('subject-input')
+    fireEvent.change(screen.getByTestId('subject-input'), {
+      target: { value: 'Railways' },
+    })
+    fireEvent.click(screen.getByTestId('modal-apply'))
+
+    await waitFor(() => {
+      const chips = screen.getAllByTestId('filter-chip')
+      const chipText = chips.map((c) => c.textContent).join(' ')
+      expect(chipText).toContain('Subject: Railways')
+    })
+  })
+
   it('no-results state with active filters shows the clear-filters affordance', async () => {
     // Filtered query returns zero results: empty state must render together with
     // the chips row "Clear all" control (F03 "No results with active filters").

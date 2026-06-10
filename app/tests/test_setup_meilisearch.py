@@ -252,7 +252,7 @@ class TestDataModelsExactConstants:
     def test_filterable_attributes_exact_match_data_models(self):
         expected = [
             "source", "proceeding_type", "date", "speaker_name", "session_name",
-            "minister_name", "record_type",
+            "minister_name", "record_type", "subject",
         ]
         assert sorted(FILTERABLE_ATTRIBUTES) == sorted(expected), (
             "filterableAttributes must exactly match DATA-MODELS.md §2.3"

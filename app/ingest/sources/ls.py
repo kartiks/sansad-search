@@ -4,8 +4,18 @@ Lok Sabha ingestion.
 Provides two components:
   - LSSource  — legacy Phase 1-2 fetcher (HTML/PDF from sansad.in index page).
                 Kept for backward compatibility; superseded by LSOrchestrator.
-  - LSOrchestrator — Phase 8+ orchestrator using the multi-provider chain
-                     [InternetArchiveProvider, EparlibDspaceProvider].
+  - LSOrchestrator — Phase 8+ orchestrator using the multi-provider chain:
+                     [InternetArchiveProvider, ElibraryDSpace7Provider].
+
+Provider coverage:
+  InternetArchiveProvider  — IA eparlib.nic.in.* collection (1947-08-15 to Aug 2018,
+                             djvu.txt pre-OCR text, highest quality).
+  ElibraryDSpace7Provider  — elibrary.sansad.in DSpace 7 "Text of Debates (English)"
+                             collection (2019-01-01 to present, Tika-extracted PDF text).
+
+Removed providers:
+  EparlibDspaceProvider    — eparlib.sansad.in server is unresponsive as of 2026-06.
+                             Kept as a class in its own module for potential future use.
 """
 from __future__ import annotations
 
@@ -22,6 +32,7 @@ from ingest.canonical.names import canonicalize_name
 from ingest.canonical.sessions import canonicalize_session
 from ingest.checkpoints.store import CheckpointStore
 from ingest.indexer import Indexer
+from ingest.parsers.elibrary_text_parser import parse_elibrary_text
 from ingest.parsers.ia_text_parser import parse_ia_text
 from ingest.parsers.pdf_parser import parse_pdf
 from ingest.segmenters.qa import segment_qa
@@ -32,13 +43,17 @@ from ingest.sources._http import (
     fetch_with_retry,
 )
 from ingest.sources._provider import Provider, extract_stage1_fields
-from ingest.sources.providers.eparlib_dspace import EparlibDspaceProvider
+from ingest.sources.providers.elibrary_dspace7 import ElibraryDSpace7Provider
 from ingest.sources.providers.internet_archive import InternetArchiveProvider
 
 logger = logging.getLogger(__name__)
 
 
-LS_SCOPE_FROM: date = date(2014, 1, 1)
+# Expanded to 15 August 1947 (Independence Day) to include the full post-independence
+# parliamentary record available on the Internet Archive (eparlib.nic.in.* collection).
+# The IA collection covers 1858 onwards; 1947-08-15 is the chosen lower bound for this
+# application.  ElibraryDSpace7Provider picks up from 2019-01-01 (after the IA cutoff).
+LS_SCOPE_FROM: date = date(1947, 8, 15)
 LS_INDEX_URL: str = "https://sansad.in/ls/business/debatesandquestions"
 
 # URL path fragments used to infer proceeding type from link href
@@ -241,9 +256,27 @@ class LSOrchestrator:
             _df["date_from"] = date_from
         if date_to is not None:
             _df["date_to"] = date_to
+        # LS_SCOPE_FROM as a string — used as the effective default date_from for
+        # the IA provider when the caller does not supply one.
+        _ls_scope_str = LS_SCOPE_FROM.isoformat()
         self._providers: list[Provider] = providers or [
-            InternetArchiveProvider(client, corpus="LS", rate_delay=rate_delay, **_df),
-            EparlibDspaceProvider(client, rate_delay=rate_delay, **_df),
+            # IA: covers 1947-08-15 to Aug 2018 (djvu.txt, best text quality).
+            InternetArchiveProvider(
+                client,
+                corpus="LS",
+                rate_delay=rate_delay,
+                date_from=_df.get("date_from", _ls_scope_str),
+                date_to=_df.get("date_to"),
+            ),
+            # elibrary: covers 2019-01-01 to present (Tika PDF text extraction).
+            # date_from is clamped to 2019-01-01 so the two providers cover
+            # non-overlapping date ranges regardless of the orchestrator date_from.
+            ElibraryDSpace7Provider(
+                client,
+                date_from=max(_df.get("date_from", "2019-01-01"), "2019-01-01"),
+                date_to=_df.get("date_to"),
+                rate_delay=rate_delay,
+            ),
         ]
         # Per-sitting sequence counter shared across all providers and record types
         self._sitting_seq: dict[str, int] = {}
@@ -412,6 +445,10 @@ class LSOrchestrator:
         try:
             if doc_ref.format == "ia_text":
                 raw_record = parse_ia_text(content, doc_ref.metadata, source="LS")
+            elif doc_ref.format == "elibrary_text":
+                raw_record = parse_elibrary_text(
+                    content, doc_ref.metadata, source="LS"
+                )
             elif doc_ref.format == "pdf":
                 raw_record = parse_pdf(
                     content,

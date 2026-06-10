@@ -39,6 +39,7 @@ FILTERABLE_ATTRIBUTES = [
     "session_name",
     "minister_name",
     "record_type",
+    "subject",
 ]
 
 SORTABLE_ATTRIBUTES = ["date", "sequence_within_sitting"]

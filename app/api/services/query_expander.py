@@ -104,6 +104,10 @@ def strip_stop_words(query: str) -> Tuple[str, bool]:
         - clean_query: query string with unquoted stop words removed.
         - is_only_stopwords: True when the result has no non-stop-word content.
     """
+    # Normalize smart/curly quotes → ASCII straight quotes so phrase detection
+    # works regardless of keyboard or OS (macOS/iOS auto-convert " to “”).
+    query = query.replace('“', '"').replace('”', '"')
+
     # Extract quoted phrases → placeholder so they survive intact.
     placeholders: dict = {}
     working = query

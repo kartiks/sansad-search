@@ -85,6 +85,10 @@ function buildActiveChips(filters) {
     chips.push({ key: 'session', label: `Session: ${filters.session.trim()}` })
   }
 
+  if (filters.subject && filters.subject.trim()) {
+    chips.push({ key: 'subject', label: `Subject: ${filters.subject.trim()}` })
+  }
+
   if (!arraysMatch(filters.proceeding_types, ALL_PROCEEDING_TYPES)) {
     const label = filters.proceeding_types
       .map((pt) => PROCEEDING_TYPE_LABELS[pt] || pt)
@@ -221,6 +225,9 @@ export default function Results() {
         break
       case 'session':
         newFilters = { ...filters, session: null }
+        break
+      case 'subject':
+        newFilters = { ...filters, subject: null }
         break
       case 'proceeding_types':
         newFilters = { ...filters, proceeding_types: [...ALL_PROCEEDING_TYPES] }

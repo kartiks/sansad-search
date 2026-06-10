@@ -26,7 +26,7 @@ The full-text corpus (CA full record + 12 years of LS/RS debates and questions) 
 ## Rate Limiting and Compliance
 
 **INF-RL1: Government website rate limiting**
-The ingestion pipeline must comply with robots.txt on constitutionofindia.net, eparlib.sansad.in, sansad.in, rsdebate.nic.in, and the Internet Archive. Minimum inter-request delay must be specified at architecture stage. HTTP 429 responses must trigger exponential backoff and retry, not a skip.
+The ingestion pipeline must comply with robots.txt on constitutionofindia.net, elibrary.sansad.in, and the Internet Archive. Minimum inter-request delay must be specified at architecture stage. HTTP 429 responses must trigger exponential backoff and retry, not a skip.
 
 ## Processing
 

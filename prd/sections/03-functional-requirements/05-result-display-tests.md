@@ -49,5 +49,5 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 
 ## Snippet Minimum Size
 
-- A record whose `full_text_en` contains more than 400 words must produce a snippet of at least 400 words; the snippet must not be truncated to fewer words unless the matched passage is within 400 words of the start or end of the text
-- A record whose `full_text_en` contains fewer than 400 words must display the full text as the snippet; no words may be omitted
+- A record whose `full_text_en` contains more than 200 words must produce a snippet of at least 200 words; the snippet must not be truncated to fewer words unless the matched passage is within 200 words of the start or end of the text
+- A record whose `full_text_en` contains fewer than 200 words must display the full text as the snippet; no words may be omitted

@@ -1,7 +1,7 @@
 # Data Models — SansadSearch
 
-**PRD version:** v3.0
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable); updated 2026-06-01 (PRD v2.0: F01 — `lang_original`/`time_of_day`/`word_count` added to both tables, `sequence_within_sitting` added to `qa_exchanges`, sitting composite indexes for F09 adjacent nav; F05 — `lang_original`/`time_of_day` added to Meilisearch doc + search results; F09 — new `GET /api/record/{id}` contract; `id` stability rule documented); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table as Stage 1 intermediate store; SQLite `processed_documents` semantics updated to Stage 2 complete signal); updated 2026-06-04 (PRD v2.1: §1.4 `raw_documents` composite PK `(canonical_doc_id, corpus)` — fixes sole-PK error; per-corpus dedup semantics documented); updated 2026-06-06 (PRD v3.0: F01 — `lok_sabha_number` + `segments` added to `speeches`, `lok_sabha_number` added to `qa_exchanges`, `canonical_doc_id` link column added to both tables (F10 debug-raw lookup), `source_url` rules reversed (IA URL is now the citation for LS and RS-via-IA/rsdebate); F05 — Meilisearch `cropLength` ≥400 words; F09 — `GET /api/record/{id}` returns `has_prev`/`has_next` (not `adjacent` ids) + new `GET /api/record/{id}/adjacent` range-fetch contract; F10 — debug envelope on `POST /api/search`, new `GET /api/debug/processed/{id}` and `GET /api/debug/raw/{id}` endpoints, debug-mode Meilisearch retrieval config)
+**PRD version:** v3.1
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable); updated 2026-06-01 (PRD v2.0: F01 — `lang_original`/`time_of_day`/`word_count` added to both tables, `sequence_within_sitting` added to `qa_exchanges`, sitting composite indexes for F09 adjacent nav; F05 — `lang_original`/`time_of_day` added to Meilisearch doc + search results; F09 — new `GET /api/record/{id}` contract; `id` stability rule documented); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table as Stage 1 intermediate store; SQLite `processed_documents` semantics updated to Stage 2 complete signal); updated 2026-06-04 (PRD v2.1: §1.4 `raw_documents` composite PK `(canonical_doc_id, corpus)` — fixes sole-PK error; per-corpus dedup semantics documented); updated 2026-06-06 (PRD v3.0: F01 — `lok_sabha_number` + `segments` added to `speeches`, `lok_sabha_number` added to `qa_exchanges`, `canonical_doc_id` link column added to both tables (F10 debug-raw lookup), `source_url` rules reversed (IA URL is now the citation for LS and RS-via-IA/rsdebate); F05 — Meilisearch `cropLength` ≥400 words; F09 — `GET /api/record/{id}` returns `has_prev`/`has_next` (not `adjacent` ids) + new `GET /api/record/{id}/adjacent` range-fetch contract; F10 — debug envelope on `POST /api/search`, new `GET /api/debug/processed/{id}` and `GET /api/debug/raw/{id}` endpoints, debug-mode Meilisearch retrieval config); updated 2026-06-09 (PRD v3.1: F03 — `subject` added to `filterableAttributes` + §2.4 subject filter expression; F05 — `cropLength` reduced from 400 to 200 words)
 
 ---
 
@@ -144,7 +144,7 @@ Intermediate raw document store. One row per source document per corpus (keyed o
 | `corpus` | VARCHAR(2) | NOT NULL, CHECK IN ('CA','LS','RS') (part of composite PK) | Source corpus. Together with `canonical_doc_id`, forms the table primary key |
 | `date` | DATE | NULL | Sitting date derived from document metadata or URL slug. NULL if unparseable at Stage 1 |
 | `provider` | VARCHAR(50) | NOT NULL | Provider that satisfied the fetch (e.g. `coi_html`, `internet_archive`, `eparlib_dspace`, `rsdebate_dspace`, `sansad_rs_html`) |
-| `format` | VARCHAR(10) | NOT NULL, CHECK IN ('html','ia_text','pdf') | Source format: `html` (CA coi + recent RS sansad.in/rs), `ia_text` (IA pre-OCR `_djvu.txt`), `pdf` (direct DSpace embedded-text) |
+| `format` | VARCHAR(20) | NOT NULL, CHECK IN ('html','ia_text','pdf','elibrary_text') | Source format: `html` (CA coi + recent RS sansad.in/rs), `ia_text` (IA pre-OCR `_djvu.txt`), `pdf` (direct DSpace embedded-text), `elibrary_text` (elibrary.sansad.in Tika-extracted PDF text) |
 | `extracted_text` | TEXT | NULL | Post-parse, pre-segment raw text. NULL if the parser yielded no text (e.g. a text-less PDF — row is written to record the fetch; Stage 2 will produce zero records for it) |
 | `metadata_json` | JSONB | NOT NULL DEFAULT '{}' | Document-level metadata at fetch time. Keys vary by provider: IA custom fields (`eparlib_title`, `eparlib_date`, `eparlib_lok_sabha_number`, etc.), DSpace item fields, HTML page metadata |
 | `fetch_url` | TEXT | NULL | Actual URL from which content was downloaded (provider's download URL). Informational; not a citation |
@@ -242,7 +242,7 @@ Fields excluded from Meilisearch (stored in PostgreSQL only, served by the F09 d
 **filterableAttributes:**
 ```json
 ["source", "proceeding_type", "date", "speaker_name", "session_name",
- "minister_name", "record_type"]
+ "minister_name", "record_type", "subject"]
 ```
 
 **sortableAttributes:**
@@ -280,11 +280,11 @@ Meilisearch's built-in typo tolerance covers the PRD's spell-correction requirem
 ```
 Maps to the PRD's "10,000+" display threshold for result counts ≥ 10,000.
 
-**Snippet / crop configuration (F05 — PRD v3.0):** Snippets are produced at search time by `api/services/search.py` via Meilisearch query-time parameters (not index settings). To satisfy the F05 ≥400-word snippet requirement:
+**Snippet / crop configuration (F05 — PRD v3.1):** Snippets are produced at search time by `api/services/search.py` via Meilisearch query-time parameters (not index settings). To satisfy the F05 ≥200-word snippet requirement:
 ```json
 {
   "attributesToCrop": ["full_text_en"],
-  "cropLength": 400,
+  "cropLength": 200,
   "cropMarker": "…",
   "attributesToHighlight": ["full_text_en", "subject", "speaker_name",
                             "minister_name", "questioner_names"],
@@ -292,7 +292,7 @@ Maps to the PRD's "10,000+" display threshold for result counts ≥ 10,000.
   "highlightPostTag": "</mark>"
 }
 ```
-- `cropLength` is measured in **words**; `400` yields a crop window of at least 400 words centred on the densest match passage (the `_formatted.full_text_en` field of each hit is the snippet source).
+- `cropLength` is measured in **words**; `200` yields a crop window of at least 200 words centred on the densest match passage (the `_formatted.full_text_en` field of each hit is the snippet source).
 - When `full_text_en` contains fewer than `cropLength` words, Meilisearch returns the full text uncropped — satisfying the F05 "no truncation of content shorter than the minimum" rule.
 - A match near the start/end of `full_text_en` yields a shorter crop window (still anchored on the match) — acceptable per F05.
 - `search.py` strips all HTML except the `<mark>` highlight tags before returning `snippet` (DATA-MODELS §3.1).
@@ -321,6 +321,7 @@ Built by `api/services/search.py` based on incoming filter state:
 | Date to | `date <= "2022-12-31"` |
 | Speaker substring | `speaker_name CONTAINS "Singh"` |
 | Session substring | `session_name CONTAINS "Budget Session"` |
+| Subject substring | `subject CONTAINS "Water"` |
 
 Multiple active filters are joined with `AND`.
 
@@ -431,7 +432,7 @@ Field rules:
       "method": "POST",
       "url": "https://xxx.meilisearch.io/indexes/parliamentary_records/search",
       "body": { "q": "...", "filter": "...", "sort": [], "offset": 0, "limit": 20,
-                "attributesToCrop": ["full_text_en"], "cropLength": 400,
+                "attributesToCrop": ["full_text_en"], "cropLength": 200,
                 "showRankingScore": true, "showRankingScoreDetails": true,
                 "attributesToRetrieve": ["*"] }
     },

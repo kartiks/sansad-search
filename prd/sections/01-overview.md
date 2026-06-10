@@ -2,15 +2,15 @@
 
 ## Product
 
-SansadSearch is a web-based full-text search application over Indian parliamentary records. It enables users to search the proceedings of the Constituent Assembly of India (1946–1950) and the last 12 years of Lok Sabha and Rajya Sabha debates and questions by keyword, speaker, date range, legislative body, and proceeding type.
+SansadSearch is a web-based full-text search application over Indian parliamentary records. It enables users to search the proceedings of the Constituent Assembly of India (1946–1950), historical Lok Sabha debates and questions, and available Rajya Sabha records, by keyword, speaker, date range, legislative body, subject, and proceeding type.
 
 ## Data Scope (v1)
 
 | Source | Coverage | Base URL |
 |--------|----------|----------|
 | Constituent Assembly debates | All 12 volumes, 1946–1950 | constitutionofindia.net |
-| Lok Sabha debates and questions | 2014–2026 (16th–18th Lok Sabha) | eparlib.sansad.in (primary); Internet Archive (fallback) |
-| Rajya Sabha debates and questions | 2014–2026 | sansad.in/rs (primary); Internet Archive; rsdebate.nic.in (fallback) |
+| Lok Sabha debates and questions | 1947-08-15 to present; elibrary.sansad.in covers 2019-01-01 to present | Internet Archive; elibrary.sansad.in DSpace 7 |
+| Rajya Sabha debates and questions | 1947-08-15 to present; post-2018 records currently unavailable | Internet Archive only |
 
 ## Indexed Record Types
 
@@ -29,7 +29,7 @@ Two units are indexed:
 - Fully public, anonymous — no user authentication required
 - Cookie-based search history and saved searches (no sign-in required)
 - One-time bulk ingestion; no scheduled or ongoing updates in v1
-- Data scope limited to CA full record + last 12 years of LS/RS; full historical records are future scope
+- LS data scope: 1947-08-15 to present (elibrary.sansad.in provides 2019+ coverage; Internet Archive provides earlier records); RS data scope: 1947-08-15 to present, post-2018 records currently unavailable pending an accessible source
 
 ## Target Users
 

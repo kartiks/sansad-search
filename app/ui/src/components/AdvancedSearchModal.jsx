@@ -18,6 +18,7 @@ function initLocalState(filters) {
     date_to: f.date_to || '',
     speaker: f.speaker || '',
     session: f.session || '',
+    subject: f.subject || '',
   }
 }
 
@@ -47,6 +48,8 @@ function localReducer(state, action) {
       return { ...state, speaker: action.value }
     case 'SET_SESSION':
       return { ...state, session: action.value }
+    case 'SET_SUBJECT':
+      return { ...state, subject: action.value }
     case 'RESET':
       return initLocalState(defaultFilterState())
     case 'INIT':
@@ -92,6 +95,7 @@ export default function AdvancedSearchModal({ isOpen, initialFilters, onApply, o
     date_to: state.date_to || null,
     speaker: state.speaker || null,
     session: state.session || null,
+    subject: state.subject || null,
   }
   const errors = validateFilterState(filterStateForValidation)
   const hasErrors = Object.keys(errors).length > 0
@@ -109,6 +113,7 @@ export default function AdvancedSearchModal({ isOpen, initialFilters, onApply, o
       date_to: state.date_to || null,
       speaker: state.speaker.trim() || null,
       session: state.session.trim() || null,
+      subject: state.subject.trim() || null,
     })
   }
 
@@ -242,7 +247,25 @@ export default function AdvancedSearchModal({ isOpen, initialFilters, onApply, o
             </p>
           </div>
 
-          {/* 5. Proceeding Type */}
+          {/* 5. Subject */}
+          <div className="filter-field">
+            <div className="filter-label">Subject</div>
+            <input
+              type="text"
+              className="filter-text-input"
+              placeholder="e.g. Railways"
+              value={state.subject}
+              onChange={(e) =>
+                dispatch({ type: 'SET_SUBJECT', value: e.target.value })
+              }
+              data-testid="subject-input"
+            />
+            <p className="filter-helper">
+              Filters by the official debate or question subject heading.
+            </p>
+          </div>
+
+          {/* 6. Proceeding Type */}
           <div className="filter-field">
             <div className="filter-label">Proceeding Type</div>
             <div

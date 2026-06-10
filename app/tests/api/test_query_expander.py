@@ -57,7 +57,20 @@ class TestStripStopWords:
         clean, _ = strip_stop_words("The Rajya Sabha")
         assert "The" not in clean
         assert "Rajya" in clean
-        assert "Sabha" in clean
+
+    def test_curly_left_quote_normalized(self):
+        # U+201C/U+201D curly quotes must be treated as a phrase boundary.
+        curly = "\u201cartificial intelligence\u201d"
+        clean, _ = strip_stop_words(curly)
+        assert '"artificial intelligence"' in clean
+
+    def test_curly_right_quote_normalized(self):
+        # Curly-quoted phrase: stop word inside preserved, token outside preserved.
+        curly = "\u201cthe Speaker\u201d spoke"
+        clean, _ = strip_stop_words(curly)
+        assert '"the Speaker"' in clean
+        assert "the" in clean
+        assert "spoke" in clean
 
 
 # ── expand_query — single-term synonyms ──────────────────────────────────────

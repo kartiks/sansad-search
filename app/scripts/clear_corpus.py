@@ -8,6 +8,8 @@ Either --stage or --target must be given (they are mutually exclusive):
                    SQLite processed_documents, Meilisearch. Use before re-fetching
                    from source (forces both Stage 1 and Stage 2 to re-run clean).
 
+  --stage all      Alias for --stage fetch.
+
   --stage process  Clear Stage 2 output only: PG speeches + qa_exchanges,
                    SQLite processed_documents, Meilisearch. Leaves raw_documents
                    intact. Use before re-running segmentation/indexing from existing
@@ -302,7 +304,7 @@ def run(
     dry_run: bool,
 ) -> None:
     # Resolve what to touch from stage semantics or explicit targets
-    if stage == "fetch":
+    if stage in ("fetch", "all"):
         do_pg, do_sqlite, do_meili, include_raw = True, True, True, True
     elif stage == "process":
         do_pg, do_sqlite, do_meili, include_raw = True, True, True, False
@@ -367,6 +369,7 @@ def main() -> None:
 stage semantics:
   --stage fetch    Clears all stores including raw_documents.
                    Use before re-fetching from source (re-runs both Stage 1 and 2).
+  --stage all      Alias for --stage fetch.
   --stage process  Clears Stage 2 output only (speeches, qa_exchanges,
                    processed_documents, Meilisearch). Leaves raw_documents intact.
                    Use before re-running segmentation/indexing from existing raw docs.
@@ -382,9 +385,9 @@ stage semantics:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument(
         "--stage",
-        choices=["fetch", "process"],
+        choices=["fetch", "all", "process"],
         help=(
-            "'fetch' clears all stores; "
+            "'fetch'/'all' clears all stores; "
             "'process' clears Stage 2 output only (leaves raw_documents intact)"
         ),
     )

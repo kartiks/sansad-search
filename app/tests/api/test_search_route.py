@@ -429,6 +429,20 @@ class TestFilterForwarding:
         params = captured[0]["params"]
         assert 'session_name CONTAINS "Budget Session"' in params["filter"]
 
+    def test_subject_filter_present_in_expression(self):
+        """Subject filter produces a subject CONTAINS expression."""
+        mock_client, captured = self._captured_search_params()
+        mock_pool = make_mock_pool()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_client
+        with TestClient(app) as client:
+            client.post("/api/search", json={
+                "query": "budget",
+                "filters": {"subject": "Railways"},
+            })
+        params = captured[0]["params"]
+        assert 'subject CONTAINS "Railways"' in params["filter"]
+
     def test_page_forwarded(self):
         mock_client, captured = self._captured_search_params()
         mock_pool = make_mock_pool()
@@ -727,6 +741,11 @@ class TestSessionFilterCAExclusion:
         """session_name must be in filterableAttributes so CONTAINS can be applied."""
         from ingest.setup_meilisearch import FILTERABLE_ATTRIBUTES
         assert "session_name" in FILTERABLE_ATTRIBUTES
+
+    def test_subject_is_filterable_attribute(self):
+        """subject must be in filterableAttributes so CONTAINS can be applied."""
+        from ingest.setup_meilisearch import FILTERABLE_ATTRIBUTES
+        assert "subject" in FILTERABLE_ATTRIBUTES
 
     def test_session_filter_route_returns_200(self):
         """Route must accept a session filter and forward it to Meilisearch."""

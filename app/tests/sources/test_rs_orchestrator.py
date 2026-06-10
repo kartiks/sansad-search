@@ -25,8 +25,6 @@ import pytest
 from ingest.checkpoints.store import CheckpointStore
 from ingest.sources._provider import DocumentRef, Provider
 from ingest.sources.providers.internet_archive import InternetArchiveProvider
-from ingest.sources.providers.rsdebate_dspace import RsdebateDspaceProvider
-from ingest.sources.providers.sansad_rs_html import SansadRsHtmlProvider
 from ingest.sources.rs import RSOrchestrator
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -174,7 +172,12 @@ class TestRSOrchestratorDefaultProviderChain:
     """Gap 1: production default chain membership and order are exercised."""
 
     def test_default_provider_chain_order_and_membership(self):
-        """RSOrchestrator() with no providers arg uses the correct production chain in order."""
+        """RSOrchestrator() with no providers arg uses the IA-only production chain.
+
+        SansadRsHtmlProvider (sansad.in JS SPA, broken since ~2019) and
+        RsdebateDspaceProvider (rsdebate.nic.in unresponsive since 2026-06) have
+        been removed from the default chain.  RS coverage is IA-only (1947–Aug 2018).
+        """
         checkpoint = _make_checkpoint()
         indexer = MockIndexer()
         try:
@@ -183,11 +186,9 @@ class TestRSOrchestratorDefaultProviderChain:
                 checkpoint=checkpoint,
                 indexer=indexer,
             )
-            assert len(orc._providers) == 3
-            assert isinstance(orc._providers[0], SansadRsHtmlProvider)
-            assert isinstance(orc._providers[1], InternetArchiveProvider)
-            assert orc._providers[1]._corpus == "RS"
-            assert isinstance(orc._providers[2], RsdebateDspaceProvider)
+            assert len(orc._providers) == 1
+            assert isinstance(orc._providers[0], InternetArchiveProvider)
+            assert orc._providers[0]._corpus == "RS"
         finally:
             checkpoint.close()
 

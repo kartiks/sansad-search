@@ -25,7 +25,7 @@ PER_PAGE = 20
 MAX_TOTAL_HITS = 10000
 
 # F05: snippet crop window in words — passed to Meilisearch and used locally.
-SNIPPET_WORD_WINDOW = 280
+SNIPPET_WORD_WINDOW = 200
 
 _PROCEEDING_TYPE_LABELS: Dict[str, str] = {
     "debate": "Debate",
@@ -138,12 +138,12 @@ def _build_snippet(
     text: str, query_terms: List[str]
 ) -> Tuple[Optional[str], bool]:
     """
-    Extract the best ~30-word snippet from *text* for the given *query_terms*.
+    Extract the best ≥200-word snippet from *text* for the given *query_terms*.
 
     Steps:
       1. Split text into word-level tokens with their character offsets.
-      2. Use a sliding 30-word window to find the window with the highest
-         density of query terms.
+      2. Use a sliding SNIPPET_WORD_WINDOW window to find the window with the
+         highest density of query terms.
       3. HTML-escape the raw snippet text.
       4. Wrap each matched term with <mark>…</mark> tags.
 
@@ -270,6 +270,12 @@ def build_filter_expression(filters: Optional[Dict[str, Any]]) -> Optional[str]:
     if session and session.strip():
         escaped = session.strip().replace('"', '\\"')
         parts.append(f'session_name CONTAINS "{escaped}"')
+
+    # subject substring
+    subject = filters.get("subject")
+    if subject and subject.strip():
+        escaped = subject.strip().replace('"', '\\"')
+        parts.append(f'subject CONTAINS "{escaped}"')
 
     return " AND ".join(parts) if parts else None
 
@@ -427,7 +433,7 @@ async def execute_search(
     search_kwargs: Dict[str, Any] = {
         "hits_per_page": PER_PAGE,
         "page": page,
-        # F05 (PRD v3.0): ≥400-word snippet. Meilisearch crops full_text_en to a
+        # F05 (PRD v3.1): ≥200-word snippet. Meilisearch crops full_text_en to a
         # window of at least cropLength words centred on the densest match
         # passage; shorter texts are returned in full.
         "attributes_to_crop": ["full_text_en"],

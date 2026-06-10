@@ -189,6 +189,26 @@ describe('AdvancedSearchModal — Apply', () => {
     expect(arg.sources).toEqual(expect.arrayContaining(['CA', 'LS', 'RS']))
   })
 
+  it('subject input appears and is included in onApply', () => {
+    const { onApply } = renderModal()
+    fireEvent.change(screen.getByTestId('subject-input'), {
+      target: { value: 'Railways' },
+    })
+    fireEvent.click(screen.getByTestId('modal-apply'))
+    const arg = onApply.mock.calls[0][0]
+    expect(arg.subject).toBe('Railways')
+  })
+
+  it('subject with only whitespace is treated as no subject filter', () => {
+    const { onApply } = renderModal()
+    fireEvent.change(screen.getByTestId('subject-input'), {
+      target: { value: '   ' },
+    })
+    fireEvent.click(screen.getByTestId('modal-apply'))
+    const arg = onApply.mock.calls[0][0]
+    expect(arg.subject).toBeNull()
+  })
+
   it('speaker with only whitespace is treated as no speaker filter', () => {
     const { onApply } = renderModal()
     fireEvent.change(screen.getByTestId('speaker-input'), {
@@ -216,10 +236,14 @@ describe('AdvancedSearchModal — Clear all', () => {
     fireEvent.change(screen.getByTestId('speaker-input'), {
       target: { value: 'Singh' },
     })
+    fireEvent.change(screen.getByTestId('subject-input'), {
+      target: { value: 'Railways' },
+    })
     fireEvent.click(screen.getByTestId('source-checkbox-CA'))
     fireEvent.click(screen.getByTestId('modal-clear-all'))
 
     expect(screen.getByTestId('speaker-input')).toHaveValue('')
+    expect(screen.getByTestId('subject-input')).toHaveValue('')
     expect(screen.getByTestId('source-checkbox-CA')).toBeChecked()
     expect(screen.getByTestId('source-checkbox-LS')).toBeChecked()
     expect(screen.getByTestId('source-checkbox-RS')).toBeChecked()

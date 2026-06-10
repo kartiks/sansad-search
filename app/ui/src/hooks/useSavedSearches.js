@@ -35,6 +35,7 @@ export function sanitizeStoredFilters(stored) {
     date_to: stored.date_to || null,
     speaker: stored.speaker || null,
     session: stored.session || null,
+    subject: stored.subject || null,
   }
 }
 

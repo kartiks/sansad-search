@@ -4,7 +4,7 @@ Features explicitly deferred from v1. Not in scope for any v1 build phase.
 
 ## Data Scope Expansion
 
-- **Full parliamentary history:** extend LS and RS coverage beyond 2014 to include all available records (potentially back to 1952 for Lok Sabha)
+- **Full parliamentary history:** extend LS coverage back to 1952 across all accessible sources; restore RS post-2018 coverage when an accessible source is identified; extend RS coverage to include all available historical records
 - **Ongoing ingestion:** scheduled pipeline to ingest new parliamentary sessions automatically as they are published on sansad.in and rajyasabha.gov.in
 
 ## Language Support

@@ -18,12 +18,13 @@ describe('defaultFilterState', () => {
     expect(s.proceeding_types).toHaveLength(9)
   })
 
-  it('defaults date / speaker / session to null', () => {
+  it('defaults date / speaker / session / subject to null', () => {
     const s = defaultFilterState()
     expect(s.date_from).toBeNull()
     expect(s.date_to).toBeNull()
     expect(s.speaker).toBeNull()
     expect(s.session).toBeNull()
+    expect(s.subject).toBeNull()
   })
 
   it('returns a fresh object each call (no shared mutation)', () => {
@@ -129,5 +130,25 @@ describe('toApiFilters', () => {
     const result = toApiFilters(s)
     expect(result.speaker).toBe('Singh')
     expect(result.session).toBeUndefined()
+  })
+
+  it('includes subject when set and trims whitespace', () => {
+    const s = defaultFilterState()
+    s.subject = '  Railways  '
+    const result = toApiFilters(s)
+    expect(result.subject).toBe('Railways')
+  })
+
+  it('omits subject when empty', () => {
+    const s = defaultFilterState()
+    s.subject = ''
+    const result = toApiFilters(s)
+    expect(result).toBeNull()
+  })
+
+  it('non-default subject makes isDefaultFilterState return false', () => {
+    const s = defaultFilterState()
+    s.subject = 'Railways'
+    expect(isDefaultFilterState(s)).toBe(false)
   })
 })

@@ -1,9 +1,16 @@
 """
-Tests for GET /api/status — three response shapes and F07 requirements.
+Tests for GET /api/status — live-count response shapes.
+
+The route now issues two queries per request:
+  conn.fetch()    — live counts from speeches + qa_exchanges grouped by source
+  conn.fetchrow() — most recent run_completed_at from index_status
+
+make_mock_pool(fetch_result=..., fetchrow_result=...) wires both.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import datetime
+from datetime import timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,26 +22,33 @@ from api.lib.meilisearch_client import get_client
 from tests.api.conftest import make_mock_meili_client, make_mock_pool
 
 
+_RUN_AT = datetime.datetime(2026, 5, 15, 14, 30, 0, tzinfo=timezone.utc)
+
+
 # ── Fixture helpers ───────────────────────────────────────────────────────────
 
-def _make_row(**overrides):
-    """Return a dict-like row simulating an asyncpg Record."""
-    base = {
-        "id": 1,
-        "run_completed_at": datetime(2026, 5, 15, 14, 30, 0, tzinfo=timezone.utc),
-        "total_records": 350000,
-        "ca_count": 8200,
-        "ca_date_from": "1946-12-09",
-        "ca_date_to": "1950-11-26",
-        "ls_count": 198000,
-        "ls_date_from": "2014-06-04",
-        "ls_date_to": "2026-05-15",
-        "rs_count": 143800,
-        "rs_date_from": "2014-06-11",
-        "rs_date_to": "2026-04-20",
+def _live_row(source: str, count: int, date_from=None, date_to=None) -> dict:
+    """Simulate one row from the live-counts GROUP BY query."""
+    return {
+        "source": source,
+        "count": count,
+        "date_from": date_from,
+        "date_to": date_to,
     }
-    base.update(overrides)
-    return base
+
+
+def _last_updated_row(run_at=_RUN_AT) -> dict:
+    return {"run_completed_at": run_at}
+
+
+_DEFAULT_LIVE_ROWS = [
+    _live_row("CA", 8200,
+              datetime.date(1946, 12, 9), datetime.date(1950, 11, 26)),
+    _live_row("LS", 198000,
+              datetime.date(2014, 6, 4),  datetime.date(2026, 5, 15)),
+    _live_row("RS", 143800,
+              datetime.date(2014, 6, 11), datetime.date(2026, 4, 20)),
+]
 
 
 def _get_client(pool_mock=None, meili_mock=None):
@@ -59,62 +73,67 @@ def setup_teardown():
 
 class TestPopulatedResponse:
     def test_status_ok(self):
-        row = _make_row()
-        pool = make_mock_pool(fetchrow_result=row)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(
+            fetch_result=_DEFAULT_LIVE_ROWS,
+            fetchrow_result=_last_updated_row(),
+        )
+        with _get_client(pool, make_mock_meili_client()) as client:
             resp = client.get("/api/status")
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
 
-    def test_total_records(self):
-        row = _make_row(total_records=350000)
-        pool = make_mock_pool(fetchrow_result=row)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
-            resp = client.get("/api/status")
-        assert resp.json()["total_records"] == 350000
+    def test_total_records_is_sum_of_sources(self):
+        pool = make_mock_pool(
+            fetch_result=_DEFAULT_LIVE_ROWS,
+            fetchrow_result=_last_updated_row(),
+        )
+        with _get_client(pool, make_mock_meili_client()) as client:
+            body = client.get("/api/status").json()
+        assert body["total_records"] == 8200 + 198000 + 143800
 
     def test_total_equals_sum_of_sources(self):
-        row = _make_row(ca_count=100, ls_count=200, rs_count=300, total_records=600)
-        pool = make_mock_pool(fetchrow_result=row)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(
+            fetch_result=_DEFAULT_LIVE_ROWS,
+            fetchrow_result=_last_updated_row(),
+        )
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         sources = body["sources"]
-        computed_total = (
+        computed = (
             sources["ca"]["count"] + sources["ls"]["count"] + sources["rs"]["count"]
         )
-        assert computed_total == body["total_records"], (
+        assert computed == body["total_records"], (
             f"total_records ({body['total_records']}) must equal sum of source counts "
-            f"({computed_total})"
+            f"({computed})"
         )
 
     def test_last_updated_is_iso_timestamp(self):
-        row = _make_row()
-        pool = make_mock_pool(fetchrow_result=row)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(
+            fetch_result=_DEFAULT_LIVE_ROWS,
+            fetchrow_result=_last_updated_row(),
+        )
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         assert body["last_updated"] is not None
-        # Should be parseable as ISO 8601
-        datetime.fromisoformat(body["last_updated"].replace("Z", "+00:00"))
+        datetime.datetime.fromisoformat(body["last_updated"].replace("Z", "+00:00"))
 
     def test_source_date_ranges_present(self):
-        row = _make_row()
-        pool = make_mock_pool(fetchrow_result=row)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(
+            fetch_result=_DEFAULT_LIVE_ROWS,
+            fetchrow_result=_last_updated_row(),
+        )
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         ca = body["sources"]["ca"]
         assert ca["date_from"] == "1946-12-09"
         assert ca["date_to"] == "1950-11-26"
 
     def test_all_three_sources_present(self):
-        row = _make_row()
-        pool = make_mock_pool(fetchrow_result=row)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(
+            fetch_result=_DEFAULT_LIVE_ROWS,
+            fetchrow_result=_last_updated_row(),
+        )
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         sources = body["sources"]
         assert "ca" in sources
@@ -122,98 +141,113 @@ class TestPopulatedResponse:
         assert "rs" in sources
 
     def test_reads_from_db_not_meilisearch(self):
-        """
-        Status route must read from PostgreSQL only; Meilisearch is not called.
-        """
-        row = _make_row()
-        pool = make_mock_pool(fetchrow_result=row)
+        """Status route must read from PostgreSQL only; Meilisearch is not called."""
+        pool = make_mock_pool(
+            fetch_result=_DEFAULT_LIVE_ROWS,
+            fetchrow_result=_last_updated_row(),
+        )
         meili = make_mock_meili_client(search_side_effect=Exception("Meili unavailable"))
         with _get_client(pool, meili) as client:
             resp = client.get("/api/status")
-        # Must still return 200 even though Meilisearch would fail
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
+
+    def test_last_updated_null_when_no_index_status_row(self):
+        """Live counts present but index_status empty → last_updated is null."""
+        pool = make_mock_pool(
+            fetch_result=_DEFAULT_LIVE_ROWS,
+            fetchrow_result=None,
+        )
+        with _get_client(pool, make_mock_meili_client()) as client:
+            body = client.get("/api/status").json()
+        assert body["status"] == "ok"
+        assert body["last_updated"] is None
 
 
 # ── Never-run response ────────────────────────────────────────────────────────
 
 class TestNeverRunResponse:
     def test_never_run_returns_ok(self):
-        pool = make_mock_pool(fetchrow_result=None)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(fetch_result=[], fetchrow_result=None)
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         assert body["status"] == "ok"
 
     def test_never_run_total_is_zero(self):
-        pool = make_mock_pool(fetchrow_result=None)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(fetch_result=[], fetchrow_result=None)
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         assert body["total_records"] == 0
 
     def test_never_run_last_updated_is_null(self):
-        """
-        On never-run: last_updated must be null (not "Never" or a date string).
-        The UI layer converts null to "Never" display text.
-        """
-        pool = make_mock_pool(fetchrow_result=None)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        """On never-run: last_updated must be null. The UI converts null to 'Never'."""
+        pool = make_mock_pool(fetch_result=[], fetchrow_result=None)
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         assert body["last_updated"] is None
 
     def test_never_run_source_counts_are_zero(self):
-        pool = make_mock_pool(fetchrow_result=None)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(fetch_result=[], fetchrow_result=None)
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         for source in ("ca", "ls", "rs"):
             assert body["sources"][source]["count"] == 0
 
     def test_never_run_source_dates_are_null(self):
         """Zero-indexed sources must have null date_from and date_to."""
-        pool = make_mock_pool(fetchrow_result=None)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(fetch_result=[], fetchrow_result=None)
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         for source in ("ca", "ls", "rs"):
             s = body["sources"][source]
-            assert s["date_from"] is None, f"{source}.date_from must be null, not {s['date_from']!r}"
-            assert s["date_to"] is None, f"{source}.date_to must be null, not {s['date_to']!r}"
+            assert s["date_from"] is None, f"{source}.date_from must be null"
+            assert s["date_to"] is None, f"{source}.date_to must be null"
 
 
 # ── Unavailable response ──────────────────────────────────────────────────────
 
 class TestUnavailableResponse:
     def test_db_exception_returns_unavailable(self):
-        pool = make_mock_pool(fetchrow_side_effect=Exception("DB connection lost"))
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(fetch_side_effect=Exception("DB connection lost"))
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         assert body["status"] == "unavailable"
 
     def test_unavailable_is_still_200(self):
         """503 is wrong; the unavailable response is still HTTP 200."""
-        pool = make_mock_pool(fetchrow_side_effect=Exception("DB down"))
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+        pool = make_mock_pool(fetch_side_effect=Exception("DB down"))
+        with _get_client(pool, make_mock_meili_client()) as client:
             resp = client.get("/api/status")
         assert resp.status_code == 200
         assert resp.json()["status"] == "unavailable"
 
 
-# ── Zero-count source row ─────────────────────────────────────────────────────
+# ── Missing source in live rows ───────────────────────────────────────────────
 
-class TestZeroCountSource:
-    def test_zero_source_has_null_dates(self):
-        """A source with 0 records must have null date_from and date_to."""
-        row = _make_row(ca_count=0, ca_date_from=None, ca_date_to=None, total_records=341800)
-        pool = make_mock_pool(fetchrow_result=row)
-        meili = make_mock_meili_client()
-        with _get_client(pool, meili) as client:
+class TestMissingSource:
+    def test_absent_source_has_zero_count_and_null_dates(self):
+        """CA absent from live rows → count=0, date_from=None, date_to=None."""
+        rows = [
+            _live_row("LS", 557,
+                      datetime.date(2024, 1, 1), datetime.date(2024, 6, 30)),
+            _live_row("RS", 0, None, None),
+        ]
+        pool = make_mock_pool(fetch_result=rows, fetchrow_result=_last_updated_row())
+        with _get_client(pool, make_mock_meili_client()) as client:
             body = client.get("/api/status").json()
         ca = body["sources"]["ca"]
         assert ca["count"] == 0
         assert ca["date_from"] is None
         assert ca["date_to"] is None
+
+    def test_total_reflects_only_present_sources(self):
+        """total_records equals the sum of whichever sources are actually in the index."""
+        rows = [_live_row("LS", 557,
+                          datetime.date(2024, 1, 1), datetime.date(2024, 6, 30))]
+        pool = make_mock_pool(fetch_result=rows, fetchrow_result=_last_updated_row())
+        with _get_client(pool, make_mock_meili_client()) as client:
+            body = client.get("/api/status").json()
+        assert body["total_records"] == 557
+        assert body["sources"]["ca"]["count"] == 0
+        assert body["sources"]["ls"]["count"] == 557
+        assert body["sources"]["rs"]["count"] == 0

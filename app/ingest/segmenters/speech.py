@@ -35,15 +35,30 @@ _UNATTRIBUTED_RE = re.compile(
 # Presiding officers — excluded as standalone records
 _PRESIDING_OFFICER_RE = re.compile(
     r"^(MR\.?\s+SPEAKER|THE\s+SPEAKER|MADAM\s+SPEAKER|THE\s+DEPUTY\s+SPEAKER"
+    r"|HON\.?\s+(?:DEPUTY\s+)?SPEAKER"   # elibrary Tika format uses "HON. SPEAKER"
     r"|MR\.?\s+CHAIRMAN|THE\s+CHAIRMAN|THE\s+DEPUTY\s+CHAIRMAN"
     r"|VICE[\s\-]CHAIRMAN|THE\s+PRESIDENT|MR\.?\s+PRESIDENT)\s*[:\-]?\s*$",
     re.IGNORECASE,
 )
 
 # Attribution line pattern: "SHRI NARENDRA MODI :" or "DR. MANMOHAN SINGH:"
+# Matches a speaker name that fills the ENTIRE line (nothing after the colon).
 _ATTRIBUTION_RE = re.compile(
     r"^([A-Z][A-Z\s\.\,\(\)\'\/\-]{1,150})\s*:\s*$",
 )
+
+# Inline attribution pattern: "SHRI NAME (CONSTITUENCY): text..."
+# Used in Tika-extracted elibrary.sansad.in text where the speaker name and the
+# first sentence of the speech appear on the same line.
+# Checked only when _ATTRIBUTION_RE does not match; captures (speaker, body).
+_INLINE_ATTRIBUTION_RE = re.compile(
+    r"^([A-Z][A-Z\s\.\,\(\)\'\/\-]{1,150})\s*:\s+(.+)",
+)
+
+# Trailing constituency/role parenthetical: "(VIRUDHUNAGAR)", "(GODDA)", etc.
+# Stripped from speaker names extracted from inline attributions.
+# Does NOT strip mid-name parentheticals like "(PROF.)" — only the trailing one.
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 # Honorific prefixes (used for speaker_role detection heuristic)
 _HONORIFICS = frozenset([
@@ -288,12 +303,32 @@ def _tokenize(raw_text: str) -> list[tuple[str, ...]]:
             current_lines.append("")
             continue
 
+        # Standalone attribution (NAME:\n — IA djvu.txt and HTML-parsed formats).
         m = _ATTRIBUTION_RE.match(stripped)
         if m:
             flush()
             current_speaker = m.group(1).strip()
             current_lines = []
             continue
+
+        # Inline attribution (NAME: text — Tika-extracted elibrary.sansad.in text).
+        # Only checked when the standalone pattern did not match, so existing
+        # IA/HTML format behaviour is unchanged.
+        m_inline = _INLINE_ATTRIBUTION_RE.match(stripped)
+        if m_inline:
+            speaker_raw = m_inline.group(1).strip()
+            # Guard: procedural headings like "STARRED QUESTION NO. 5" should
+            # not be treated as speaker attributions.
+            if not _PROCEDURAL_BREAK_RE.match(speaker_raw):
+                flush()
+                # Strip trailing constituency "(PLACE)" — e.g. "(VIRUDHUNAGAR)".
+                speaker = _TRAILING_PAREN_RE.sub("", speaker_raw).strip()
+                # Strip stray trailing ")" — artifact of wrapped multi-line
+                # minister names split across PDF pages.
+                speaker = re.sub(r"\)+\s*$", "", speaker).strip()
+                current_speaker = speaker
+                current_lines = [m_inline.group(2).strip()]
+                continue
 
         if is_blank(i - 1) and is_blank(i + 1) and _is_break_line(stripped):
             flush()

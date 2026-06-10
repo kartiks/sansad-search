@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS raw_documents (
     corpus           VARCHAR(2)   NOT NULL CHECK (corpus IN ('CA','LS','RS')),
     date             DATE,
     provider         VARCHAR(50)  NOT NULL,
-    format           VARCHAR(10)  NOT NULL CHECK (format IN ('html','ia_text','pdf')),
+    format           VARCHAR(20)  NOT NULL CHECK (format IN ('html','ia_text','pdf','elibrary_text')),
     extracted_text   TEXT,
     metadata_json    JSONB        NOT NULL DEFAULT '{}',
     fetch_url        TEXT,

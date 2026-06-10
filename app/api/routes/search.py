@@ -55,6 +55,7 @@ class FilterInput(BaseModel):
     date_to: Optional[str] = None
     speaker: Optional[str] = None
     session: Optional[str] = None
+    subject: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
@@ -188,6 +189,8 @@ async def search(
             filter_dict["speaker"] = filters.speaker.strip()
         if filters.session and filters.session.strip():
             filter_dict["session"] = filters.session.strip()
+        if filters.subject and filters.subject.strip():
+            filter_dict["subject"] = filters.subject.strip()
 
     # 5. Execute search
     debug_active = debug in ("1", "true", "True")

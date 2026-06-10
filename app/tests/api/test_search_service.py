@@ -148,6 +148,35 @@ class TestBuildFilterExpression:
         expr = build_filter_expression({"session": "\t\n"})
         assert expr is None
 
+    def test_subject_filter(self):
+        expr = build_filter_expression({"subject": "Railways"})
+        assert 'subject CONTAINS "Railways"' in expr
+
+    def test_subject_filter_multiword(self):
+        expr = build_filter_expression({"subject": "Demands for Grants"})
+        assert 'subject CONTAINS "Demands for Grants"' in expr
+
+    def test_subject_filter_escapes_inner_quotes(self):
+        expr = build_filter_expression({"subject": 'Budget "Railways"'})
+        assert '\\"Railways\\"' in expr
+
+    def test_whitespace_only_subject_excluded(self):
+        expr = build_filter_expression({"subject": "  "})
+        assert expr is None
+
+    def test_all_active_filters_with_subject_joined(self):
+        expr = build_filter_expression({
+            "sources": ["LS"],
+            "proceeding_types": ["debate"],
+            "date_from": "2020-01-01",
+            "date_to": "2022-12-31",
+            "speaker": "Jairam Ramesh",
+            "session": "Budget Session",
+            "subject": "Railways",
+        })
+        assert expr.count(" AND ") == 6  # 7 parts → 6 ANDs
+        assert 'subject CONTAINS "Railways"' in expr
+
     def test_session_filter_excludes_ca_implicitly(self):
         """
         Session filter works at Meilisearch level: CA docs have no session_name
@@ -235,14 +264,14 @@ class TestBuildSnippet:
         snippet, _ = _build_snippet(text, ["target1", "target2"])
         assert "<mark>target1</mark>" in snippet or "<mark>target2</mark>" in snippet
 
-    def test_snippet_at_least_280_words_for_long_text(self):
-        """Snippet window is 280 words; a long text yields a snippet of ≥280 words."""
+    def test_snippet_at_least_200_words_for_long_text(self):
+        """Snippet window is 200 words; a long text yields a snippet of ≥200 words."""
         text = " ".join(f"word{i}" for i in range(1000)) + " target end"
         snippet, _ = _build_snippet(text, ["target"])
         # Count word tokens in the (HTML-stripped) snippet.
         import re as _re
         words = _re.findall(r"[a-zA-Z0-9]+", _re.sub(r"<[^>]+>", "", snippet))
-        assert len(words) >= 280
+        assert len(words) >= 200
 
     def test_short_text_returned_in_full(self):
         """A text shorter than the window is returned whole (no truncation)."""
