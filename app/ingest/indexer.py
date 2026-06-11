@@ -183,6 +183,32 @@ class Indexer:
         self._pg = psycopg2.connect(self._pg_dsn)
         logger.info("Reconnected to PostgreSQL after connection loss")
 
+    def _execute_read(self, sql: str, params: tuple) -> Any:
+        """
+        Execute a read-only query, reconnecting and retrying once on a dead
+        connection, and return the live cursor for the caller to fetch from.
+
+        Long discovery/fetch phases can leave the server-side connection closed by
+        the time a read fires; without this guard the read would raise instead of
+        recovering the way the write methods do. The cursor is returned post-execute
+        so callers keep their natural fetch pattern (fetchone for existence checks,
+        fetchall for bulk reads).
+        """
+        try:
+            cursor = self._pg.cursor()
+            cursor.execute(sql, params)
+            return cursor
+        except Exception as exc:
+            if _is_dead_connection(exc) and self._pg_dsn:
+                logger.warning(
+                    "Dead PG connection during read; reconnecting and retrying"
+                )
+                self._reconnect()
+                cursor = self._pg.cursor()
+                cursor.execute(sql, params)
+                return cursor
+            raise
+
     # ── Core indexing ──────────────────────────────────────────────────────────
 
     def index_record(
@@ -379,8 +405,7 @@ class Indexer:
 
     def check_raw_document_exists(self, canonical_doc_id: str, corpus: str) -> bool:
         """Return True if (canonical_doc_id, corpus) already exists in raw_documents."""
-        cursor = self._pg.cursor()
-        cursor.execute(
+        cursor = self._execute_read(
             "SELECT 1 FROM raw_documents WHERE canonical_doc_id = %s AND corpus = %s",
             (canonical_doc_id, corpus),
         )
@@ -398,7 +423,6 @@ class Indexer:
         Used by Stage 2 orchestrators to iterate over documents to process.
         metadata_json is returned as a Python dict (psycopg2 decodes JSONB).
         """
-        cursor = self._pg.cursor()
         params: list[Any] = [corpus]
         clauses = ["corpus = %s"]
         if date_from:
@@ -408,7 +432,7 @@ class Indexer:
             clauses.append("date <= %s")
             params.append(date_to)
         where = " AND ".join(clauses)
-        cursor.execute(
+        cursor = self._execute_read(
             f"SELECT canonical_doc_id, corpus, date, provider, format, "
             f"extracted_text, metadata_json, fetch_url, citation_url "
             f"FROM raw_documents WHERE {where}",
@@ -504,14 +528,12 @@ class Indexer:
 
         Returns total number of documents pushed.
         """
-        cursor = self._pg.cursor()
         total = 0
 
         for table, record_type in (("speeches", "speech"), ("qa_exchanges", "qa")):
-            cursor.execute(f"SELECT * FROM {table}")
+            cursor = self._execute_read(f"SELECT * FROM {table}", ())
             columns = [desc[0] for desc in cursor.description]
-            rows = cursor.fetchall()
-            for row in rows:
+            for row in cursor.fetchall():
                 record = dict(zip(columns, row))
                 record["record_type"] = record_type
                 doc = build_meili_document(record)

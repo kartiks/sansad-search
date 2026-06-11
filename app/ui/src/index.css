@@ -133,7 +133,12 @@ mark {
   align-items: center;
   gap: 8px;
   margin-top: 16px;
+}
+
+.suggested-queries-chips {
+  display: flex;
   flex-wrap: wrap;
+  gap: 8px;
 }
 
 .suggested-queries-label {

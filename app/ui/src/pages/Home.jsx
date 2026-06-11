@@ -278,21 +278,23 @@ export default function Home() {
           {value.length === 0 && (
             <div className="suggested-queries-row" data-testid="suggested-queries">
               <span className="suggested-queries-label">Try:</span>
-              {suggestedQueries.map((query, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  className="suggested-query-chip"
-                  onClick={() => {
-                    setValue(query)
-                    recordSearch(query)
-                    submitSearch(query, filters)
-                  }}
-                  data-testid="suggested-query-chip"
-                >
-                  {query}
-                </button>
-              ))}
+              <div className="suggested-queries-chips">
+                {suggestedQueries.map((query, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="suggested-query-chip"
+                    onClick={() => {
+                      setValue(query)
+                      recordSearch(query)
+                      submitSearch(query, filters)
+                    }}
+                    data-testid="suggested-query-chip"
+                  >
+                    {query}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>

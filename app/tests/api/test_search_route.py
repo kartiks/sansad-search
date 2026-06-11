@@ -482,7 +482,7 @@ class TestSnippetCropParams:
         params = captured[0]["params"]
         assert params["attributes_to_crop"] == ["full_text_en"]
 
-    def test_crop_length_is_400(self):
+    def test_crop_length_is_200(self):
         mock_client, captured = self._captured_search_params()
         mock_pool = make_mock_pool()
         app.dependency_overrides[get_pool] = lambda: mock_pool
@@ -490,7 +490,7 @@ class TestSnippetCropParams:
         with TestClient(app) as client:
             client.post("/api/search", json={"query": "budget"})
         params = captured[0]["params"]
-        assert params["crop_length"] == 280
+        assert params["crop_length"] == 200
 
     def test_crop_marker_present(self):
         mock_client, captured = self._captured_search_params()

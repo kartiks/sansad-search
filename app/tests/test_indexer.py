@@ -570,6 +570,128 @@ class TestIndexerConnectionResilience:
         assert "INSERT INTO index_status" in new_cursor.execute.call_args[0][0]
         new_conn.commit.assert_called_once()
 
+    def test_check_raw_document_exists_reconnects_on_dead_connection(self):
+        """
+        check_raw_document_exists is the Stage 1 dedup read fired during long
+        discovery phases; a connection dropped mid-phase must reconnect and retry,
+        not raise.
+        """
+        dead_error = psycopg2.OperationalError(
+            "server closed the connection unexpectedly"
+        )
+        dead_cursor = MagicMock()
+        dead_cursor.execute.side_effect = dead_error
+        dead_conn = MagicMock()
+        dead_conn.cursor.return_value = dead_cursor
+
+        new_cursor = MagicMock()
+        new_cursor.fetchone.return_value = (1,)
+        new_conn = MagicMock()
+        new_conn.cursor.return_value = new_cursor
+
+        meili, _ = _make_mock_meili()
+        dsn = "postgresql://localhost/testdb"
+        indexer = Indexer(dead_conn, meili, pg_dsn=dsn)
+
+        with patch("psycopg2.connect", return_value=new_conn) as mock_connect:
+            result = indexer.check_raw_document_exists("doc-1", "LS")
+
+        mock_connect.assert_called_once_with(dsn)
+        assert result is True, "Existence check must succeed (True) after reconnect"
+        assert indexer._pg is new_conn
+
+    def test_read_raw_documents_for_scope_reconnects_on_dead_connection(self):
+        """
+        read_raw_documents_for_scope (Stage 2 iteration) must reconnect and retry
+        once when the connection was dropped, yielding the recovered rows.
+        """
+        dead_error = psycopg2.OperationalError(
+            "server closed the connection unexpectedly"
+        )
+        dead_cursor = MagicMock()
+        dead_cursor.execute.side_effect = dead_error
+        dead_conn = MagicMock()
+        dead_conn.cursor.return_value = dead_cursor
+
+        new_cursor = MagicMock()
+        new_cursor.description = [
+            ("canonical_doc_id",), ("corpus",), ("date",), ("provider",),
+            ("format",), ("extracted_text",), ("metadata_json",),
+            ("fetch_url",), ("citation_url",),
+        ]
+        new_cursor.fetchall.return_value = [
+            ("doc-1", "LS", "2023-01-01", "ia", "ia_text", "body",
+             {"k": "v"}, "https://fetch", "https://cite"),
+        ]
+        new_conn = MagicMock()
+        new_conn.cursor.return_value = new_cursor
+
+        meili, _ = _make_mock_meili()
+        dsn = "postgresql://localhost/testdb"
+        indexer = Indexer(dead_conn, meili, pg_dsn=dsn)
+
+        with patch("psycopg2.connect", return_value=new_conn) as mock_connect:
+            results = list(indexer.read_raw_documents_for_scope("LS"))
+
+        mock_connect.assert_called_once_with(dsn)
+        assert len(results) == 1
+        assert results[0]["canonical_doc_id"] == "doc-1"
+        assert results[0]["metadata_json"] == {"k": "v"}
+        assert indexer._pg is new_conn
+
+    def test_reindex_from_db_reconnects_on_dead_connection(self):
+        """
+        reindex_from_db reads the full corpus from PostgreSQL; a dropped connection
+        on the first SELECT must reconnect and complete the re-index.
+        """
+        dead_error = psycopg2.OperationalError(
+            "server closed the connection unexpectedly"
+        )
+        dead_cursor = MagicMock()
+        dead_cursor.execute.side_effect = dead_error
+        dead_conn = MagicMock()
+        dead_conn.cursor.return_value = dead_cursor
+
+        new_cursor = MagicMock()
+        new_cursor.description = [("id",), ("source",), ("full_text_en",), ("date",)]
+        # First call (speeches) yields one row; second call (qa_exchanges) yields none.
+        new_cursor.fetchall.side_effect = [
+            [("u1", "LS", "speech text", "2023-01-01")],
+            [],
+        ]
+        new_conn = MagicMock()
+        new_conn.cursor.return_value = new_cursor
+
+        meili, index = _make_mock_meili()
+        dsn = "postgresql://localhost/testdb"
+        indexer = Indexer(dead_conn, meili, pg_dsn=dsn)
+
+        with patch("psycopg2.connect", return_value=new_conn) as mock_connect:
+            total = indexer.reindex_from_db()
+
+        mock_connect.assert_called_once_with(dsn)
+        assert total == 1, "The one recovered speech must be pushed to Meilisearch"
+        index.add_documents.assert_called_once()
+        assert indexer._pg is new_conn
+
+    def test_read_propagates_non_dead_connection_error(self):
+        """
+        A read failure that is NOT a dead-connection signal must propagate, not be
+        silently swallowed or retried.
+        """
+        cursor = MagicMock()
+        cursor.execute.side_effect = psycopg2.ProgrammingError("syntax error at or near")
+        pg = MagicMock()
+        pg.cursor.return_value = cursor
+
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili, pg_dsn="postgresql://localhost/testdb")
+
+        with patch("psycopg2.connect") as mock_connect:
+            with pytest.raises(psycopg2.ProgrammingError):
+                indexer.check_raw_document_exists("doc-1", "LS")
+        mock_connect.assert_not_called()  # no reconnect attempted for a non-dead error
+
 
 class TestIndexerUpdateStatus:
     def test_update_index_status_inserts_row(self, tmp_path):
