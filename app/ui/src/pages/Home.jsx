@@ -9,6 +9,14 @@ import {
   STATUS_ENDPOINT,
   BODY_BADGE_STYLES,
 } from '../lib/constants.js'
+import { defaultFilterState, isDefaultFilterState } from '../lib/filterState.js'
+import { formatCount, formatLongDate } from '../lib/statusFormat.js'
+import { useCookieHistory } from '../hooks/useCookieHistory.js'
+import { useSavedSearches, sanitizeStoredFilters } from '../hooks/useSavedSearches.js'
+import AdvancedSearchModal from '../components/AdvancedSearchModal.jsx'
+import RecentSearchesDropdown from '../components/RecentSearchesDropdown.jsx'
+import SavedSearchesPanel from '../components/SavedSearchesPanel.jsx'
+import Toast from '../components/Toast.jsx'
 
 const CORPUS_PILLS = [
   { label: 'Constituent Assembly 1946–1950', source: 'CA' },
@@ -32,14 +40,6 @@ const QUERY_POOLS = [
 function pickRandom(pool) {
   return pool[Math.floor(Math.random() * pool.length)]
 }
-import { defaultFilterState, isDefaultFilterState } from '../lib/filterState.js'
-import { formatCount, formatLongDate } from '../lib/statusFormat.js'
-import { useCookieHistory } from '../hooks/useCookieHistory.js'
-import { useSavedSearches, sanitizeStoredFilters } from '../hooks/useSavedSearches.js'
-import AdvancedSearchModal from '../components/AdvancedSearchModal.jsx'
-import RecentSearchesDropdown from '../components/RecentSearchesDropdown.jsx'
-import SavedSearchesPanel from '../components/SavedSearchesPanel.jsx'
-import Toast from '../components/Toast.jsx'
 
 function formatStatusStrip(status) {
   if (!status || status.status !== 'ok') {

@@ -185,6 +185,25 @@ describe('AdvancedSearchModal — proceeding type chips', () => {
     })
     expect(screen.getByTestId('modal-apply')).not.toBeDisabled()
   })
+
+  it('"Clear" in CA-only mode sets all type chips to aria-pressed=false and Apply remains enabled', () => {
+    renderModal()
+    // Switch to CA-only: deselect LS and RS
+    fireEvent.click(screen.getByTestId('source-chip-LS'))
+    fireEvent.click(screen.getByTestId('source-chip-RS'))
+    // In CA-only mode, only the debate chip is enabled and selected
+    expect(screen.getByTestId('type-chip-debate')).toHaveAttribute('aria-pressed', 'true')
+    // Click Clear — removes debate from proceeding_types; non-debate types remain in state
+    fireEvent.click(screen.getByTestId('type-clear'))
+    // All chips show aria-pressed=false: debate is now deselected; non-debate chips are
+    // disabled (aria-pressed = selected && !disabled = false regardless of state value)
+    ALL_PROCEEDING_TYPES.forEach((pt) => {
+      expect(screen.getByTestId(`type-chip-${pt}`)).toHaveAttribute('aria-pressed', 'false')
+    })
+    // Apply must remain enabled: non-debate types are still in proceeding_types,
+    // so proceeding_types.length > 0 and validation passes
+    expect(screen.getByTestId('modal-apply')).not.toBeDisabled()
+  })
 })
 
 describe('AdvancedSearchModal — Apply', () => {

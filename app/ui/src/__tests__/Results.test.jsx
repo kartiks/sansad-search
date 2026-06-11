@@ -1089,4 +1089,24 @@ describe('Results — debug mode activation (?debug=1)', () => {
     expect(searchCalls.length).toBeGreaterThan(0)
     expect(searchCalls[0][0]).toBe('/api/search')
   })
+
+  it('debug-badge renders in Results header when ?debug=1 is active', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeDebugSearchResponse(),
+    })
+    renderResults('/search?q=rights&page=1&debug=1')
+    await screen.findByTestId('results-list')
+    expect(screen.getByTestId('debug-badge')).toBeInTheDocument()
+  })
+
+  it('debug-badge is absent in normal mode (no ?debug param)', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeSearchResponse(),
+    })
+    renderResults('/search?q=rights&page=1')
+    await screen.findByTestId('results-list')
+    expect(screen.queryByTestId('debug-badge')).toBeNull()
+  })
 })

@@ -654,3 +654,76 @@ describe('RecordDetail — adjacent load error UI', () => {
     expect(screen.getByTestId('adjacent-record-n8')).toBeInTheDocument()
   })
 })
+
+// ── Debug badge in sticky header ──────────────────────────────────────────────
+
+describe('RecordDetail — debug badge in sticky header', () => {
+  it('detail-debug-badge renders when ?debug=1 is in the URL', async () => {
+    mockFetch(makeRecordDetail())
+    render(
+      <MemoryRouter initialEntries={['/record/speech-1?debug=1']}>
+        <Routes>
+          <Route path="/record/:id" element={<RecordDetail />} />
+          <Route path="/" element={<div data-testid="home-page">Home</div>} />
+        </Routes>
+      </MemoryRouter>
+    )
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+    expect(screen.getByTestId('detail-debug-badge')).toBeInTheDocument()
+  })
+
+  it('detail-debug-badge is absent when no ?debug param is present', async () => {
+    mockFetch(makeRecordDetail())
+    renderDetail()
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+    expect(screen.queryByTestId('detail-debug-badge')).toBeNull()
+  })
+})
+
+// ── Sticky header interactive elements ────────────────────────────────────────
+
+describe('RecordDetail — sticky header interactions', () => {
+  it('typing in detail-search-input and submitting navigates to /search?q=...', async () => {
+    mockFetch(makeRecordDetail())
+    render(
+      <MemoryRouter initialEntries={['/record/speech-1']}>
+        <LocationDisplay />
+        <Routes>
+          <Route path="/record/:id" element={<RecordDetail />} />
+          <Route path="/search" element={<div data-testid="search-page">Search</div>} />
+          <Route path="/" element={<div data-testid="home-page">Home</div>} />
+        </Routes>
+      </MemoryRouter>
+    )
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByTestId('detail-search-input'), {
+      target: { value: 'constitutional rights' },
+    })
+    fireEvent.click(screen.getByTestId('detail-search-submit'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location-display')).toHaveTextContent('/search')
+    )
+    expect(screen.getByTestId('search-page')).toBeInTheDocument()
+  })
+
+  it('clicking detail-advanced-search-link opens the AdvancedSearchModal', async () => {
+    mockFetch(makeRecordDetail())
+    renderDetail()
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
+    fireEvent.click(screen.getByTestId('detail-advanced-search-link'))
+    expect(screen.getByTestId('advanced-search-modal')).toBeInTheDocument()
+  })
+
+  it('clicking detail-bookmark-btn renders the SavedSearchesPanel', async () => {
+    mockFetch(makeRecordDetail())
+    renderDetail()
+    await waitFor(() => expect(screen.getByTestId('record-detail')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('detail-bookmark-btn'))
+    expect(screen.getByTestId('saved-searches-panel')).toBeInTheDocument()
+  })
+})
