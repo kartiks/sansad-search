@@ -130,10 +130,11 @@ async def _async_main(args: argparse.Namespace) -> int:
     """Async main — returns exit code."""
     _setup_logging()
 
+    pg_dsn = os.environ["DATABASE_URL"]
     pg_conn = _connect_postgres()
     meili_client = _connect_meilisearch()
     names_dict = load_names_dict(NAMES_DICT_PATH)
-    indexer = Indexer(pg_conn, meili_client)
+    indexer = Indexer(pg_conn, meili_client, pg_dsn=pg_dsn)
 
     # ── Re-index from DB (no scraping) ────────────────────────────────────────
     if args.reindex_from_db:

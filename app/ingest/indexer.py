@@ -26,6 +26,8 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Any, Iterator, Optional
 
+import psycopg2
+
 from ingest.canonical.names import normalize_for_dedup
 from ingest.checkpoints.store import CheckpointStore
 
@@ -136,6 +138,14 @@ def build_meili_document(record: dict[str, Any]) -> dict[str, Any]:
     return doc
 
 
+def _is_dead_connection(exc: Exception) -> bool:
+    """True when a psycopg2.OperationalError signals a dropped server-side connection."""
+    if not isinstance(exc, psycopg2.OperationalError):
+        return False
+    pgcode = getattr(exc, "pgcode", None)
+    return pgcode is None or "server closed" in str(exc).lower()
+
+
 # ── Indexer class ──────────────────────────────────────────────────────────────
 
 class Indexer:
@@ -147,14 +157,31 @@ class Indexer:
         meili_client: meilisearch.Client instance (synchronous)
     """
 
-    def __init__(self, pg_conn: Any, meili_client: Any) -> None:
+    def __init__(
+        self,
+        pg_conn: Any,
+        meili_client: Any,
+        pg_dsn: Optional[str] = None,
+    ) -> None:
         self._pg = pg_conn
+        self._pg_dsn = pg_dsn
         self._meili = meili_client
         self._meili_batch: list[dict] = []
 
         # Counters for index_status
         self.counts: dict[str, int] = {"CA": 0, "LS": 0, "RS": 0}
         self.date_ranges: dict[str, list[str]] = {"CA": [], "LS": [], "RS": []}
+
+    def _reconnect(self) -> None:
+        """Replace self._pg with a fresh connection using the stored DSN."""
+        if not self._pg_dsn:
+            raise RuntimeError("No pg_dsn stored; cannot reconnect to PostgreSQL")
+        try:
+            self._pg.close()
+        except Exception:
+            pass
+        self._pg = psycopg2.connect(self._pg_dsn)
+        logger.info("Reconnected to PostgreSQL after connection loss")
 
     # ── Core indexing ──────────────────────────────────────────────────────────
 
@@ -189,12 +216,36 @@ class Indexer:
         try:
             inserted = self._insert_record(record_with_key)
         except Exception as exc:
-            # UniqueViolation or other constraint errors: treat as duplicate
-            logger.warning(
-                "PG insert failed for dedup_key=%s: %s; skipping", dedup_key, exc
-            )
-            self._pg.rollback()
-            return False
+            if _is_dead_connection(exc) and self._pg_dsn:
+                # Server-side timeout closed the connection; reconnect and retry once.
+                logger.warning(
+                    "Dead PG connection detected; reconnecting and retrying insert "
+                    "(dedup_key=%s)",
+                    dedup_key,
+                )
+                try:
+                    self._reconnect()
+                    inserted = self._insert_record(record_with_key)
+                except Exception as retry_exc:
+                    logger.warning(
+                        "PG insert failed after reconnect for dedup_key=%s: %s; skipping",
+                        dedup_key, retry_exc,
+                    )
+                    try:
+                        self._pg.rollback()
+                    except psycopg2.InterfaceError:
+                        pass
+                    return False
+            else:
+                # UniqueViolation or other constraint error: treat as duplicate.
+                logger.warning(
+                    "PG insert failed for dedup_key=%s: %s; skipping", dedup_key, exc
+                )
+                try:
+                    self._pg.rollback()
+                except psycopg2.InterfaceError:
+                    pass
+                return False
 
         if not inserted:
             return False
@@ -289,28 +340,41 @@ class Indexer:
         Stage 1 run, the existing row is left untouched. This is the sole
         Stage 1 dedup guard — no SQLite checkpoint entry is written.
         """
-        cursor = self._pg.cursor()
-        cursor.execute(
-            """
+        sql = """
             INSERT INTO raw_documents
                 (canonical_doc_id, corpus, date, provider, format,
                  extracted_text, metadata_json, fetch_url, citation_url)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (canonical_doc_id, corpus) DO NOTHING
-            """,
-            (
-                canonical_doc_id,
-                corpus,
-                date,
-                provider,
-                format,
-                extracted_text,
-                json.dumps(metadata_json, default=str),
-                fetch_url,
-                citation_url,
-            ),
+            """
+        params = (
+            canonical_doc_id,
+            corpus,
+            date,
+            provider,
+            format,
+            extracted_text,
+            json.dumps(metadata_json, default=str),
+            fetch_url,
+            citation_url,
         )
-        self._pg.commit()
+        try:
+            cursor = self._pg.cursor()
+            cursor.execute(sql, params)
+            self._pg.commit()
+        except Exception as exc:
+            if _is_dead_connection(exc) and self._pg_dsn:
+                logger.warning("Dead PG connection in write_raw_document; reconnecting")
+                self._reconnect()
+                cursor = self._pg.cursor()
+                cursor.execute(sql, params)
+                self._pg.commit()
+            else:
+                try:
+                    self._pg.rollback()
+                except psycopg2.InterfaceError:
+                    pass
+                raise
         logger.debug("write_raw_document: %s (corpus=%s)", canonical_doc_id, corpus)
 
     def check_raw_document_exists(self, canonical_doc_id: str, corpus: str) -> bool:
@@ -380,7 +444,6 @@ class Indexer:
 
     def update_index_status(self) -> None:
         """Write one row to the index_status PostgreSQL table."""
-        cursor = self._pg.cursor()
 
         def _min_date(dates: list[str]) -> Optional[str]:
             return min(dates) if dates else None
@@ -392,8 +455,7 @@ class Indexer:
         ls_dates = self.date_ranges.get("LS", [])
         rs_dates = self.date_ranges.get("RS", [])
 
-        cursor.execute(
-            """
+        sql = """
             INSERT INTO index_status (
                 run_completed_at,
                 total_records,
@@ -401,16 +463,31 @@ class Indexer:
                 ls_count, ls_date_from, ls_date_to,
                 rs_count, rs_date_from, rs_date_to
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                datetime.now(timezone.utc),
-                sum(self.counts.values()),
-                self.counts.get("CA", 0), _min_date(ca_dates), _max_date(ca_dates),
-                self.counts.get("LS", 0), _min_date(ls_dates), _max_date(ls_dates),
-                self.counts.get("RS", 0), _min_date(rs_dates), _max_date(rs_dates),
-            ),
+            """
+        params = (
+            datetime.now(timezone.utc),
+            sum(self.counts.values()),
+            self.counts.get("CA", 0), _min_date(ca_dates), _max_date(ca_dates),
+            self.counts.get("LS", 0), _min_date(ls_dates), _max_date(ls_dates),
+            self.counts.get("RS", 0), _min_date(rs_dates), _max_date(rs_dates),
         )
-        self._pg.commit()
+        try:
+            cursor = self._pg.cursor()
+            cursor.execute(sql, params)
+            self._pg.commit()
+        except Exception as exc:
+            if _is_dead_connection(exc) and self._pg_dsn:
+                logger.warning("Dead PG connection in update_index_status; reconnecting")
+                self._reconnect()
+                cursor = self._pg.cursor()
+                cursor.execute(sql, params)
+                self._pg.commit()
+            else:
+                try:
+                    self._pg.rollback()
+                except psycopg2.InterfaceError:
+                    pass
+                raise
         logger.info(
             "index_status updated: total=%d CA=%d LS=%d RS=%d",
             sum(self.counts.values()),

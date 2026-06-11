@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, patch
+import psycopg2
 import pytest
 
 from ingest.checkpoints.store import CheckpointStore
@@ -477,6 +478,97 @@ class TestIndexerResumeability:
 
         # Total of interrupted + resumed must equal the clean run
         assert interrupted_count + resumed_count == clean_count
+
+
+class TestIndexerConnectionResilience:
+    """Tests for PostgreSQL connection timeout recovery (Bug 1 + Bug 2)."""
+
+    def test_interface_error_in_rollback_does_not_crash(self, tmp_path):
+        """
+        Bug 1: rollback() raising InterfaceError (connection already closed) must be
+        swallowed — the process must not crash and the record must be skipped.
+        """
+        cursor = MagicMock()
+        cursor.execute.side_effect = Exception("NOT NULL constraint violation")
+        pg = MagicMock()
+        pg.cursor.return_value = cursor
+        pg.rollback.side_effect = psycopg2.InterfaceError("connection already closed")
+        meili, _ = _make_mock_meili()
+        indexer = Indexer(pg, meili)
+        record = _make_speech_record()
+
+        with CheckpointStore(tmp_path / "cp.db") as cp:
+            result = indexer.index_record(record, cp)
+
+        assert result is False  # record skipped — no crash
+
+    def test_operational_error_triggers_reconnect_and_retry(self, tmp_path):
+        """
+        Bug 2: OperationalError with pgcode=None (dead connection) must trigger
+        _reconnect() and retry the insert; subsequent records must succeed.
+        """
+        dead_error = psycopg2.OperationalError(
+            "server closed the connection unexpectedly"
+        )
+        # pgcode is None by default on manually constructed OperationalError
+
+        dead_cursor = MagicMock()
+        dead_cursor.execute.side_effect = dead_error
+        dead_conn = MagicMock()
+        dead_conn.cursor.return_value = dead_cursor
+
+        new_cursor = MagicMock()
+        new_cursor.fetchone.return_value = ("recovered-uuid",)
+        new_conn = MagicMock()
+        new_conn.cursor.return_value = new_cursor
+
+        meili, _ = _make_mock_meili()
+        dsn = "postgresql://localhost/testdb"
+        indexer = Indexer(dead_conn, meili, pg_dsn=dsn)
+        record = _make_speech_record()
+
+        with patch("psycopg2.connect", return_value=new_conn) as mock_connect:
+            with CheckpointStore(tmp_path / "cp.db") as cp:
+                result = indexer.index_record(record, cp)
+
+        mock_connect.assert_called_once_with(dsn)
+        assert result is True, "Insert must succeed after reconnect"
+        assert indexer._pg is new_conn, "Indexer must hold the new connection after reconnect"
+
+    def test_update_index_status_reconnects_on_dead_connection(self):
+        """
+        update_index_status must reconnect and retry the INSERT when the connection
+        was dropped between the last flush() and the final status write.
+        """
+        dead_error = psycopg2.OperationalError(
+            "server closed the connection unexpectedly"
+        )
+
+        dead_cursor = MagicMock()
+        dead_cursor.execute.side_effect = dead_error
+        dead_conn = MagicMock()
+        dead_conn.cursor.return_value = dead_cursor
+
+        new_cursor = MagicMock()
+        new_conn = MagicMock()
+        new_conn.cursor.return_value = new_cursor
+
+        meili, _ = _make_mock_meili()
+        dsn = "postgresql://localhost/testdb"
+        indexer = Indexer(dead_conn, meili, pg_dsn=dsn)
+        indexer.counts = {"CA": 5, "LS": 10, "RS": 3}
+        indexer.date_ranges = {
+            "CA": ["1947-01-01", "1950-11-26"],
+            "LS": ["2023-01-01", "2023-12-31"],
+            "RS": ["2019-01-01"],
+        }
+
+        with patch("psycopg2.connect", return_value=new_conn):
+            indexer.update_index_status()  # must not raise
+
+        new_cursor.execute.assert_called_once()
+        assert "INSERT INTO index_status" in new_cursor.execute.call_args[0][0]
+        new_conn.commit.assert_called_once()
 
 
 class TestIndexerUpdateStatus:
