@@ -119,17 +119,19 @@ def _get_list(metadata: dict[str, Any], key: str) -> list[str]:
     """Extract a metadata value as a list of strings.
 
     If the value is already a list, return all non-empty elements.
-    If a string, split on comma.
+    If a string, split on semicolon (the eparlib_members delimiter) and
+    canonicalize each element: strip leading/trailing whitespace and collapse
+    internal whitespace runs to a single space.
     """
     val = metadata.get(key)
     if val is None:
         return []
     if isinstance(val, list):
-        return [str(item).strip() for item in val if str(item).strip()]
+        return [" ".join(str(item).split()) for item in val if str(item).strip()]
     raw = str(val).strip()
     if not raw:
         return []
-    return [part.strip() for part in raw.split(",") if part.strip()]
+    return [" ".join(part.split()) for part in raw.split(";") if part.strip()]
 
 
 def _parse_eparlib_date(date_str: str) -> str | None:

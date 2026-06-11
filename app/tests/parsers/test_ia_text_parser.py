@@ -340,12 +340,26 @@ class TestEparlibQAMetadataFields:
         assert result is not None
         assert result["question_number"] is None
 
-    def test_questioner_names_from_comma_string(self):
-        """eparlib_members as comma-separated string → list of names."""
-        meta = _meta(eparlib_members="Shri A Kumar, Shri B Singh")
+    def test_questioner_names_from_semicolon_string(self):
+        """eparlib_members as semicolon-delimited string → list of names."""
+        meta = _meta(eparlib_members="Shri A Kumar; Shri B Singh")
         result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
         assert result is not None
         assert result["questioner_names"] == ["Shri A Kumar", "Shri B Singh"]
+
+    def test_questioner_names_semicolon_multi_questioner(self):
+        """'A; B; C' splits into 3 individually canonicalized elements."""
+        meta = _meta(eparlib_members="A; B; C")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["questioner_names"] == ["A", "B", "C"]
+
+    def test_questioner_names_internal_whitespace_collapsed(self):
+        """Extra internal spaces in a name are collapsed to one space."""
+        meta = _meta(eparlib_members="Shri  Ram   Kumar; Shri  A  Singh")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result is not None
+        assert result["questioner_names"] == ["Shri Ram Kumar", "Shri A Singh"]
 
     def test_questioner_names_from_list(self):
         """eparlib_members as list → all elements returned."""
