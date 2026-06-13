@@ -1,7 +1,7 @@
 # Architecture — SansadSearch
 
 **PRD version:** v3.1
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules); updated 2026-06-03 (§5 CA Date: document all three URL slug formats — DD-MMM-YYYY, DD-MMMM-YYYY, YYYY-MM-DD); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table; two-stage pipeline split via `--stage fetch|process|all`; dual-signal checkpoint — `raw_documents` PK = Stage 1 complete, SQLite `processed_documents` = Stage 2 complete); updated 2026-06-04 (§1/§3/§5/§6 stale `{identifier}_djvu.txt` URL construction references replaced with dynamic DjVuTXT URL discovery from IA metadata `files` array); updated 2026-06-04 (PRD v2.1: §3 main.py comment, §4 Stage 1 data flow, §5 Deferred Processing + Checkpoint store + Cross-source identity — `--date-from`/`--date-to` scope both stages; `raw_documents` PK corrected to composite `(canonical_doc_id, corpus)`; per-corpus dedup scope clarified); updated 2026-06-06 (PRD v3.0: **Non-Negotiable #9 reversed** — IA/archive.org URL is now the citation for LS and RS-via-IA/rsdebate; F01 adjacent speech merging + `lok_sabha_number`/`segments`/`canonical_doc_id` columns; F05 ≥400-word snippets; F09 inline adjacent loading replaces single Prev/Next nav — new `GET /api/record/{id}/adjacent`; F10 debug mode — new `api/routes/debug.py` + `api/services/debug.py`, search debug envelope, two lazy-fetch debug endpoints); updated 2026-06-09 (PRD v3.1: F05 `cropLength` reduced from 400 to 200 words)
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source integration redesign — multi-provider per corpus; reconciled to PRD v1.2: OCR removed pipeline-wide, direct DSpace PDF fallback is embedded-text-only); updated 2026-05-31 (reconciled to PRD v1.3: RS-via-IA canonical citation = rsdebate.nic.in derived from DSpace handle N, never eparlib_document_url; null on no-derivable-handle; dual-corpus InternetArchiveProvider ratified); updated 2026-06-01 (PRD v2.0: F09 record-detail page served from PostgreSQL — `GET /api/record/{id}` + adjacent navigation; F01 new fields `lang_original`/`time_of_day`/`word_count` + Q+A `sequence_within_sitting`; F05 `lang_original` badge + `time_of_day` in search results; CA field-level parsing rules); updated 2026-06-03 (§5 CA Date: document all three URL slug formats — DD-MMM-YYYY, DD-MMMM-YYYY, YYYY-MM-DD); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table; two-stage pipeline split via `--stage fetch|process|all`; dual-signal checkpoint — `raw_documents` PK = Stage 1 complete, SQLite `processed_documents` = Stage 2 complete); updated 2026-06-04 (§1/§3/§5/§6 stale `{identifier}_djvu.txt` URL construction references replaced with dynamic DjVuTXT URL discovery from IA metadata `files` array); updated 2026-06-04 (PRD v2.1: §3 main.py comment, §4 Stage 1 data flow, §5 Deferred Processing + Checkpoint store + Cross-source identity — `--date-from`/`--date-to` scope both stages; `raw_documents` PK corrected to composite `(canonical_doc_id, corpus)`; per-corpus dedup scope clarified); updated 2026-06-06 (PRD v3.0: **Non-Negotiable #9 reversed** — IA/archive.org URL is now the citation for LS and RS-via-IA/rsdebate; F01 adjacent speech merging + `lok_sabha_number`/`segments`/`canonical_doc_id` columns; F05 ≥400-word snippets; F09 inline adjacent loading replaces single Prev/Next nav — new `GET /api/record/{id}/adjacent`; F10 debug mode — new `api/routes/debug.py` + `api/services/debug.py`, search debug envelope, two lazy-fetch debug endpoints); updated 2026-06-09 (PRD v3.1: F05 `cropLength` reduced from 400 to 200 words); updated 2026-06-12 (ingestion checkpoint store moved from local SQLite to PostgreSQL — two new tables `processed_documents` + `ingestion_dedup_keys` on the same Railway instance as `raw_documents`/`speeches`/`qa_exchanges`; local `data/ingestion_checkpoints.db` eliminated; pipeline now deployable as a Railway Cron Job; Non-Negotiable #7 reworded — "CLI-only, never via the production API" (cloud Cron Job is still a CLI process, not an API route); **PRD F01 still names "the SQLite checkpoint store" (lines 115/120) — routed to `/spec` to make storage-agnostic; not a functional conflict**)
 
 ---
 
@@ -12,7 +12,7 @@ SansadSearch is a two-subsystem application:
 - **Ingestion pipeline** — local CLI that runs a two-stage pipeline across three corpora (CA, LS, RS). **Stage 1 (fetch + parse):** discovers source documents via an ordered provider chain (government sites plus the Internet Archive mirror); URLs discovered at runtime from listing/browse pages, never hardcoded; writes extracted text and document-level metadata to `raw_documents` (PostgreSQL). **Stage 2 (segment + index):** reads from `raw_documents`, segments and canonicalizes records, writes to `speeches`/`qa_exchanges` (PostgreSQL), and pushes a derived search index to Meilisearch Cloud. Both stages are independently invokable.
 - **Web application** — FastAPI backend + React SPA serving search, filtering, sorting, result display, a single-record detail view with inline adjacent loading (F09), and an unauthenticated debug mode (F10, `?debug=1`) exposing scoring, index, processed-record and raw-document diagnostics. Read-only. No authentication.
 
-The two subsystems share no runtime coupling. Ingestion runs offline on the operator's machine. The web application is a stateless read interface over the populated stores.
+The two subsystems share no runtime coupling. Ingestion runs as a standalone CLI process — invoked either locally or as a scheduled Railway Cron Job in the same project — and shares no runtime state with the web application beyond the PostgreSQL stores it writes (all ingestion checkpoint state lives in PostgreSQL; there is no local checkpoint file). The web application is a stateless read interface over the populated stores.
 
 ---
 
@@ -33,6 +33,7 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
 | Frontend routing | React Router v6 | Homepage ↔ Results page; query params encode search state |
 | Cookie management | js-cookie | F08 recent/saved searches |
 | API hosting | Railway | Managed Python deploy; same platform as PostgreSQL |
+| Ingestion hosting | Railway (Cron Job) | Standalone scheduled job in the same Railway project as the API and PostgreSQL; runs the pipeline to completion and exits. **Cron Job, not an always-on Worker** — a Worker restarts on process exit and would re-run the pipeline endlessly. All checkpoint state is in PostgreSQL, so the job is stateless between runs and resumable. May also be run locally as a plain CLI |
 | Frontend hosting | Vercel | CDN-edge static file serving |
 
 **PostgreSQL as primary store:** The ingestion pipeline is expensive (rate-limited scraping and parsing across multiple providers per corpus). Without a primary store, any Meilisearch schema change or index rebuild requires re-scraping. PostgreSQL enables re-indexing from local data and provides SQL-based inspection for debugging ingestion anomalies.
@@ -142,8 +143,14 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
       names.py                   # Speaker name canonicalization against names_dict.csv
       sessions.py                # Session name canonicalization to canonical format
     checkpoints/
-      store.py                   # SQLite-backed processed-document log (keyed on canonical
-                                 # doc id N / coi day-URL) and record-level dedup key store
+      store.py                   # PostgreSQL-backed Stage 2 checkpoint store (psycopg2, same
+                                 # Railway instance as raw_documents/speeches/qa_exchanges; no
+                                 # local file): processed-document log (processed_documents,
+                                 # keyed on canonical_doc_id+corpus — DATA-MODELS §1.6) and the
+                                 # record-level dedup-key mirror (ingestion_dedup_keys —
+                                 # DATA-MODELS §1.7). The dedup mirror is a pre-filter only; the
+                                 # authoritative duplicate guard is the speeches/qa_exchanges
+                                 # UNIQUE(dedup_key) constraint via ON CONFLICT DO NOTHING
     indexer.py                   # PostgreSQL writer for both stages: Stage 1 writes
                                  # extracted text + metadata to raw_documents; Stage 2 writes
                                  # segmented records to speeches/qa_exchanges (incl. new v3.0
@@ -225,7 +232,9 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
 
   db/
     schema.sql                   # CREATE TABLE + index statements for speeches,
-                                 # qa_exchanges, raw_documents, and index_status;
+                                 # qa_exchanges, raw_documents, index_status, and the two
+                                 # ingestion checkpoint tables processed_documents +
+                                 # ingestion_dedup_keys (DATA-MODELS §1.6/§1.7);
                                  # run once against Railway PostgreSQL before first ingestion
 
   data/
@@ -237,7 +246,7 @@ The two subsystems share no runtime coupling. Ingestion runs offline on the oper
   pyproject.toml                 # Python project config
 ```
 
-`data/ingestion_checkpoints.db` (SQLite, created at runtime) — local to the operator's machine; in `.gitignore`.
+The ingestion pipeline holds **no local checkpoint file**. All Stage 2 checkpoint state lives in PostgreSQL (`processed_documents`, `ingestion_dedup_keys` — DATA-MODELS §1.6/§1.7), co-located with the canonical record stores on the same Railway instance.
 
 ---
 
@@ -255,7 +264,7 @@ The Coding Agent updates this table after any change to API routes or core lib f
 | **Debug — raw document (F10)** | Browser (expand "Raw document") → `GET /api/debug/raw/{id}` → `services/debug.py`: (1) fetch processed record by `id` → `canonical_doc_id` + `source`; (2) fetch `raw_documents WHERE canonical_doc_id=$1 AND corpus=$2` (composite PK); 404 if no processed record or no linked raw row → Browser. Full row incl. `extracted_text`. No auth (SEC-1); exempt from PERF (PERF-3). |
 | **Search history (F08)** | Browser ↔ Browser cookies only — no server involvement |
 | **Stage 1 ingestion (fetch + parse)** | Operator CLI (`--stage fetch`) → corpus orchestrator → provider chain `discover()` (HTML listing crawl / DSpace browse / IA `advancedsearch`; document-level dedup: `raw_documents` PK lookup on `(canonical_doc_id, corpus)` — if row exists, skip fetch) → httpx fetcher (rate-limited, robots.txt compliant) → parser by format: HTML (`html_parser`) / IA pre-OCR text (`ia_text_parser`) / PDF (`pdf_parser`, embedded-text only) → date-window gate: when `--date-from`/`--date-to` provided, write to `raw_documents` only if parsed date is within window; skip out-of-window docs → `indexer.py` writes extracted text + metadata to `raw_documents` (PostgreSQL) |
-| **Stage 2 ingestion (segment + index)** | Operator CLI (`--stage process`) → reads `raw_documents` for scope (filtered by `--source`, optionally `--date-from`/`--date-to`) → segmenter → canonicalizer → `indexer.py` writes to `speeches`/`qa_exchanges` (PostgreSQL); SQLite `processed_documents` entry written → Meilisearch document pusher → `index_status` table updated on completion |
+| **Stage 2 ingestion (segment + index)** | Operator CLI (`--stage process`) → reads `raw_documents` for scope (filtered by `--source`, optionally `--date-from`/`--date-to`) → segmenter → canonicalizer → `indexer.py` writes to `speeches`/`qa_exchanges` (PostgreSQL); a `processed_documents` row (PostgreSQL) is written + each new `dedup_key` mirrored into `ingestion_dedup_keys` (PostgreSQL) → Meilisearch document pusher → `index_status` table updated on completion |
 | **Re-indexing** | `SELECT * FROM speeches UNION ALL SELECT * FROM qa_exchanges` → `indexer.py` → Meilisearch Cloud (no re-scraping) |
 | **Synonym deploy** | `data/synonyms.json` → `ingest/setup_meilisearch.py` → Meilisearch synonyms API |
 
@@ -304,12 +313,12 @@ Both stages accept `--date-from`/`--date-to` — Stage 1 applies the gate at wri
 
 This decoupling serves two purposes: (1) segmentation logic and index schema can be iterated without re-scraping source websites; (2) Stage 2 can be selectively re-run over a date range without a full reindex. See DEPLOYMENT.md §6.4 for the selective re-processing runbook.
 
-**Checkpoint store — dual signal.** The two-stage pipeline uses two independent checkpoint signals:
-- **Stage 1 complete:** A row in the `raw_documents` PostgreSQL table keyed on `(canonical_doc_id, corpus)` (composite PK). Corpus orchestrators query this composite key before fetching — if a matching row exists for the same id and corpus, the document is skipped. No separate SQLite entry is written for Stage 1 completion.
-- **Stage 2 complete:** An entry in the SQLite `processed_documents` table (`data/ingestion_checkpoints.db`). Written after all records from a raw document have been segmented, canonicalized, and written to `speeches`/`qa_exchanges`. Guards against re-segmentation on Stage 2 resume.
-- **Record-level guard:** The SQLite `inserted_dedup_keys` table mirrors the PostgreSQL `UNIQUE` constraint on `dedup_key`, providing fast local duplicate detection without a round-trip to PostgreSQL. Unchanged.
+**Checkpoint store — dual signal (PostgreSQL).** The two-stage pipeline uses two independent checkpoint signals. **All checkpoint state lives in PostgreSQL** — on the same Railway instance as `raw_documents`/`speeches`/`qa_exchanges`. There is no local SQLite file; this is what makes the pipeline deployable as a stateless Railway Cron Job (§2 Tech Stack, DEPLOYMENT §3.7).
+- **Stage 1 complete:** A row in the `raw_documents` PostgreSQL table keyed on `(canonical_doc_id, corpus)` (composite PK). Corpus orchestrators query this composite key before fetching — if a matching row exists for the same id and corpus, the document is skipped. No separate checkpoint entry is written for Stage 1 completion.
+- **Stage 2 complete:** A row in the `processed_documents` PostgreSQL table (DATA-MODELS §1.6), keyed on `(canonical_doc_id, corpus)` — the same composite key as `raw_documents`. Written after all records from a raw document have been segmented, canonicalized, and written to `speeches`/`qa_exchanges`. Queried before processing each `raw_documents` row to guard against re-segmentation on Stage 2 resume.
+- **Record-level guard:** The `ingestion_dedup_keys` PostgreSQL table (DATA-MODELS §1.7) mirrors the `UNIQUE(dedup_key)` constraint on `speeches`/`qa_exchanges`, giving Stage 2 a single cheap existence-check surface instead of UNION-ing the two large record tables. It is a **pre-filter only**: the authoritative duplicate guarantee is the `UNIQUE(dedup_key)` constraint enforced via `INSERT … ON CONFLICT (dedup_key) DO NOTHING`. The mirror may safely under-report (a missing entry just means the insert is attempted and `ON CONFLICT` resolves any collision); it must **never** over-report in a way that suppresses a legitimate insert — see the build invariant in §8 (item 7).
 
-The SQLite checkpoint file is local to the operator's machine, never deployed, and in `.gitignore`.
+Both checkpoint tables are created by `schema.sql`, truncated by the full clean reindex (DEPLOYMENT §6.1), and backfillable from the canonical record tables (DEPLOYMENT §6.7 migration runbook) — they hold derived state, not source-of-truth data.
 
 **Pre-computed index status.** The ingestion pipeline writes a row to the `index_status` PostgreSQL table on successful completion. The `GET /api/status` endpoint reads the most recent row. The status panel never issues a Meilisearch document count query at request time.
 
@@ -363,7 +372,7 @@ Decisions that must not be changed without explicit user approval. Changes to an
 
 6. **Cookie-only storage for F08.** Recent searches and saved searches are stored exclusively in browser cookies. No server-side user data. No user identifiers created or stored.
 
-7. **Ingestion pipeline is local CLI only.** It is never triggered via the production API. There is no `/api/ingest` endpoint or equivalent.
+7. **Ingestion runs only as a standalone CLI process — never via the production API.** The pipeline is invoked as a CLI (`python -m ingest.main …`), whether run locally on an operator's machine or as a scheduled Railway Cron Job in the same project. It is **never** triggered through the web API: there is no `/api/ingest` endpoint or equivalent, and the API service neither imports nor invokes ingestion code. (Wording updated 2026-06-12: the pre-existing "local CLI only" phrasing predated cloud deployment; the invariant being protected is *no API-triggered ingestion*, which a Cron Job — a CLI process, not an API route — does not violate.)
 
 8. **React SPA — no SSR.** The frontend is a static Vite build served from Vercel. No server-side rendering.
 
@@ -376,7 +385,7 @@ Decisions that must not be changed without explicit user approval. Changes to an
 
    This **reverses** the prior non-negotiable (which forbade the archive.org URL and cited `eparlib_document_url` for LS / `rsdebate.nic.in` for RS). The change is user-approved for PRD v3.0. Build-time verification of IA-URL derivability for fallback-path items is in §8.
 
-10. **Stage 2 re-processing requires prior clearing of the target scope.** Before re-running Stage 2 (`--stage process`) for any scope, the operator must delete all existing `speeches`/`qa_exchanges` records for that scope, delete the corresponding Meilisearch documents, and clear the matching `processed_documents` entries from the SQLite checkpoint store. Stage 2 inserts with `ON CONFLICT DO NOTHING` — running it without clearing produces no changes to already-indexed records and silently leaves stale data in place. See DEPLOYMENT.md §6.4 for the full procedure.
+10. **Stage 2 re-processing requires prior clearing of the target scope.** Before re-running Stage 2 (`--stage process`) for any scope, the operator must delete all existing `speeches`/`qa_exchanges` records for that scope, delete the corresponding Meilisearch documents, and clear the matching `processed_documents` entries from the PostgreSQL checkpoint table. Stage 2 inserts with `ON CONFLICT DO NOTHING` — running it without clearing produces no changes to already-indexed records and silently leaves stale data in place. See DEPLOYMENT.md §6.4 for the full procedure.
 
 ---
 
@@ -399,3 +408,7 @@ Items the Coding Agent must confirm against live source structure during the bui
 5. **`lok_sabha_number` extraction surface.** `lok_sabha_number` is LS-only. Confirm the field is available on each LS path: IA (`eparlib_lok_sabha_number` in the metadata JSON — primary), and the DSpace PDF fallback (derive from metadata or document text if present). If a particular LS path cannot yield the term number, `lok_sabha_number` is null for those records; record the finding. RS and CA are always null by design.
 
 6. **Adjacent-merge break-signal detection per format.** Adjacent Speech Merging depends on reliably detecting break signals (different speaker, section heading, procedural entry) in each source format: CA coi HTML, recent RS sansad.in HTML, IA pre-OCR plain text (LS/RS), and DSpace PDF embedded text (LS/RS). HTML exposes structural headings directly; pre-OCR/PDF text may not. Confirm that the segmenter can identify break signals in the flat-text formats (IA text, PDF) well enough to avoid over-merging distinct speeches; flag any format where heading/procedural boundaries are not recoverable, since over-merging silently corrupts `segments` and `full_text_en`.
+
+### Checkpoint-store migration item (2026-06-12: SQLite → PostgreSQL)
+
+7. **Dedup-mirror must not suppress legitimate inserts (`store.py` SQLite→PostgreSQL rewrite).** When `ingest/checkpoints/store.py` is rewritten from SQLite to PostgreSQL (`processed_documents`, `ingestion_dedup_keys`), the dedup-key mirror must remain a **pre-filter only**. The authoritative duplicate guarantee is the `speeches`/`qa_exchanges` `UNIQUE(dedup_key)` constraint via `INSERT … ON CONFLICT (dedup_key) DO NOTHING`. **Regression risk:** in the prior SQLite design, selective re-processing (DEPLOYMENT §6.4) cleared `processed_documents` but left the dedup mirror intact — this was safe only because the mirror never short-circuited an insert that `ON CONFLICT` would otherwise have performed. Preserve that exact semantics: after the canonical `speeches`/`qa_exchanges` rows for a scope are deleted, a Stage 2 re-run **must** re-insert them. Verify with a test that re-processes a previously-checkpointed scope after clearing only `speeches`/`qa_exchanges` + `processed_documents` (not `ingestion_dedup_keys`) and asserts the rows are re-created. Confirm `INF-R1` still holds: an interrupted-then-resumed run yields an identical record count with no duplicates, now using PostgreSQL checkpoints instead of a local file.

@@ -25,12 +25,12 @@ The pipeline is implemented as a two-stage process. Stage 1 (fetch) downloads so
 5. Apply date-window gate when `--date-from`/`--date-to` are provided: write to `raw_documents` only if the document's date falls within the window; skip out-of-window documents
 6. Write raw content (extracted text + metadata JSON) to `raw_documents`
 
-Stage 1 does not write to `speeches`, `qa_exchanges`, or the SQLite checkpoint store. It does not update `index_status`.
+Stage 1 does not write to `speeches`, `qa_exchanges`, or the checkpoint store. It does not update `index_status`.
 
 ### Stage 2 (process) flow
 
 1. Read `raw_documents` rows for the selected corpus; apply `--date-from`/`--date-to` window if provided
-2. Skip documents already checkpointed as processed in the SQLite `processed_documents` store
+2. Skip documents already checkpointed as processed in the checkpoint store (`processed_documents`)
 3. Segment each document into speech and Q+A exchange units
 4. Apply adjacent speech merging to speech units (see Adjacent Speech Merging section)
 5. Canonicalize speaker names and session names

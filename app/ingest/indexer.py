@@ -139,7 +139,9 @@ def build_meili_document(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _is_dead_connection(exc: Exception) -> bool:
-    """True when a psycopg2.OperationalError signals a dropped server-side connection."""
+    """True when a psycopg2 exception signals a dropped server-side connection."""
+    if isinstance(exc, psycopg2.InterfaceError):
+        return "connection already closed" in str(exc).lower()
     if not isinstance(exc, psycopg2.OperationalError):
         return False
     pgcode = getattr(exc, "pgcode", None)

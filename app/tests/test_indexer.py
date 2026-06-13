@@ -535,6 +535,36 @@ class TestIndexerConnectionResilience:
         assert result is True, "Insert must succeed after reconnect"
         assert indexer._pg is new_conn, "Indexer must hold the new connection after reconnect"
 
+    def test_interface_error_triggers_reconnect_and_retry(self, tmp_path):
+        """
+        InterfaceError("connection already closed") on _insert_record must trigger
+        _reconnect() and retry, parallel to the OperationalError path.
+        """
+        dead_error = psycopg2.InterfaceError("connection already closed")
+
+        dead_cursor = MagicMock()
+        dead_cursor.execute.side_effect = dead_error
+        dead_conn = MagicMock()
+        dead_conn.cursor.return_value = dead_cursor
+
+        new_cursor = MagicMock()
+        new_cursor.fetchone.return_value = ("recovered-uuid",)
+        new_conn = MagicMock()
+        new_conn.cursor.return_value = new_cursor
+
+        meili, _ = _make_mock_meili()
+        dsn = "postgresql://localhost/testdb"
+        indexer = Indexer(dead_conn, meili, pg_dsn=dsn)
+        record = _make_speech_record()
+
+        with patch("psycopg2.connect", return_value=new_conn) as mock_connect:
+            with CheckpointStore(tmp_path / "cp.db") as cp:
+                result = indexer.index_record(record, cp)
+
+        mock_connect.assert_called_once_with(dsn)
+        assert result is True, "Insert must succeed after reconnect"
+        assert indexer._pg is new_conn, "Indexer must hold the new connection after reconnect"
+
     def test_update_index_status_reconnects_on_dead_connection(self):
         """
         update_index_status must reconnect and retry the INSERT when the connection

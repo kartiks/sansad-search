@@ -1,7 +1,7 @@
 # Data Models — SansadSearch
 
 **PRD version:** v3.1
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable); updated 2026-06-01 (PRD v2.0: F01 — `lang_original`/`time_of_day`/`word_count` added to both tables, `sequence_within_sitting` added to `qa_exchanges`, sitting composite indexes for F09 adjacent nav; F05 — `lang_original`/`time_of_day` added to Meilisearch doc + search results; F09 — new `GET /api/record/{id}` contract; `id` stability rule documented); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table as Stage 1 intermediate store; SQLite `processed_documents` semantics updated to Stage 2 complete signal); updated 2026-06-04 (PRD v2.1: §1.4 `raw_documents` composite PK `(canonical_doc_id, corpus)` — fixes sole-PK error; per-corpus dedup semantics documented); updated 2026-06-06 (PRD v3.0: F01 — `lok_sabha_number` + `segments` added to `speeches`, `lok_sabha_number` added to `qa_exchanges`, `canonical_doc_id` link column added to both tables (F10 debug-raw lookup), `source_url` rules reversed (IA URL is now the citation for LS and RS-via-IA/rsdebate); F05 — Meilisearch `cropLength` ≥400 words; F09 — `GET /api/record/{id}` returns `has_prev`/`has_next` (not `adjacent` ids) + new `GET /api/record/{id}/adjacent` range-fetch contract; F10 — debug envelope on `POST /api/search`, new `GET /api/debug/processed/{id}` and `GET /api/debug/raw/{id}` endpoints, debug-mode Meilisearch retrieval config); updated 2026-06-09 (PRD v3.1: F03 — `subject` added to `filterableAttributes` + §2.4 subject filter expression; F05 — `cropLength` reduced from 400 to 200 words)
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable); updated 2026-06-01 (PRD v2.0: F01 — `lang_original`/`time_of_day`/`word_count` added to both tables, `sequence_within_sitting` added to `qa_exchanges`, sitting composite indexes for F09 adjacent nav; F05 — `lang_original`/`time_of_day` added to Meilisearch doc + search results; F09 — new `GET /api/record/{id}` contract; `id` stability rule documented); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table as Stage 1 intermediate store; SQLite `processed_documents` semantics updated to Stage 2 complete signal); updated 2026-06-04 (PRD v2.1: §1.4 `raw_documents` composite PK `(canonical_doc_id, corpus)` — fixes sole-PK error; per-corpus dedup semantics documented); updated 2026-06-06 (PRD v3.0: F01 — `lok_sabha_number` + `segments` added to `speeches`, `lok_sabha_number` added to `qa_exchanges`, `canonical_doc_id` link column added to both tables (F10 debug-raw lookup), `source_url` rules reversed (IA URL is now the citation for LS and RS-via-IA/rsdebate); F05 — Meilisearch `cropLength` ≥400 words; F09 — `GET /api/record/{id}` returns `has_prev`/`has_next` (not `adjacent` ids) + new `GET /api/record/{id}/adjacent` range-fetch contract; F10 — debug envelope on `POST /api/search`, new `GET /api/debug/processed/{id}` and `GET /api/debug/raw/{id}` endpoints, debug-mode Meilisearch retrieval config); updated 2026-06-09 (PRD v3.1: F03 — `subject` added to `filterableAttributes` + §2.4 subject filter expression; F05 — `cropLength` reduced from 400 to 200 words); updated 2026-06-12 (ingestion checkpoint store moved from local SQLite to PostgreSQL: new §1.6 `processed_documents` and §1.7 `ingestion_dedup_keys` tables; §1.5/§1.4 SQLite references updated; §4.3 "Local SQLite" replaced with a PostgreSQL checkpoint-tables note. No change to `speeches`/`qa_exchanges`/`raw_documents`/`index_status` or the Meilisearch schema — the checkpoint tables hold derived state reconstructable from the canonical record tables)
 
 ---
 
@@ -140,7 +140,7 @@ Intermediate raw document store. One row per source document per corpus (keyed o
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `canonical_doc_id` | TEXT | NOT NULL (part of composite PK) | Provider-agnostic document identity. LS/RS: DSpace handle number `N` — Internet Archive `eparlib.nic.in.{N}` and DSpace `123456789/{N}` collapse to one row per corpus. CA: constitutionofindia.net day-page URL. Same key used by the SQLite checkpoint store and the cross-provider dedup logic |
+| `canonical_doc_id` | TEXT | NOT NULL (part of composite PK) | Provider-agnostic document identity. LS/RS: DSpace handle number `N` — Internet Archive `eparlib.nic.in.{N}` and DSpace `123456789/{N}` collapse to one row per corpus. CA: constitutionofindia.net day-page URL. Same key used by the `processed_documents` checkpoint table (§1.6) and the cross-provider dedup logic |
 | `corpus` | VARCHAR(2) | NOT NULL, CHECK IN ('CA','LS','RS') (part of composite PK) | Source corpus. Together with `canonical_doc_id`, forms the table primary key |
 | `date` | DATE | NULL | Sitting date derived from document metadata or URL slug. NULL if unparseable at Stage 1 |
 | `provider` | VARCHAR(50) | NOT NULL | Provider that satisfied the fetch (e.g. `coi_html`, `internet_archive`, `eparlib_dspace`, `rsdebate_dspace`, `sansad_rs_html`) |
@@ -162,7 +162,7 @@ Supports Stage 2 selective re-processing queries: `WHERE corpus = $1 AND date BE
 
 ### 1.5 Deduplication Keys
 
-Compound key format for each record type. Keys are stored in the `dedup_key` column and also in the local SQLite checkpoint store during ingestion.
+Compound key format for each record type. Keys are stored in the `dedup_key` column and mirrored into the `ingestion_dedup_keys` checkpoint table (§1.7) during ingestion.
 
 **Speech:**
 ```
@@ -180,7 +180,89 @@ Compound key format for each record type. Keys are stored in the `dedup_key` col
 
 **`id` stability.** Because inserts use `ON CONFLICT (dedup_key) DO NOTHING`, a record's `id` is preserved across incremental re-runs (the existing row is left untouched). A **full clean reindex** truncates the tables (DEPLOYMENT §6.1) and therefore reassigns all `id`s — externally shared/bookmarked `/record/:id` URLs are stable only within the same canonical dataset, not across a full reingest.
 
-**Two dedup layers.** The `dedup_key` above is the **record-level** guard (one row per unique speech / Q+A exchange), enforced by the PostgreSQL `UNIQUE` constraint and the SQLite `inserted_dedup_keys` mirror. It is distinct from **document-level** identity (`canonical_doc_id`, see §4.3), which prevents the same source document — available from more than one provider (e.g. Internet Archive `eparlib.nic.in.{N}` and DSpace `123456789/{N}`) — from being fetched and parsed twice. Document-level identity is a fetch-time optimisation in the checkpoint store; record-level `dedup_key` is the authoritative guarantee that no duplicate record is written.
+**Two dedup layers.** The `dedup_key` above is the **record-level** guard (one row per unique speech / Q+A exchange), enforced by the PostgreSQL `UNIQUE` constraint and pre-filtered by the `ingestion_dedup_keys` mirror (§1.7). It is distinct from **document-level** identity (`canonical_doc_id`, tracked by `raw_documents` §1.4 and `processed_documents` §1.6), which prevents the same source document — available from more than one provider (e.g. Internet Archive `eparlib.nic.in.{N}` and DSpace `123456789/{N}`) — from being fetched and parsed twice. Document-level identity is a fetch-time/process-time optimisation in the checkpoint tables; the record-level `UNIQUE(dedup_key)` constraint is the authoritative guarantee that no duplicate record is written.
+
+---
+
+### 1.6 `processed_documents` (PostgreSQL)
+
+Stage 2 completion checkpoint. One row per source document, per corpus, whose `raw_documents` content has been fully segmented, canonicalized, and written to `speeches`/`qa_exchanges`. Queried at the start of Stage 2 to skip documents already processed (resumability, `INF-R1`). **Replaces the former local SQLite `processed_documents` table** — same name, same role, same `(canonical_doc_id, corpus)` key; now on the Railway PostgreSQL instance alongside `raw_documents`.
+
+**Primary key:** `PRIMARY KEY (canonical_doc_id, corpus)` — composite, mirroring `raw_documents` (§1.4). Corpus scoping is required so that LS Stage 2 processing of handle `N` does not suppress RS Stage 2 processing of the same handle `N` when `--source all` runs.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `canonical_doc_id` | TEXT | NOT NULL (part of composite PK) | Document identity; matches `raw_documents.canonical_doc_id` for the same `(canonical_doc_id, corpus)` row |
+| `corpus` | VARCHAR(2) | NOT NULL, CHECK IN ('CA','LS','RS') (part of composite PK) | Source corpus. Together with `canonical_doc_id`, forms the primary key |
+| `provider` | VARCHAR(50) | NULL | Provider that fetched the source document (informational; copied from `raw_documents.provider` at checkpoint time) |
+| `fetch_url` | TEXT | NULL | Source download URL (informational; copied from `raw_documents.fetch_url`) |
+| `processed_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | Timestamp Stage 2 completed for this document |
+
+**Indexes:**
+```sql
+CREATE INDEX idx_processed_documents_corpus ON processed_documents(corpus);
+```
+The composite PK serves the existence check; `idx_processed_documents_corpus` serves corpus-scoped bulk deletes (the PK has `corpus` as its second column, so a `WHERE corpus = …` scan would not use it).
+
+**Query patterns:**
+```sql
+-- Existence check (Stage 2 skip decision), uses the composite PK:
+SELECT 1 FROM processed_documents WHERE canonical_doc_id = $1 AND corpus = $2;
+
+-- Insert (checkpoint after a document's records are all indexed):
+INSERT INTO processed_documents (canonical_doc_id, corpus, provider, fetch_url)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (canonical_doc_id, corpus) DO NOTHING;
+
+-- Bulk delete by corpus (full corpus re-process):
+DELETE FROM processed_documents WHERE corpus = $1;
+
+-- Bulk delete by corpus + date scope (selective re-processing, DEPLOYMENT §6.4) —
+-- date precision comes from raw_documents.date (this table has no date column):
+DELETE FROM processed_documents pd
+USING raw_documents r
+WHERE pd.canonical_doc_id = r.canonical_doc_id
+  AND pd.corpus = r.corpus
+  AND pd.corpus = $1
+  AND r.date BETWEEN $2 AND $3;
+```
+
+---
+
+### 1.7 `ingestion_dedup_keys` (PostgreSQL)
+
+Record-level duplicate pre-filter. One row per `dedup_key` written to `speeches`/`qa_exchanges`. Gives Stage 2 a single cheap existence-check surface instead of UNION-ing the two large record tables. **Replaces the former local SQLite `inserted_dedup_keys` table** (renamed for clarity; same role).
+
+**Authoritative guard, and what this table is not.** The authoritative duplicate guarantee is the `UNIQUE(dedup_key)` constraint on `speeches`/`qa_exchanges`, enforced via `INSERT … ON CONFLICT (dedup_key) DO NOTHING`. This table is a **pre-filter only**: it may under-report without harm (a missing entry just means the insert is attempted and `ON CONFLICT` resolves any collision), and it must never cause a legitimate insert to be skipped (ARCHITECTURE §8 item 7). Once the mirror lives in the same PostgreSQL instance as the record tables, its original rationale (avoiding a round-trip to PostgreSQL) no longer applies; it is retained as a convenience existence-check surface.
+
+**Primary key:** `PRIMARY KEY (dedup_key, corpus)`. `dedup_key` is globally unique on its own (it embeds the `source` prefix — §1.5), so `dedup_key` leads the key to serve the existence check; `corpus` is stored explicitly to support corpus-scoped bulk deletes.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `dedup_key` | VARCHAR(500) | NOT NULL (part of composite PK) | Record-level dedup key (§1.5 format). Mirrors a `speeches.dedup_key` or `qa_exchanges.dedup_key` value |
+| `corpus` | VARCHAR(2) | NOT NULL, CHECK IN ('CA','LS','RS') (part of composite PK) | Source corpus the key belongs to (the `source` of the mirrored record) |
+
+**Indexes:**
+```sql
+CREATE INDEX idx_ingestion_dedup_keys_corpus ON ingestion_dedup_keys(corpus);
+```
+The composite PK (`dedup_key` leading) serves the existence check; `idx_ingestion_dedup_keys_corpus` serves corpus-scoped bulk deletes.
+
+**Query patterns:**
+```sql
+-- Existence check (pre-filter), uses the composite PK (dedup_key leading):
+SELECT 1 FROM ingestion_dedup_keys WHERE dedup_key = $1;
+
+-- Insert (mirror a newly written record's key):
+INSERT INTO ingestion_dedup_keys (dedup_key, corpus)
+VALUES ($1, $2)
+ON CONFLICT (dedup_key, corpus) DO NOTHING;
+
+-- Bulk delete by corpus (full corpus re-process / full clean reindex):
+DELETE FROM ingestion_dedup_keys WHERE corpus = $1;
+```
+
+**Clearing scope.** Wiped by the full clean reindex `TRUNCATE` (DEPLOYMENT §6.1) and by corpus-level clears. It is **not** date-scoped on selective re-processing (this table has no date column; `dedup_key` embeds the date mid-string but is not range-queryable). Selective re-processing relies on clearing `processed_documents` plus the `ON CONFLICT` authoritative guard — identical to the prior SQLite behavior. See ARCHITECTURE §8 item 7 for the correctness invariant the `store.py` rewrite must preserve.
 
 ---
 
@@ -744,7 +826,7 @@ Returned when **either** no processed record has the given `id`, **or** the proc
 
 Railway Starter plan (512 MB) is insufficient. Pro plan (scalable) required.
 
-**Tables:** `speeches`, `qa_exchanges`, `raw_documents`, `index_status`
+**Tables:** `speeches`, `qa_exchanges`, `raw_documents`, `index_status`, `processed_documents` (§1.6), `ingestion_dedup_keys` (§1.7). The two checkpoint tables are small relative to the record store (one row per source document and one row per record key respectively — tens of thousands and a few hundred thousand short rows; well under 100 MB combined) and do not change the sizing conclusion above.
 
 ### 4.2 Meilisearch Cloud
 
@@ -759,15 +841,14 @@ Railway Starter plan (512 MB) is insufficient. Pro plan (scalable) required.
 
 Meilisearch Cloud Growth plan (supports up to 2M documents) is required.
 
-### 4.3 Local SQLite (ingestion only, not deployed)
+### 4.3 Ingestion checkpoint tables (PostgreSQL)
 
-**File:** `data/ingestion_checkpoints.db` (`.gitignore`d)
+The ingestion pipeline holds **no local checkpoint file**. Stage 2 checkpoint state lives in two PostgreSQL tables on the same Railway instance as the canonical record stores:
 
-**Tables:**
-- `processed_documents (canonical_doc_id TEXT NOT NULL, corpus TEXT NOT NULL, provider TEXT, fetch_url TEXT, processed_at TIMESTAMP, PRIMARY KEY (canonical_doc_id, corpus))` — **Stage 2 complete signal.** Tracks source documents whose `raw_documents` row has been fully segmented, canonicalized, and written to `speeches`/`qa_exchanges`. Keyed on `(canonical_doc_id, corpus)` — composite key matching the `raw_documents` PK. Corpus scoping is required so that LS Stage 2 processing of handle N does not suppress RS Stage 2 processing of the same handle N when `--source all` runs sequentially. Written by Stage 2 after all records from a raw document are persisted. Guards Stage 2 resumability — if Stage 2 is interrupted, re-running it will skip documents already in this table. **Does not** guard against cross-provider double-fetch: Stage 1 dedup is handled by the `raw_documents` PK lookup in PostgreSQL.
-- `inserted_dedup_keys (dedup_key TEXT PRIMARY KEY)` — tracks record-level dedup keys already written to PostgreSQL; prevents duplicate inserts on Stage 2 resume. Unchanged; mirrors the PostgreSQL `dedup_key` UNIQUE constraint for fast local lookup without a round-trip to PostgreSQL.
+- **`processed_documents`** (§1.6) — Stage 2 complete signal, keyed on `(canonical_doc_id, corpus)`. Skips already-segmented documents on a Stage 2 re-run (`INF-R1` resumability). Does **not** guard cross-provider double-fetch — that is Stage 1's `raw_documents` PK lookup.
+- **`ingestion_dedup_keys`** (§1.7) — record-level dedup-key pre-filter, keyed on `(dedup_key, corpus)`. A convenience existence-check surface; the authoritative duplicate guard is the `UNIQUE(dedup_key)` constraint on `speeches`/`qa_exchanges` via `ON CONFLICT DO NOTHING`.
 
-**Purpose:** Fast local lookups during Stage 2 for resumability and record-level deduplication. The `processed_documents` table must be partially cleared (for the re-processing scope) before a selective Stage 2 re-run (DEPLOYMENT §6.4). Eliminated along with `raw_documents` on a full clean reindex.
+**Derived, not source-of-truth.** Both tables are reconstructable from the canonical record tables (`speeches`/`qa_exchanges` joined to `raw_documents`) — this is what makes the SQLite→PostgreSQL migration a backfill rather than a re-ingestion (DEPLOYMENT §6.7). `processed_documents` is partially cleared (for the re-processing scope) before a selective Stage 2 re-run (DEPLOYMENT §6.4); both are truncated on a full clean reindex (DEPLOYMENT §6.1). Co-locating them in PostgreSQL (rather than a local SQLite file) is what allows the pipeline to run as a stateless Railway Cron Job (ARCHITECTURE §2, DEPLOYMENT §3.7).
 
 ### 4.4 Browser Cookies (client-side only)
 
