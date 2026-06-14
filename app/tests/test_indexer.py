@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, call, patch
 import psycopg2
 import pytest
 
-from ingest.checkpoints.store import CheckpointStore
+from tests.fakes import FakeCheckpointStore as CheckpointStore
 from ingest.indexer import (
     MEILI_BATCH_SIZE,
     Indexer,
@@ -215,6 +215,37 @@ def _make_mock_pg_conn(inserted=True):
     return conn
 
 
+def _make_dedup_aware_pg_conn():
+    """Mock PG conn simulating INSERT … ON CONFLICT (dedup_key) DO NOTHING RETURNING id.
+
+    Tracks the dedup_keys it has "inserted" (the dedup_key is the last positional
+    param of the indexer's INSERT). A first insert of a key returns a fresh id row;
+    a repeat returns None (the ON CONFLICT no-op), exactly as the real UNIQUE
+    constraint behaves. This is the authoritative dedup surface now that the
+    indexer no longer short-circuits on the checkpoint mirror (§8 item 7).
+    """
+    seen: set[str] = set()
+    state: dict = {"row": None}
+    cursor = MagicMock()
+
+    def _execute(sql, params=None):
+        if params and "INSERT INTO" in sql and "RETURNING id" in sql:
+            dedup_key = params[-1]
+            if dedup_key in seen:
+                state["row"] = None
+            else:
+                seen.add(dedup_key)
+                state["row"] = (f"id-{len(seen)}",)
+        return None
+
+    cursor.execute.side_effect = _execute
+    cursor.fetchone.side_effect = lambda: state["row"]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn._seen = seen  # exposed for assertions/inspection
+    return conn
+
+
 def _make_mock_meili():
     """Mock meilisearch.Client."""
     meili = MagicMock()
@@ -235,19 +266,25 @@ class TestIndexerIndexRecord:
 
         assert result is True
 
-    def test_skips_duplicate_via_checkpoint_store(self, tmp_path):
-        """A record whose dedup key is already in the checkpoint store is skipped."""
-        pg = _make_mock_pg_conn(inserted=True)
+    def test_skips_duplicate_via_on_conflict(self, tmp_path):
+        """A record whose dedup key already exists is skipped by ON CONFLICT.
+
+        The indexer no longer short-circuits on the checkpoint mirror (§8 item 7);
+        the duplicate is caught by the UNIQUE(dedup_key) ON CONFLICT guard (here the
+        dedup-aware mock returns no RETURNING row on the second insert).
+        """
+        pg = _make_dedup_aware_pg_conn()
         meili, _ = _make_mock_meili()
         indexer = Indexer(pg, meili)
         record = _make_speech_record()
 
         with CheckpointStore(tmp_path / "cp.db") as cp:
             # First insert
-            indexer.index_record(record, cp)
+            first = indexer.index_record(record, cp)
             # Second insert of identical record
             result = indexer.index_record(record, cp)
 
+        assert first is True
         assert result is False
 
     def test_skips_record_with_missing_date(self, tmp_path):
@@ -407,8 +444,13 @@ class TestIndexerResumeability:
         Running the indexer twice against the same corpus produces zero new
         records on the second run.
         """
+        # Both runs share one PostgreSQL "database" (one dedup-aware conn), so the
+        # second run's inserts hit ON CONFLICT and produce zero new records — this
+        # is the record-level resumability guarantee (INF-R1) now that dedup is in
+        # PostgreSQL, not the checkpoint mirror.
+        pg = _make_dedup_aware_pg_conn()
+
         # First run
-        pg = _make_mock_pg_conn(inserted=True)
         meili, _ = _make_mock_meili()
         indexer1 = Indexer(pg, meili)
 
@@ -422,10 +464,9 @@ class TestIndexerResumeability:
                 indexer1.index_record(r, cp)
             first_count = indexer1.counts["LS"]
 
-        # Second run (same checkpoint store)
-        pg2 = _make_mock_pg_conn(inserted=True)
+        # Second run (same database)
         meili2, _ = _make_mock_meili()
-        indexer2 = Indexer(pg2, meili2)
+        indexer2 = Indexer(pg, meili2)
 
         with CheckpointStore(tmp_path / "cp.db") as cp:
             for r in records:
@@ -433,7 +474,7 @@ class TestIndexerResumeability:
             second_count = indexer2.counts["LS"]
 
         assert first_count == 5
-        assert second_count == 0  # all already checkpointed
+        assert second_count == 0  # all already present (ON CONFLICT)
 
     def test_interrupted_then_resumed_matches_clean_run(self, tmp_path):
         """
@@ -446,31 +487,33 @@ class TestIndexerResumeability:
             for i in range(5)
         ]
 
+        # Interrupted + resumed share one PostgreSQL "database" (one dedup-aware
+        # conn); the clean run uses a fresh database.
+        pg_resume = _make_dedup_aware_pg_conn()
+
         # ── Interrupted run: index records 0-2 only, then "crash" ─────────────
-        pg1 = _make_mock_pg_conn(inserted=True)
         meili1, _ = _make_mock_meili()
-        indexer1 = Indexer(pg1, meili1)
+        indexer1 = Indexer(pg_resume, meili1)
         with CheckpointStore(tmp_path / "cp.db") as cp:
             for r in records[:3]:
                 indexer1.index_record(r, cp)
         interrupted_count = sum(indexer1.counts.values())
         assert interrupted_count == 3
 
-        # ── Resumed run: reopen same store, process full corpus ────────────────
-        pg2 = _make_mock_pg_conn(inserted=True)
+        # ── Resumed run: same database, process full corpus ────────────────────
         meili2, _ = _make_mock_meili()
-        indexer2 = Indexer(pg2, meili2)
+        indexer2 = Indexer(pg_resume, meili2)
         with CheckpointStore(tmp_path / "cp.db") as cp:
             for r in records:  # all 5
                 indexer2.index_record(r, cp)
         resumed_count = sum(indexer2.counts.values())
-        # Records 0-2 are already checkpointed; only 3 and 4 should be new
+        # Records 0-2 already present (ON CONFLICT); only 3 and 4 should be new
         assert resumed_count == 2
 
-        # ── Clean run: fresh checkpoint, index all 5 ──────────────────────────
-        pg3 = _make_mock_pg_conn(inserted=True)
+        # ── Clean run: fresh database, index all 5 ─────────────────────────────
+        pg_clean = _make_dedup_aware_pg_conn()
         meili3, _ = _make_mock_meili()
-        indexer3 = Indexer(pg3, meili3)
+        indexer3 = Indexer(pg_clean, meili3)
         with CheckpointStore(tmp_path / "clean_cp.db") as cp:
             for r in records:
                 indexer3.index_record(r, cp)

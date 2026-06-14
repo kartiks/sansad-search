@@ -46,7 +46,6 @@ from ingest.sources.rs import RSOrchestrator
 
 logger = logging.getLogger(__name__)
 
-CHECKPOINT_DB = Path(__file__).parent.parent / "data" / "ingestion_checkpoints.db"
 NAMES_DICT_PATH = Path(__file__).parent.parent / "data" / "names_dict.csv"
 
 
@@ -161,7 +160,7 @@ async def _async_main(args: argparse.Namespace) -> int:
     stage2_stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
 
     http_headers = {"User-Agent": USER_AGENT}
-    with CheckpointStore(CHECKPOINT_DB) as checkpoint:
+    with CheckpointStore(pg_dsn) as checkpoint:
         async with httpx.AsyncClient(headers=http_headers, timeout=60.0) as client:
             for source_name in sources:
                 logger.info("=== Starting source: %s ===", source_name.upper())

@@ -136,3 +136,39 @@ CREATE TABLE IF NOT EXISTS index_status (
     rs_date_from     DATE,
     rs_date_to       DATE
 );
+
+-- ── processed_documents ──────────────────────────────────────────────────────
+-- Stage 2 completion checkpoint (DATA-MODELS §1.6). One row per source document,
+-- per corpus, whose raw_documents content has been fully segmented, canonicalized,
+-- and written to speeches/qa_exchanges. Queried at the start of Stage 2 to skip
+-- already-processed documents (resumability, INF-R1). Replaces the former local
+-- SQLite processed_documents table — same name, same role, same composite key.
+
+CREATE TABLE IF NOT EXISTS processed_documents (
+    canonical_doc_id TEXT         NOT NULL,
+    corpus           VARCHAR(2)   NOT NULL CHECK (corpus IN ('CA','LS','RS')),
+    provider         VARCHAR(50),
+    fetch_url        TEXT,
+    processed_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (canonical_doc_id, corpus)
+);
+
+-- Composite PK serves the existence check; this index serves corpus-scoped bulk
+-- deletes (the PK has corpus as its second column, so WHERE corpus = … cannot use it).
+CREATE INDEX IF NOT EXISTS idx_processed_documents_corpus ON processed_documents(corpus);
+
+-- ── ingestion_dedup_keys ─────────────────────────────────────────────────────
+-- Record-level duplicate pre-filter (DATA-MODELS §1.7). One row per dedup_key
+-- written to speeches/qa_exchanges — a cheap existence-check surface. NOT the
+-- authoritative guard: the UNIQUE(dedup_key) constraint on speeches/qa_exchanges,
+-- enforced via INSERT … ON CONFLICT (dedup_key) DO NOTHING, is authoritative
+-- (ARCHITECTURE §8 item 7). dedup_key leads the PK (it is globally unique, §1.5);
+-- corpus is stored to support corpus-scoped bulk deletes.
+
+CREATE TABLE IF NOT EXISTS ingestion_dedup_keys (
+    dedup_key VARCHAR(500) NOT NULL,
+    corpus    VARCHAR(2)   NOT NULL CHECK (corpus IN ('CA','LS','RS')),
+    PRIMARY KEY (dedup_key, corpus)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingestion_dedup_keys_corpus ON ingestion_dedup_keys(corpus);

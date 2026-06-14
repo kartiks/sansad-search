@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
 
-from ingest.checkpoints.store import CheckpointStore
+from tests.fakes import FakeCheckpointStore as CheckpointStore
 from ingest.indexer import Indexer
 from ingest import main as main_mod
 

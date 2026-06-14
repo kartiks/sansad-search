@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 """
-clear_corpus.py — Remove ingestion data for a corpus from PG, SQLite, and Meilisearch.
+clear_corpus.py — Remove ingestion data for a corpus from PostgreSQL and Meilisearch.
+
+All checkpoint state now lives in PostgreSQL (processed_documents,
+ingestion_dedup_keys) — there is no separate SQLite store. The checkpoint clear is
+a PostgreSQL DELETE.
 
 Either --stage or --target must be given (they are mutually exclusive):
 
   --stage fetch    Clear all stores: PG speeches + qa_exchanges + raw_documents,
-                   SQLite processed_documents, Meilisearch. Use before re-fetching
-                   from source (forces both Stage 1 and Stage 2 to re-run clean).
+                   PG checkpoint tables (processed_documents + ingestion_dedup_keys),
+                   Meilisearch. Use before re-fetching from source (forces both
+                   Stage 1 and Stage 2 to re-run clean).
 
   --stage all      Alias for --stage fetch.
 
   --stage process  Clear Stage 2 output only: PG speeches + qa_exchanges,
-                   SQLite processed_documents, Meilisearch. Leaves raw_documents
-                   intact. Use before re-running segmentation/indexing from existing
-                   raw documents.
+                   PG processed_documents (leaves ingestion_dedup_keys and
+                   raw_documents intact), Meilisearch. Re-insertion correctness
+                   comes from the ON CONFLICT guard after speeches/qa_exchanges are
+                   deleted (ARCHITECTURE §8 item 7). Use before re-running
+                   segmentation/indexing from existing raw documents.
 
-  --target pg|sqlite|meili|all
-                   Explicit per-store control. --target pg clears all three PG tables
-                   (speeches, qa_exchanges, raw_documents). Use when you need precise
-                   control over which store is touched.
+  --target pg|checkpoints|meili|all
+                   Explicit per-store control. --target pg clears all three PG record
+                   tables (speeches, qa_exchanges, raw_documents). --target checkpoints
+                   clears processed_documents (and ingestion_dedup_keys when no date
+                   scope is given). Use when you need precise control over which store
+                   is touched.
 
 Usage (run from the app/ directory with the virtualenv active):
     python scripts/clear_corpus.py --corpus ls --stage process --dry-run
@@ -26,9 +35,10 @@ Usage (run from the app/ directory with the virtualenv active):
     python scripts/clear_corpus.py --corpus ls --stage process --date-from 2024-01-01 --date-to 2024-12-31
     python scripts/clear_corpus.py --corpus all --stage process
     python scripts/clear_corpus.py --corpus rs --target meili
+    python scripts/clear_corpus.py --corpus rs --target checkpoints
 
 Environment variables required (per store):
-    DATABASE_URL            PostgreSQL DSN  (PG; also SQLite when --date-from/--date-to used)
+    DATABASE_URL            PostgreSQL DSN  (pg and checkpoints — both are PostgreSQL)
     MEILISEARCH_URL         Meilisearch base URL  (Meilisearch)
     MEILISEARCH_MASTER_KEY  Meilisearch master key  (Meilisearch)
 """
@@ -39,15 +49,12 @@ import os
 import sys
 import time
 from datetime import date
-from pathlib import Path
 
 import httpx
 import psycopg2
 
-SQLITE_PATH = Path(__file__).resolve().parent.parent / "data" / "ingestion_checkpoints.db"
 MEILI_INDEX = "parliamentary_records"
 CORPORA = ["CA", "LS", "RS"]
-_SQLITE_CHUNK = 900  # stay under SQLite's 999-placeholder limit
 
 
 # ── Env / connection helpers ───────────────────────────────────────────────────
@@ -150,101 +157,97 @@ def clear_pg(
     return results
 
 
-def _get_canonical_ids(
-    corpus: str,
-    date_from: str | None,
-    date_to: str | None,
-) -> list[str]:
-    """Query PG raw_documents for canonical_doc_ids matching the corpus + date scope."""
-    conn = _pg_connect()
-    try:
-        params: list = [corpus]
-        where = "corpus = %s"
-        if date_from:
-            where += " AND date >= %s"
-            params.append(date_from)
-        if date_to:
-            where += " AND date <= %s"
-            params.append(date_to)
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT canonical_doc_id FROM raw_documents WHERE {where}", params
-            )
-            return [row[0] for row in cur.fetchall()]
-    finally:
-        conn.close()
-
-
-def clear_sqlite(
+def clear_checkpoints(
     corpus: str,
     date_from: str | None,
     date_to: str | None,
     dry_run: bool,
-    canonical_ids: list[str] | None = None,
+    include_dedup_keys: bool,
 ) -> dict[str, int]:
     """
-    Delete processed_documents rows for the corpus, optionally scoped by date.
+    Delete checkpoint rows for the corpus from PostgreSQL.
 
-    canonical_ids — pre-fetched from PG raw_documents. Pass these when PG's
-    raw_documents will be cleared in the same run (avoids an empty lookup after
-    the PG delete). If None and a date range is given, the lookup is done here.
+    processed_documents — always cleared for the corpus. When a date range is given,
+      the delete joins raw_documents on (canonical_doc_id, corpus) and filters by
+      raw_documents.date (this table has no date column). MUST run before any
+      raw_documents delete so the join still resolves (the caller orders this
+      before clear_pg).
+    ingestion_dedup_keys — cleared only when include_dedup_keys is True AND no date
+      scope is given. The mirror is not date-scoped (DATA-MODELS §1.7); a date-scoped
+      clear touches processed_documents only. Re-insertion correctness after a
+      processed_documents-only clear comes from the ON CONFLICT guard (§8 item 7).
     """
-    import sqlite3
-
-    if not SQLITE_PATH.exists():
-        print(f"  SQLite: {SQLITE_PATH} not found — skipping")
-        return {"processed_documents": 0}
-
-    if date_from or date_to:
-        if canonical_ids is None:
-            canonical_ids = _get_canonical_ids(corpus, date_from, date_to)
-        if not canonical_ids:
-            return {"processed_documents": 0}
-
-        total = 0
-        conn = sqlite3.connect(str(SQLITE_PATH))
-        try:
-            for i in range(0, len(canonical_ids), _SQLITE_CHUNK):
-                chunk = canonical_ids[i : i + _SQLITE_CHUNK]
-                placeholders = ",".join("?" * len(chunk))
-                params = chunk + [corpus]
+    date_scoped = bool(date_from or date_to)
+    conn = _pg_connect()
+    results: dict[str, int] = {}
+    try:
+        with conn.cursor() as cur:
+            # processed_documents
+            if date_scoped:
+                where = "pd.corpus = %s"
+                params: list = [corpus]
+                if date_from:
+                    where += " AND r.date >= %s"
+                    params.append(date_from)
+                if date_to:
+                    where += " AND r.date <= %s"
+                    params.append(date_to)
                 if dry_run:
-                    row = conn.execute(
-                        f"SELECT COUNT(*) FROM processed_documents "
-                        f"WHERE canonical_doc_id IN ({placeholders}) AND corpus = ?",
-                        params,
-                    ).fetchone()
-                    total += row[0]
-                else:
-                    cur = conn.execute(
-                        f"DELETE FROM processed_documents "
-                        f"WHERE canonical_doc_id IN ({placeholders}) AND corpus = ?",
+                    cur.execute(
+                        "SELECT COUNT(*) FROM processed_documents pd "
+                        "JOIN raw_documents r "
+                        "  ON pd.canonical_doc_id = r.canonical_doc_id "
+                        "  AND pd.corpus = r.corpus "
+                        f"WHERE {where}",
                         params,
                     )
-                    total += cur.rowcount
-            if not dry_run:
-                conn.commit()
-        finally:
-            conn.close()
-        return {"processed_documents": total}
+                    results["processed_documents"] = cur.fetchone()[0]
+                else:
+                    cur.execute(
+                        "DELETE FROM processed_documents pd "
+                        "USING raw_documents r "
+                        "WHERE pd.canonical_doc_id = r.canonical_doc_id "
+                        "  AND pd.corpus = r.corpus "
+                        f"  AND {where}",
+                        params,
+                    )
+                    results["processed_documents"] = cur.rowcount
+            else:
+                if dry_run:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM processed_documents WHERE corpus = %s",
+                        (corpus,),
+                    )
+                    results["processed_documents"] = cur.fetchone()[0]
+                else:
+                    cur.execute(
+                        "DELETE FROM processed_documents WHERE corpus = %s", (corpus,)
+                    )
+                    results["processed_documents"] = cur.rowcount
 
-    # No date scope — clear all processed_documents for the corpus
-    conn = sqlite3.connect(str(SQLITE_PATH))
-    try:
-        if dry_run:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM processed_documents WHERE corpus = ?", (corpus,)
-            ).fetchone()
-            count = row[0]
-        else:
-            cur = conn.execute(
-                "DELETE FROM processed_documents WHERE corpus = ?", (corpus,)
-            )
+            # ingestion_dedup_keys — only on a full (non-date-scoped) clear that
+            # asks for it (--stage fetch/all, --target checkpoints/all).
+            if include_dedup_keys and not date_scoped:
+                if dry_run:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM ingestion_dedup_keys WHERE corpus = %s",
+                        (corpus,),
+                    )
+                    results["ingestion_dedup_keys"] = cur.fetchone()[0]
+                else:
+                    cur.execute(
+                        "DELETE FROM ingestion_dedup_keys WHERE corpus = %s", (corpus,)
+                    )
+                    results["ingestion_dedup_keys"] = cur.rowcount
+
+        if not dry_run:
             conn.commit()
-            count = cur.rowcount
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
-    return {"processed_documents": count}
+    return results
 
 
 def clear_meili(
@@ -303,16 +306,21 @@ def run(
     date_to: str | None,
     dry_run: bool,
 ) -> None:
-    # Resolve what to touch from stage semantics or explicit targets
+    # Resolve what to touch from stage semantics or explicit targets.
+    # include_dedup_keys gates the ingestion_dedup_keys table (full wipe only):
+    # --stage process clears processed_documents but leaves the dedup mirror intact.
     if stage in ("fetch", "all"):
-        do_pg, do_sqlite, do_meili, include_raw = True, True, True, True
+        do_pg, do_checkpoints, do_meili = True, True, True
+        include_raw, include_dedup_keys = True, True
     elif stage == "process":
-        do_pg, do_sqlite, do_meili, include_raw = True, True, True, False
+        do_pg, do_checkpoints, do_meili = True, True, True
+        include_raw, include_dedup_keys = False, False
     else:
         do_pg = "pg" in targets
-        do_sqlite = "sqlite" in targets
+        do_checkpoints = "checkpoints" in targets
         do_meili = "meili" in targets
         include_raw = True  # --target pg always includes raw_documents
+        include_dedup_keys = True  # --target checkpoints clears both (when no date scope)
 
     corpora = CORPORA if corpus == "all" else [corpus.upper()]
 
@@ -322,20 +330,13 @@ def run(
             header += f"  ({date_from or 'beginning'} → {date_to or 'end'})"
         print(f"\n{header}")
 
-        # Pre-fetch canonical_ids from raw_documents before any PG deletions.
-        # When --stage fetch is used with a date range, PG will clear raw_documents,
-        # so the SQLite lookup must happen first against the still-intact table.
-        canonical_ids: list[str] | None = None
-        if do_sqlite and (date_from or date_to):
-            canonical_ids = _get_canonical_ids(corp, date_from, date_to)
-
-        # SQLite first — uses pre-fetched IDs, so the PG step can safely clear
-        # raw_documents without breaking the date-scoped SQLite delete.
-        if do_sqlite:
-            for table, n in clear_sqlite(
-                corp, date_from, date_to, dry_run, canonical_ids
+        # Checkpoints first — the date-scoped processed_documents delete joins
+        # raw_documents, so it must run before clear_pg removes those rows.
+        if do_checkpoints:
+            for table, n in clear_checkpoints(
+                corp, date_from, date_to, dry_run, include_dedup_keys
             ).items():
-                _print_count(f"SQLite {table}", "rows", n, dry_run)
+                _print_count(f"PG {table}", "rows", n, dry_run)
 
         if do_pg:
             for table, n in clear_pg(
@@ -361,18 +362,20 @@ def _valid_date(value: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Remove ingestion data for a corpus from PG, SQLite, and/or Meilisearch. "
+            "Remove ingestion data for a corpus from PostgreSQL and/or Meilisearch. "
             "Run from the app/ directory with the virtualenv active."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 stage semantics:
-  --stage fetch    Clears all stores including raw_documents.
+  --stage fetch    Clears all stores including raw_documents and both checkpoint
+                   tables (processed_documents + ingestion_dedup_keys).
                    Use before re-fetching from source (re-runs both Stage 1 and 2).
   --stage all      Alias for --stage fetch.
   --stage process  Clears Stage 2 output only (speeches, qa_exchanges,
-                   processed_documents, Meilisearch). Leaves raw_documents intact.
-                   Use before re-running segmentation/indexing from existing raw docs.
+                   processed_documents, Meilisearch). Leaves ingestion_dedup_keys
+                   and raw_documents intact; re-insertion correctness comes from the
+                   ON CONFLICT guard. Use before re-running indexing from raw docs.
 """,
     )
     parser.add_argument(
@@ -393,8 +396,12 @@ stage semantics:
     )
     mode.add_argument(
         "--target",
-        choices=["pg", "sqlite", "meili", "all"],
-        help="Explicit per-store control (pg clears all three PG tables)",
+        choices=["pg", "checkpoints", "meili", "all"],
+        help=(
+            "Explicit per-store control. pg clears the three PG record tables; "
+            "checkpoints clears processed_documents (and ingestion_dedup_keys when "
+            "no date scope is given)"
+        ),
     )
 
     parser.add_argument(
@@ -417,7 +424,7 @@ stage semantics:
     args = parser.parse_args()
 
     targets = (
-        ["pg", "sqlite", "meili"] if args.target == "all"
+        ["pg", "checkpoints", "meili"] if args.target == "all"
         else [args.target] if args.target
         else []
     )

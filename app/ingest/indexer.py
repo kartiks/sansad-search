@@ -234,10 +234,13 @@ class Indexer:
 
         dedup_key = build_dedup_key(record)
 
-        # Check in-memory checkpoint store first (fast path)
-        if checkpoint.has_dedup_key(dedup_key):
-            logger.debug("Duplicate dedup key %s; skipping", dedup_key)
-            return False
+        # No checkpoint-mirror short-circuit here: the ingestion_dedup_keys mirror
+        # is a pre-filter only and must never suppress a legitimate insert
+        # (ARCHITECTURE §8 item 7). The authoritative duplicate guard is the
+        # UNIQUE(dedup_key) constraint on speeches/qa_exchanges, enforced below via
+        # INSERT … ON CONFLICT (dedup_key) DO NOTHING. Relying on the mirror to skip
+        # would wrongly drop rows on selective re-processing (a scope cleared from
+        # speeches/qa_exchanges + processed_documents but not the dedup mirror).
 
         # Write to PostgreSQL
         record_with_key = dict(record, dedup_key=dedup_key)
@@ -278,11 +281,11 @@ class Indexer:
         if not inserted:
             return False
 
-        # Record dedup key in checkpoint store
-        checkpoint.add_dedup_key(dedup_key)
+        # Mirror the dedup key into the pre-filter surface (corpus = record source).
+        source = record.get("source", "")
+        checkpoint.add_dedup_key(dedup_key, source)
 
         # Track counts and date ranges for index_status
-        source = record.get("source", "")
         if source in self.counts:
             self.counts[source] += 1
             date_val = record.get("date")

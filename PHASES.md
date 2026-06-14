@@ -1,7 +1,7 @@
 # SansadSearch — Phase Plan
 
-PRD version: v3.1
-Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes); updated 2026-06-02 (Phases 10–11 added — PRD v2.0: new ingestion fields, CA parsing rules, shared sequence, F05 badge changes, F09 record detail page; merge-conflict marker in header resolved); updated 2026-06-03 (Phase 12 added — two-stage pipeline + raw_documents table per ARCH 2026-06-03 update); updated 2026-06-04 (Phase 12 main.py: --date-from/--date-to scope both stages — Stage 1 applies post-parse date-window gate; routing updated to run_stage1(date_from, date_to); stop condition for Stage 1 date filter added); updated 2026-06-06 (Phases 13–15 added — PRD v3.0: F01 adjacent speech merging + lok_sabha_number + segments + canonical_doc_id + source_url reversal; F09 inline adjacent loading redesign + F05 ≥400-word snippets + lok_sabha_number display; F10 debug mode); updated 2026-06-09 (PRD v3.1: no new phases — all v3.1 changes already implemented post-phase-15: LS/RS scope 1947-08-15, LS chain IA+elibrary DSpace 7, RS chain IA-only, F03 subject filter, F04 curly quote normalization, F05 cropLength 200, F08 subject in saved search state)
+PRD version: v3.2
+Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes); updated 2026-06-02 (Phases 10–11 added — PRD v2.0: new ingestion fields, CA parsing rules, shared sequence, F05 badge changes, F09 record detail page; merge-conflict marker in header resolved); updated 2026-06-03 (Phase 12 added — two-stage pipeline + raw_documents table per ARCH 2026-06-03 update); updated 2026-06-04 (Phase 12 main.py: --date-from/--date-to scope both stages — Stage 1 applies post-parse date-window gate; routing updated to run_stage1(date_from, date_to); stop condition for Stage 1 date filter added); updated 2026-06-06 (Phases 13–15 added — PRD v3.0: F01 adjacent speech merging + lok_sabha_number + segments + canonical_doc_id + source_url reversal; F09 inline adjacent loading redesign + F05 ≥400-word snippets + lok_sabha_number display; F10 debug mode); updated 2026-06-09 (PRD v3.1: no new phases — all v3.1 changes already implemented post-phase-15: LS/RS scope 1947-08-15, LS chain IA+elibrary DSpace 7, RS chain IA-only, F03 subject filter, F04 curly quote normalization, F05 cropLength 200, F08 subject in saved search state); updated 2026-06-13 (Phase 16 added — UI v3.1 changes implemented outside /plan session (body colour system, homepage corpus pills and suggested queries, Advanced Search toggle chips, debug badge, RecordDetail sticky header); Phase 17 added — checkpoint store SQLite→PostgreSQL + Railway Cron Job; header updated to PRD v3.2)
 
 ---
 
@@ -319,4 +319,45 @@ Implement:
 
 Stop when: normal-mode search requests do not include `_rankingScore`, `_rankingScoreDetails`, or `attributesToRetrieve: ["*"]` in Meilisearch query; `?debug=1` requests include all three; debug envelope (`debug` key) present in response only when `?debug=1`, absent in normal mode; `GET /api/debug/processed/{id}` returns full `speeches`/`qa_exchanges` row with correct `table` discriminator; `GET /api/debug/raw/{id}` returns full `raw_documents` row resolved via `canonical_doc_id`; 404 returned when id not found, `canonical_doc_id` null, or no matching raw row; first expand of Processed record triggers exactly 1 fetch; second expand triggers 0 additional fetches; expanding Processed record does not trigger a Raw document fetch (and vice versa); all 4 per-result sections independently collapsible; all 5 global sections independently collapsible; no debug DOM elements (panel containers, toggles, or score fields) present in normal mode; `?debug=1` on one page does not affect other tabs; all existing Phase 1–14 tests pass without modification.
 Do not implement anything beyond Phase 15.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 16 — UI v3.1: Body Colour System, Homepage Enhancements, Advanced Search Toggle Chips, Debug Badge, RecordDetail Sticky Header
+
+PRD sections: F03 (Advanced Search Modal — toggle chips; type-clear), F05 (body-colour badges on result cards), F08 (subject in saved search filter summary), F09 (RecordDetail sticky header; load-control styling), F10 (debug badge in Results and RecordDetail headers)
+UI sections: 02-ui-ux-spec.md (body colour system; homepage corpus pills and suggested queries; Advanced Search Modal toggle chips; RecordDetail sticky header; debug badge)
+
+Implement:
+- Body colour system (CA ochre #8B6914, LS green #1E6B35, RS crimson #9B1D20): 3px left border + coloured body badge on SpeechCard, QACard, RecordDetail
+- AdvancedSearchModal: Legislative Body checkboxes → body-coloured toggle chips; Proceeding Type checkboxes → navy toggle chips with Select all / Clear all actions; Subject field placeholder and helper text updated
+- Homepage corpus pills row (CA / Lok Sabha / Rajya Sabha; click pre-fills search) and suggested queries row (4 pools, one random chip per pool per page load; hidden while user types; click auto-submits)
+- Proceeding type badge: 11px → 12px font + 1px border
+- Saved search filter summary: subject field included ("Subject: [value]")
+- Results page header: DEBUG_BADGE rendered in the right area when ?debug=1 active
+- RecordDetail sticky header: wordmark + compact search bar + Advanced Search + bookmark icon; DEBUG_BADGE if ?debug=1
+- Load-control button styling: centered, outlined, grey text when disabled; record-load-btn CSS; adjacent-card gaps 12px; fulltext card 12px bottom margin; display order: load-prev → prev records → metadata → focal fulltext → next records → load-next
+- Canonical text constants added to constants.js
+- Home.jsx ESM import ordering: all imports precede const/function declarations
+
+Stop when: body-colour borders and badges render for all three corpora on result cards and detail page; Advanced Search Modal renders toggle chips (body-coloured for Legislative Body, navy for Proceeding Type) with Select all / Clear all; corpus pills appear on homepage; suggested-query chips appear on page load, hide on typing, and auto-submit on click; debug badge appears in Results header and RecordDetail sticky header when ?debug=1; load controls correctly styled and disabled at boundaries; all frontend tests pass.
+Do not implement anything from Phase 17 or later.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 17 — Checkpoint Store: SQLite → PostgreSQL + Railway Cron Job
+
+PRD sections: F01 (INF-R1 — pipeline resumability; storage-agnostic checkpoint store)
+ARCH sections: DATA-MODELS §1.6/§1.7, ARCHITECTURE §5/§8 item 7, DEPLOYMENT §3.7/§6.5/§6.7
+
+Implement:
+- `app/db/schema.sql` — add `CREATE TABLE IF NOT EXISTS` + indexes for `processed_documents` and `ingestion_dedup_keys` per DATA-MODELS §1.6/§1.7 (columns, composite PKs, and `idx_processed_documents_corpus` / `idx_ingestion_dedup_keys_corpus` indexes)
+- `app/ingest/checkpoints/store.py` — full rewrite from SQLite to PostgreSQL (psycopg2; same `DATABASE_URL` and connection-resilience pattern as `indexer.py`); implement query patterns in DATA-MODELS §1.6/§1.7; remove all `sqlite3` usage and the `data/ingestion_checkpoints.db` path; preserve ARCHITECTURE §8 item 7 correctness invariant (dedup mirror is a pre-filter only; `ON CONFLICT (dedup_key) DO NOTHING` on `speeches`/`qa_exchanges` is the authoritative duplicate guard; mirror must never suppress a legitimate insert)
+- `app/scripts/clear_corpus.py` — rename `--target sqlite` → `--target checkpoints` (argparse choices, branch logic, help text); checkpoint clear is now a PostgreSQL `DELETE`; `--stage fetch` clears both checkpoint tables, `--stage process` clears `processed_documents` only (per DEPLOYMENT §6.5)
+- `.gitignore` — remove `data/ingestion_checkpoints.db` entry if present; remove any `data/` runtime-dir creation code specific to the SQLite file
+- Railway Cron Job service: provision per DEPLOYMENT §3.7 — new Cron Job service in the same Railway project as the API and PostgreSQL; root directory `app/`; start command `python -m ingest.main --source all`; set `DATABASE_URL` (shared Railway PostgreSQL), `MEILISEARCH_URL`, and `MEILISEARCH_MASTER_KEY` on the Cron Job service only; confirm `MEILISEARCH_MASTER_KEY` is not set on the API service
+
+Stop when: `schema.sql` creates `processed_documents` and `ingestion_dedup_keys` with correct columns, composite PKs, and indexes without error on a clean PostgreSQL instance; `store.py` passes: (a) Stage 2 resumability — interrupt → resume → identical record count, no duplicates (INF-R1) using PostgreSQL `processed_documents`; (b) ARCHITECTURE §8 item-7 regression — clear `speeches`/`qa_exchanges` + `processed_documents` for a scope, leave `ingestion_dedup_keys` intact, re-run Stage 2, assert rows are re-created; (c) `--target checkpoints` issues a PostgreSQL `DELETE` and `--target sqlite` is rejected by argparse; no `sqlite3` import in `store.py`; Railway Cron Job service is provisioned with the correct env vars per DEPLOYMENT §3.7 (deployment task — verified in Railway dashboard, no automated test).
+Do not implement anything beyond Phase 17.
 Tests: write and run tests for all items above before finishing.

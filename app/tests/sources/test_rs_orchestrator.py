@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from ingest.checkpoints.store import CheckpointStore
+from tests.fakes import FakeCheckpointStore as CheckpointStore
 from ingest.sources._provider import DocumentRef, Provider
 from ingest.sources.providers.internet_archive import InternetArchiveProvider
 from ingest.sources.rs import RSOrchestrator

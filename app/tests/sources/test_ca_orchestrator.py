@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from ingest.checkpoints.store import CheckpointStore
+from tests.fakes import FakeCheckpointStore as CheckpointStore
 from ingest.sources._provider import DocumentRef, Provider
 from ingest.sources.ca import CAOrchestrator
 

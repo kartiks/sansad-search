@@ -27,13 +27,13 @@ SansadSearch indexes the complete proceedings of the Constituent Assembly of Ind
 
 | Source | URL |
 |--------|-----|
-| Constituent Assembly debates | sansad.in (Lok Sabha archives) |
-| Lok Sabha debates and questions | sansad.in |
-| Rajya Sabha debates and questions | rajyasabha.gov.in |
+| Constituent Assembly debates | constitutionofindia.net (HTML) |
+| Lok Sabha debates and questions | Internet Archive (archive.org) · eparlib.sansad.in (DSpace 7 fallback, 2019+) |
+| Rajya Sabha debates and questions | Internet Archive (archive.org) — post-2018 data not available |
 
 ## Setup and Run
 
-> Setup and run instructions will be added after the architecture phase. Run `/arch` in a new Claude Code session to produce the architecture document.
+See [`arch/DEPLOYMENT.md §5`](arch/DEPLOYMENT.md) for full local development setup (Python env, Node, PostgreSQL, Meilisearch, env vars, and running ingestion).
 
 ## Development
 

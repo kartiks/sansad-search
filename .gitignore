@@ -1,7 +1,4 @@
 SansadSearch.code-workspace
-app/data/ingestion_checkpoints.db
-app/data/ingestion_checkpoints.db-shm
-app/data/ingestion_checkpoints.db-wal
 app/ui/package-lock.json
 .agentic-reviews/
 .claude/
