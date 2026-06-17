@@ -463,7 +463,18 @@ mark {
 
 @media (max-width: 767px) {
   .results-content { width: 92vw; padding: 8px 0 32px; }
-  .results-header-inner { padding: 0 12px; gap: 8px; }
+  .results-header-inner {
+    padding: 8px 12px;
+    height: auto;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+  }
+  .wordmark-header { flex: 1; }
+  .results-header-search {
+    order: 3;
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
 }
 
 .expansion-notice {
