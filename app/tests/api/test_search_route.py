@@ -454,10 +454,10 @@ class TestFilterForwarding:
         assert params["page"] == 3
 
 
-# ── F05 snippet crop configuration ────────────────────────────────────────────
+# ── F02/F05 snippet crop configuration (PRD v3.3 — configurable snippet size) ──
 
 class TestSnippetCropParams:
-    """F05 (PRD v3.0): ≥400-word snippets via Meilisearch crop parameters."""
+    """F02/F05 (PRD v3.3): dynamic cropLength driven by the effective snippet size."""
 
     def _captured_search_params(self):
         captured = []
@@ -472,6 +472,17 @@ class TestSnippetCropParams:
         mock_client.index = MagicMock(return_value=mock_index)
         return mock_client, captured
 
+    def _crop_length_for(self, body, monkeypatch=None):
+        """Post *body* and return the Meilisearch crop_length parameter used."""
+        mock_client, captured = self._captured_search_params()
+        mock_pool = make_mock_pool()
+        app.dependency_overrides[get_pool] = lambda: mock_pool
+        app.dependency_overrides[get_client] = lambda: mock_client
+        with TestClient(app) as client:
+            resp = client.post("/api/search", json=body)
+        assert resp.status_code == 200, resp.text
+        return captured[0]["params"]["crop_length"]
+
     def test_attributes_to_crop_forwarded(self):
         mock_client, captured = self._captured_search_params()
         mock_pool = make_mock_pool()
@@ -482,15 +493,10 @@ class TestSnippetCropParams:
         params = captured[0]["params"]
         assert params["attributes_to_crop"] == ["full_text_en"]
 
-    def test_crop_length_is_200(self):
-        mock_client, captured = self._captured_search_params()
-        mock_pool = make_mock_pool()
-        app.dependency_overrides[get_pool] = lambda: mock_pool
-        app.dependency_overrides[get_client] = lambda: mock_client
-        with TestClient(app) as client:
-            client.post("/api/search", json={"query": "budget"})
-        params = captured[0]["params"]
-        assert params["crop_length"] == 200
+    def test_crop_length_default_is_100(self, monkeypatch):
+        """With no snippet_size, cropLength is the default 100 (not the legacy 200)."""
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget"}) == 100
 
     def test_crop_marker_present(self):
         mock_client, captured = self._captured_search_params()
@@ -501,6 +507,96 @@ class TestSnippetCropParams:
             client.post("/api/search", json={"query": "budget"})
         params = captured[0]["params"]
         assert params["crop_marker"] == "…"
+
+    # ── snippet_size: in-range and clamp boundaries ──────────────────────────
+
+    def test_snippet_size_300_drives_crop_length_300(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": 300}) == 300
+
+    def test_snippet_size_lower_bound_inclusive(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": 20}) == 20
+
+    def test_snippet_size_upper_bound_inclusive(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": 1000}) == 1000
+
+    def test_snippet_size_19_clamps_to_20(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": 19}) == 20
+
+    def test_snippet_size_1001_clamps_to_1000(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": 1001}) == 1000
+
+    def test_snippet_size_5_clamps_to_20(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": 5}) == 20
+
+    def test_snippet_size_5000_clamps_to_1000(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": 5000}) == 1000
+
+    def test_snippet_size_zero_clamps_to_20(self, monkeypatch):
+        """0 must clamp to 20 — NOT be treated as invalid and fall back to default."""
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": 0}) == 20
+
+    def test_snippet_size_negative_clamps_to_20(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": -100}) == 20
+
+    # ── snippet_size: fallback (never a validation error) ─────────────────────
+
+    def test_snippet_size_float_falls_back_to_default(self, monkeypatch):
+        """A non-integer numeric (JSON float 100.5) falls back to default 100."""
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": 100.5}) == 100
+
+    def test_snippet_size_empty_string_falls_back_to_default(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": ""}) == 100
+
+    def test_snippet_size_non_numeric_string_falls_back_to_default(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": "big"}) == 100
+
+    def test_snippet_size_null_falls_back_to_default(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": None}) == 100
+
+    def test_snippet_size_bool_falls_back_to_default(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert self._crop_length_for({"query": "budget", "snippet_size": True}) == 100
+
+    def test_malformed_snippet_size_never_a_validation_error(self):
+        """No snippet_size value, however malformed, may produce a 400 (search always executes)."""
+        mock_pool = make_mock_pool()
+        for val in [100.5, "", "abc", True, False, None, -1, 0, 99999, [1, 2], {"x": 1}]:
+            mock_client, _ = self._captured_search_params()
+            app.dependency_overrides[get_pool] = lambda: mock_pool
+            app.dependency_overrides[get_client] = lambda: mock_client
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/api/search", json={"query": "budget", "snippet_size": val}
+                )
+            assert resp.status_code == 200, f"snippet_size={val!r} unexpectedly errored: {resp.text}"
+
+    # ── operator-configurable default (SNIPPET_DEFAULT_WORDS) ─────────────────
+
+    def test_operator_default_env_applied(self, monkeypatch):
+        monkeypatch.setenv("SNIPPET_DEFAULT_WORDS", "250")
+        assert self._crop_length_for({"query": "budget"}) == 250
+
+    def test_per_request_overrides_operator_default(self, monkeypatch):
+        monkeypatch.setenv("SNIPPET_DEFAULT_WORDS", "250")
+        assert self._crop_length_for({"query": "budget", "snippet_size": 400}) == 400
+
+    def test_operator_default_out_of_range_clamped(self, monkeypatch):
+        """NFR PERF-4: a mis-set operator default is still clamped to the bound."""
+        monkeypatch.setenv("SNIPPET_DEFAULT_WORDS", "5000")
+        assert self._crop_length_for({"query": "budget"}) == 1000
 
 
 # ── Filter validation edge cases ──────────────────────────────────────────────

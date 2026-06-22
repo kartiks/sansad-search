@@ -47,7 +47,8 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 
 - A record with `speaker_name_unresolved: true` must display the raw name stored in `speaker_name` without any error indicator or blank; the display must be identical in format to a resolved name
 
-## Snippet Minimum Size
+## Snippet Size
 
-- A record whose `full_text_en` contains more than 200 words must produce a snippet of at least 200 words; the snippet must not be truncated to fewer words unless the matched passage is within 200 words of the start or end of the text
-- A record whose `full_text_en` contains fewer than 200 words must display the full text as the snippet; no words may be omitted
+- With no `snippet_size` supplied, a record whose `full_text_en` exceeds the default must produce a snippet sized to the default of 100 words — not the legacy 200
+- A record whose `full_text_en` exceeds the effective snippet size must produce a snippet cropped to approximately that size, not the full text; it must not be truncated to fewer words unless the matched passage is within the snippet size of the start or end of the text
+- A record whose `full_text_en` contains fewer words than the effective snippet size must display the full text as the snippet; no words may be omitted and the snippet must not be padded

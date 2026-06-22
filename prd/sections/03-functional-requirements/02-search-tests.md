@@ -44,3 +44,11 @@ Supplements the feature spec. Does not repeat acceptance criteria or edge cases 
 
 - When the user modifies the query on the results page and resubmits, any active filter selections from Feature 03 must persist; the new result set must reflect the new query AND the previously active filters
 - Only an explicit "clear filters" action (Feature 03) resets filters to defaults
+
+## Snippet Size Clamp Boundaries
+
+- `snippet_size=20` and `snippet_size=1000` must be accepted as-is (the bounds are inclusive; neither is clamped)
+- `snippet_size=19` must clamp to 20; `snippet_size=1001` must clamp to 1000
+- `snippet_size=0` and a negative `snippet_size` must clamp to 20 — they must NOT be treated as invalid and fall back to the default
+- A non-integer numeric value such as `snippet_size=100.5` must fall back to the default (100); it must not be truncated or rounded to an integer
+- A present-but-empty `snippet_size` value must fall back to the default

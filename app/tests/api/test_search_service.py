@@ -7,11 +7,15 @@ from __future__ import annotations
 import pytest
 
 from api.services.search import (
+    DEFAULT_SNIPPET_WORDS,
+    SNIPPET_SIZE_MAX,
+    SNIPPET_SIZE_MIN,
     build_filter_expression,
     build_sort_params,
     format_date_display,
     format_total_display,
     get_proceeding_type_label,
+    resolve_effective_snippet_size,
     _build_snippet,
     _merge_expansion_terms,
     format_result,
@@ -264,22 +268,106 @@ class TestBuildSnippet:
         snippet, _ = _build_snippet(text, ["target1", "target2"])
         assert "<mark>target1</mark>" in snippet or "<mark>target2</mark>" in snippet
 
-    def test_snippet_at_least_200_words_for_long_text(self):
-        """Snippet window is 200 words; a long text yields a snippet of ≥200 words."""
+    @staticmethod
+    def _word_count(snippet: str) -> int:
+        import re as _re
+        return len(_re.findall(r"[a-zA-Z0-9]+", _re.sub(r"<[^>]+>", "", snippet)))
+
+    def test_snippet_default_100_words_for_long_text(self):
+        """Default window is now 100 words (PRD v3.3, lowered from legacy 200)."""
         text = " ".join(f"word{i}" for i in range(1000)) + " target end"
         snippet, _ = _build_snippet(text, ["target"])
-        # Count word tokens in the (HTML-stripped) snippet.
-        import re as _re
-        words = _re.findall(r"[a-zA-Z0-9]+", _re.sub(r"<[^>]+>", "", snippet))
-        assert len(words) >= 200
+        words = self._word_count(snippet)
+        # ~100 words: at least 100, and clearly below the legacy 200 default.
+        assert words >= 100
+        assert words < 200
 
-    def test_short_text_returned_in_full(self):
-        """A text shorter than the window is returned whole (no truncation)."""
+    def test_snippet_window_honours_explicit_size(self):
+        """An explicit snippet_words drives the crop window size."""
+        text = " ".join(f"word{i}" for i in range(1000)) + " target end"
+        snippet, _ = _build_snippet(text, ["target"], snippet_words=300)
+        words = self._word_count(snippet)
+        assert words >= 300
+
+    def test_short_text_returned_in_full_no_padding(self):
+        """A text shorter than the window is returned whole (no truncation, no padding)."""
         text = "Only a handful of words about budget policy here."
-        snippet, _ = _build_snippet(text, ["budget"])
+        snippet, _ = _build_snippet(text, ["budget"], snippet_words=300)
         import re as _re
         stripped = _re.sub(r"<[^>]+>", "", snippet)
         assert "handful" in stripped and "policy" in stripped
+        # No padding: snippet word count equals the source word count, not 300.
+        assert self._word_count(snippet) == 9
+
+
+# ── resolve_effective_snippet_size (F02/F05 — PRD v3.3) ───────────────────────
+
+class TestResolveEffectiveSnippetSize:
+    """DATA-MODELS §2.3 'Effective snippet size' resolution rule."""
+
+    def test_default_when_absent(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert resolve_effective_snippet_size(None) == DEFAULT_SNIPPET_WORDS  # 100
+
+    def test_bounds_inclusive(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert resolve_effective_snippet_size(SNIPPET_SIZE_MIN) == 20
+        assert resolve_effective_snippet_size(SNIPPET_SIZE_MAX) == 1000
+
+    def test_clamp_low(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert resolve_effective_snippet_size(19) == 20
+        assert resolve_effective_snippet_size(0) == 20
+        assert resolve_effective_snippet_size(-5) == 20
+
+    def test_clamp_high(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert resolve_effective_snippet_size(1001) == 1000
+        assert resolve_effective_snippet_size(5000) == 1000
+
+    def test_in_range_passes_through(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert resolve_effective_snippet_size(300) == 300
+
+    def test_non_integer_float_falls_back(self, monkeypatch):
+        """A JSON float (non-integer numeric) falls back to default — not rounded/truncated."""
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert resolve_effective_snippet_size(100.5) == DEFAULT_SNIPPET_WORDS
+        assert resolve_effective_snippet_size(300.0) == DEFAULT_SNIPPET_WORDS
+
+    def test_string_falls_back(self, monkeypatch):
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert resolve_effective_snippet_size("300") == DEFAULT_SNIPPET_WORDS
+        assert resolve_effective_snippet_size("") == DEFAULT_SNIPPET_WORDS
+        assert resolve_effective_snippet_size("abc") == DEFAULT_SNIPPET_WORDS
+
+    def test_bool_falls_back(self, monkeypatch):
+        """bool is an int subclass but JSON true/false must fall back, not clamp."""
+        monkeypatch.delenv("SNIPPET_DEFAULT_WORDS", raising=False)
+        assert resolve_effective_snippet_size(True) == DEFAULT_SNIPPET_WORDS
+        assert resolve_effective_snippet_size(False) == DEFAULT_SNIPPET_WORDS
+
+    def test_operator_default_env_used(self, monkeypatch):
+        monkeypatch.setenv("SNIPPET_DEFAULT_WORDS", "250")
+        assert resolve_effective_snippet_size(None) == 250
+        assert resolve_effective_snippet_size("not-a-number") == 250
+
+    def test_operator_default_out_of_range_clamped(self, monkeypatch):
+        """Even a mis-set operator default is clamped (NFR PERF-4)."""
+        monkeypatch.setenv("SNIPPET_DEFAULT_WORDS", "5000")
+        assert resolve_effective_snippet_size(None) == 1000
+        monkeypatch.setenv("SNIPPET_DEFAULT_WORDS", "5")
+        assert resolve_effective_snippet_size(None) == 20
+
+    def test_operator_default_invalid_env_falls_back_to_100(self, monkeypatch):
+        monkeypatch.setenv("SNIPPET_DEFAULT_WORDS", "abc")
+        assert resolve_effective_snippet_size(None) == DEFAULT_SNIPPET_WORDS
+        monkeypatch.setenv("SNIPPET_DEFAULT_WORDS", "100.5")
+        assert resolve_effective_snippet_size(None) == DEFAULT_SNIPPET_WORDS
+
+    def test_per_request_integer_overrides_operator_default(self, monkeypatch):
+        monkeypatch.setenv("SNIPPET_DEFAULT_WORDS", "250")
+        assert resolve_effective_snippet_size(300) == 300
 
 
 # ── format_result ─────────────────────────────────────────────────────────────

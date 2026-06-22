@@ -24,8 +24,62 @@ MEILI_INDEX_NAME = "parliamentary_records"
 PER_PAGE = 20
 MAX_TOTAL_HITS = 10000
 
-# F05: snippet crop window in words — passed to Meilisearch and used locally.
-SNIPPET_WORD_WINDOW = 200
+# F02/F05 (PRD v3.3): configurable snippet size.
+# The result-snippet crop window is sized per request from the optional
+# `snippet_size` parameter, falling back to an operator-configurable default.
+# NFR PERF-4 bounds the effective size to [20, 1000] words so PERF-1 holds at
+# the maximum; the bound is enforced regardless of the operator default.
+SNIPPET_SIZE_MIN = 20
+SNIPPET_SIZE_MAX = 1000
+
+# Built-in fallback default when SNIPPET_DEFAULT_WORDS is unset or itself invalid.
+DEFAULT_SNIPPET_WORDS = 100
+
+
+def _clamp_snippet_size(n: int) -> int:
+    """Clamp *n* into the inclusive bound [SNIPPET_SIZE_MIN, SNIPPET_SIZE_MAX]."""
+    return max(SNIPPET_SIZE_MIN, min(SNIPPET_SIZE_MAX, n))
+
+
+def _operator_default_snippet_size() -> int:
+    """
+    Read the operator-configurable default snippet size from the
+    SNIPPET_DEFAULT_WORDS environment variable (read per request so an operator
+    env change takes effect on API restart with no code change).  Falls back to
+    DEFAULT_SNIPPET_WORDS (100) when unset or not a valid integer string.
+    """
+    raw = os.environ.get("SNIPPET_DEFAULT_WORDS")
+    if raw is None:
+        return DEFAULT_SNIPPET_WORDS
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        return DEFAULT_SNIPPET_WORDS
+
+
+def resolve_effective_snippet_size(snippet_size: Any) -> int:
+    """
+    Resolve the effective snippet size (Meilisearch cropLength) for a request,
+    per DATA-MODELS §2.3 "Effective snippet size".
+
+    - A JSON integer is clamped into [20, 1000] (bounds inclusive; 0/negative/19
+      → 20; 1001/5000 → 1000).
+    - Anything else — absent (None), present-but-empty, non-numeric, a JSON float
+      (non-integer numeric, e.g. 100.5), or a boolean — falls back to the
+      operator-configurable default.
+    - The result is always clamped into [20, 1000], so even an out-of-range
+      operator default cannot violate NFR PERF-4.
+
+    Note: ``bool`` is a subclass of ``int`` in Python, so JSON ``true``/``false``
+    are explicitly treated as non-integers and fall back to the default.
+    """
+    if isinstance(snippet_size, bool):
+        chosen = _operator_default_snippet_size()
+    elif isinstance(snippet_size, int):
+        chosen = snippet_size
+    else:
+        chosen = _operator_default_snippet_size()
+    return _clamp_snippet_size(chosen)
 
 _PROCEEDING_TYPE_LABELS: Dict[str, str] = {
     "debate": "Debate",
@@ -135,14 +189,16 @@ def _find_supplementary_offset(text: str) -> int:
 
 
 def _build_snippet(
-    text: str, query_terms: List[str]
+    text: str, query_terms: List[str], snippet_words: int = DEFAULT_SNIPPET_WORDS
 ) -> Tuple[Optional[str], bool]:
     """
-    Extract the best ≥200-word snippet from *text* for the given *query_terms*.
+    Extract the best *snippet_words*-word snippet from *text* for the given
+    *query_terms*.  *snippet_words* is the effective snippet size resolved per
+    request (F02/F05, PRD v3.3); shorter texts are returned in full (no padding).
 
     Steps:
       1. Split text into word-level tokens with their character offsets.
-      2. Use a sliding SNIPPET_WORD_WINDOW window to find the window with the
+      2. Use a sliding *snippet_words* window to find the window with the
          highest density of query terms.
       3. HTML-escape the raw snippet text.
       4. Wrap each matched term with <mark>…</mark> tags.
@@ -164,7 +220,7 @@ def _build_snippet(
         return None, False
 
     query_set = set(query_terms)
-    window = min(SNIPPET_WORD_WINDOW, len(word_positions))
+    window = min(snippet_words, len(word_positions))
 
     best_start = 0
     best_count = -1
@@ -341,7 +397,12 @@ def _meili_result_to_dict(raw: Any) -> Any:
 
 # ── Result formatter ──────────────────────────────────────────────────────────
 
-def format_result(hit: Dict[str, Any], query_terms: List[str], debug: bool = False) -> Dict[str, Any]:
+def format_result(
+    hit: Dict[str, Any],
+    query_terms: List[str],
+    debug: bool = False,
+    snippet_words: int = DEFAULT_SNIPPET_WORDS,
+) -> Dict[str, Any]:
     """
     Convert a raw Meilisearch hit dict into the API result shape.
 
@@ -382,7 +443,7 @@ def format_result(hit: Dict[str, Any], query_terms: List[str], debug: bool = Fal
     # means no English text is available and the frontend handles display itself.
     # Omitting the keys entirely matches the documented API contract (DATA-MODELS.md 3.1).
     if full_text:
-        snippet_html, snippet_from_sup = _build_snippet(full_text, query_terms)
+        snippet_html, snippet_from_sup = _build_snippet(full_text, query_terms, snippet_words)
         result["snippet"] = snippet_html
         result["snippet_from_supplementary"] = snippet_from_sup
 
@@ -406,6 +467,7 @@ async def execute_search(
     meili_client: Any,
     expansion_notice: Optional[List[str]] = None,
     debug: bool = False,
+    snippet_size: Any = None,
 ) -> Dict[str, Any]:
     """
     Execute a search against the Meilisearch parliamentary_records index.
@@ -419,6 +481,10 @@ async def execute_search(
         expansion_notice: Pre-computed expansion notice list from query_expander.
         debug:            When True, adds score retrieval params + returns debug
                           envelope (F10, PRD v3.0).  Exempt from PERF-1 (PERF-3).
+        snippet_size:     Optional raw `snippet_size` request value (F02/F05, PRD
+                          v3.3).  Resolved to an effective snippet size (clamp
+                          20–1000, else SNIPPET_DEFAULT_WORDS default 100) that
+                          drives Meilisearch cropLength.  Never a validation error.
 
     Returns:
         API-shaped response dict.
@@ -428,16 +494,19 @@ async def execute_search(
     """
     filter_expr = build_filter_expression(filters)
     sort_params = build_sort_params(sort)
+    effective_snippet_size = resolve_effective_snippet_size(snippet_size)
 
     index = meili_client.index(MEILI_INDEX_NAME)
     search_kwargs: Dict[str, Any] = {
         "hits_per_page": PER_PAGE,
         "page": page,
-        # F05 (PRD v3.1): ≥200-word snippet. Meilisearch crops full_text_en to a
-        # window of at least cropLength words centred on the densest match
-        # passage; shorter texts are returned in full.
+        # F02/F05 (PRD v3.3): dynamic snippet size. cropLength is the effective
+        # snippet size resolved per request from `snippet_size` (clamp 20–1000)
+        # or the operator default (SNIPPET_DEFAULT_WORDS, default 100).
+        # Meilisearch crops full_text_en to a window of that many words centred
+        # on the densest match passage; shorter texts are returned in full.
         "attributes_to_crop": ["full_text_en"],
-        "crop_length": SNIPPET_WORD_WINDOW,
+        "crop_length": effective_snippet_size,
         "crop_marker": "…",
     }
     if filter_expr:
@@ -460,7 +529,10 @@ async def execute_search(
 
     query_terms = _tokenize_query(query)
     all_terms = _merge_expansion_terms(query_terms, expansion_notice)
-    results = [format_result(hit, all_terms, debug=debug) for hit in hits]
+    results = [
+        format_result(hit, all_terms, debug=debug, snippet_words=effective_snippet_size)
+        for hit in hits
+    ]
 
     response: Dict[str, Any] = {
         "total": total,

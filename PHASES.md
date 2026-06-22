@@ -1,7 +1,7 @@
 # SansadSearch — Phase Plan
 
-PRD version: v3.2
-Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes); updated 2026-06-02 (Phases 10–11 added — PRD v2.0: new ingestion fields, CA parsing rules, shared sequence, F05 badge changes, F09 record detail page; merge-conflict marker in header resolved); updated 2026-06-03 (Phase 12 added — two-stage pipeline + raw_documents table per ARCH 2026-06-03 update); updated 2026-06-04 (Phase 12 main.py: --date-from/--date-to scope both stages — Stage 1 applies post-parse date-window gate; routing updated to run_stage1(date_from, date_to); stop condition for Stage 1 date filter added); updated 2026-06-06 (Phases 13–15 added — PRD v3.0: F01 adjacent speech merging + lok_sabha_number + segments + canonical_doc_id + source_url reversal; F09 inline adjacent loading redesign + F05 ≥400-word snippets + lok_sabha_number display; F10 debug mode); updated 2026-06-09 (PRD v3.1: no new phases — all v3.1 changes already implemented post-phase-15: LS/RS scope 1947-08-15, LS chain IA+elibrary DSpace 7, RS chain IA-only, F03 subject filter, F04 curly quote normalization, F05 cropLength 200, F08 subject in saved search state); updated 2026-06-13 (Phase 16 added — UI v3.1 changes implemented outside /plan session (body colour system, homepage corpus pills and suggested queries, Advanced Search toggle chips, debug badge, RecordDetail sticky header); Phase 17 added — checkpoint store SQLite→PostgreSQL + Railway Cron Job; header updated to PRD v3.2)
+PRD version: v3.3
+Generated: 2026-05-29; updated 2026-05-30 (Phases 7–9 added — ingestion pipeline rebuild for redesigned source chain + schema fixes); updated 2026-06-02 (Phases 10–11 added — PRD v2.0: new ingestion fields, CA parsing rules, shared sequence, F05 badge changes, F09 record detail page; merge-conflict marker in header resolved); updated 2026-06-03 (Phase 12 added — two-stage pipeline + raw_documents table per ARCH 2026-06-03 update); updated 2026-06-04 (Phase 12 main.py: --date-from/--date-to scope both stages — Stage 1 applies post-parse date-window gate; routing updated to run_stage1(date_from, date_to); stop condition for Stage 1 date filter added); updated 2026-06-06 (Phases 13–15 added — PRD v3.0: F01 adjacent speech merging + lok_sabha_number + segments + canonical_doc_id + source_url reversal; F09 inline adjacent loading redesign + F05 ≥400-word snippets + lok_sabha_number display; F10 debug mode); updated 2026-06-09 (PRD v3.1: no new phases — all v3.1 changes already implemented post-phase-15: LS/RS scope 1947-08-15, LS chain IA+elibrary DSpace 7, RS chain IA-only, F03 subject filter, F04 curly quote normalization, F05 cropLength 200, F08 subject in saved search state); updated 2026-06-13 (Phase 16 added — UI v3.1 changes implemented outside /plan session (body colour system, homepage corpus pills and suggested queries, Advanced Search toggle chips, debug badge, RecordDetail sticky header); Phase 17 added — checkpoint store SQLite→PostgreSQL + Railway Cron Job; header updated to PRD v3.2); updated 2026-06-22 (Phase 18 added — PRD v3.3: F02/F05 configurable snippet size — optional `snippet_size` API param, dynamic Meilisearch cropLength, default lowered 200→100 (operator-configurable via SNIPPET_DEFAULT_WORDS), NFR PERF-4; backend-only, no UI control; header updated to PRD v3.3)
 
 ---
 
@@ -360,4 +360,22 @@ Implement:
 
 Stop when: `schema.sql` creates `processed_documents` and `ingestion_dedup_keys` with correct columns, composite PKs, and indexes without error on a clean PostgreSQL instance; `store.py` passes: (a) Stage 2 resumability — interrupt → resume → identical record count, no duplicates (INF-R1) using PostgreSQL `processed_documents`; (b) ARCHITECTURE §8 item-7 regression — clear `speeches`/`qa_exchanges` + `processed_documents` for a scope, leave `ingestion_dedup_keys` intact, re-run Stage 2, assert rows are re-created; (c) `--target checkpoints` issues a PostgreSQL `DELETE` and `--target sqlite` is rejected by argparse; no `sqlite3` import in `store.py`; Railway Cron Job service is provisioned with the correct env vars per DEPLOYMENT §3.7 (deployment task — verified in Railway dashboard, no automated test).
 Do not implement anything beyond Phase 17.
+Tests: write and run tests for all items above before finishing.
+
+---
+
+## Phase 18 — Configurable Snippet Size (F02 / F05 / NFR PERF-4)
+
+PRD sections: F02 (Snippet Size Parameter + acceptance criteria + clamp-boundary test spec), F05 (snippet sized to the effective snippet size; default 200→100), NFR PERF-4
+UI sections: none (web UI exposes no control — the parameter is for programmatic API consumers)
+ARCH sections: DATA-MODELS §2.3 (dynamic `cropLength` + "Effective snippet size" resolution rule), DATA-MODELS §3.1 (`snippet_size` request field + field rules), DEPLOYMENT §2.1 (`SNIPPET_DEFAULT_WORDS` env var), ARCHITECTURE §3/§4
+
+Implement:
+- `app/api/routes/search.py` — accept the optional top-level `snippet_size` field on the `POST /api/search` request body; never surfaced as a validation error
+- `app/api/services/search.py` — resolve the effective snippet size per DATA-MODELS §2.3 (JSON integer → clamp to 20–1000 inclusive; absent / present-but-empty / non-numeric / non-integer → operator-configurable default) and drive a dynamic Meilisearch `cropLength` from it, replacing the hardcoded 200
+- `SNIPPET_DEFAULT_WORDS` operator-configurable default (default 100) wired into the effective-size resolution per DEPLOYMENT §2.1
+- Update existing backend tests that assert the fixed `cropLength: 200` to the new default-100 / dynamic behavior
+
+Stop when: all F02 clamp-boundary and fallback test cases pass (`snippet_size` 20 and 1000 accepted as-is; 19→20, 1001→1000; 0 and negative→20; non-integer numeric e.g. 100.5→default; present-but-empty→default; absent→default); a search with no `snippet_size` produces a default-100 snippet (not legacy 200); `snippet_size=300` drives a `cropLength` of 300; F05 case where `full_text_en` has fewer words than the effective snippet size shows full text with no padding; no `snippet_size` value is ever returned as a validation error (search always executes); NFR PERF-4 verified — PERF-1 (≤2s p95) holds at `snippet_size=1000` across the corpus; all existing Phase 1–17 tests pass without modification except the `cropLength`-200 assertions updated above.
+Do not implement anything beyond Phase 18.
 Tests: write and run tests for all items above before finishing.

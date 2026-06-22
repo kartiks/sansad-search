@@ -8,6 +8,9 @@ Search results must be returned within 2 seconds at p95, measured from query sub
 **PERF-2: Detail page response time**
 The detail page must complete full page load — including the record fetch and the adjacent-neighbour fetch — within 500ms at p95.
 
+**PERF-4: Snippet size bound**
+The search API `snippet_size` parameter is bounded to 20–1000 words; numeric values outside this range are clamped to the nearest bound, and missing/non-integer/non-numeric values fall back to the default. The default is 100 words and is operator-configurable as a deployment setting. The maximum bound exists to keep search response payloads within the PERF-1 ≤2s p95 target; PERF-1 must hold at `snippet_size=1000` across the full indexed corpus.
+
 ## Reliability
 
 **INF-R1: Ingestion resumability**

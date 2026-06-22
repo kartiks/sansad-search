@@ -1,7 +1,7 @@
 # Data Models — SansadSearch
 
 **PRD version:** v3.1
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable); updated 2026-06-01 (PRD v2.0: F01 — `lang_original`/`time_of_day`/`word_count` added to both tables, `sequence_within_sitting` added to `qa_exchanges`, sitting composite indexes for F09 adjacent nav; F05 — `lang_original`/`time_of_day` added to Meilisearch doc + search results; F09 — new `GET /api/record/{id}` contract; `id` stability rule documented); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table as Stage 1 intermediate store; SQLite `processed_documents` semantics updated to Stage 2 complete signal); updated 2026-06-04 (PRD v2.1: §1.4 `raw_documents` composite PK `(canonical_doc_id, corpus)` — fixes sole-PK error; per-corpus dedup semantics documented); updated 2026-06-06 (PRD v3.0: F01 — `lok_sabha_number` + `segments` added to `speeches`, `lok_sabha_number` added to `qa_exchanges`, `canonical_doc_id` link column added to both tables (F10 debug-raw lookup), `source_url` rules reversed (IA URL is now the citation for LS and RS-via-IA/rsdebate); F05 — Meilisearch `cropLength` ≥400 words; F09 — `GET /api/record/{id}` returns `has_prev`/`has_next` (not `adjacent` ids) + new `GET /api/record/{id}/adjacent` range-fetch contract; F10 — debug envelope on `POST /api/search`, new `GET /api/debug/processed/{id}` and `GET /api/debug/raw/{id}` endpoints, debug-mode Meilisearch retrieval config); updated 2026-06-09 (PRD v3.1: F03 — `subject` added to `filterableAttributes` + §2.4 subject filter expression; F05 — `cropLength` reduced from 400 to 200 words); updated 2026-06-12 (ingestion checkpoint store moved from local SQLite to PostgreSQL: new §1.6 `processed_documents` and §1.7 `ingestion_dedup_keys` tables; §1.5/§1.4 SQLite references updated; §4.3 "Local SQLite" replaced with a PostgreSQL checkpoint-tables note. No change to `speeches`/`qa_exchanges`/`raw_documents`/`index_status` or the Meilisearch schema — the checkpoint tables hold derived state reconstructable from the canonical record tables)
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — checkpoint store keyed on canonical document id; citation provenance annotations; reconciled to PRD v1.2: `ocr_low_confidence` dropped from `speeches` — OCR removed pipeline-wide. `qa_exchanges`/`index_status`/Meilisearch document schema otherwise unchanged.); updated 2026-05-31 (reconciled to PRD v1.3: `source_url` descriptions distinguish LS vs RS for the IA path — RS-via-IA cites rsdebate.nic.in derived from handle N, null when no handle derivable); updated 2026-06-01 (PRD v2.0: F01 — `lang_original`/`time_of_day`/`word_count` added to both tables, `sequence_within_sitting` added to `qa_exchanges`, sitting composite indexes for F09 adjacent nav; F05 — `lang_original`/`time_of_day` added to Meilisearch doc + search results; F09 — new `GET /api/record/{id}` contract; `id` stability rule documented); updated 2026-06-03 (raw document store: new `raw_documents` PostgreSQL table as Stage 1 intermediate store; SQLite `processed_documents` semantics updated to Stage 2 complete signal); updated 2026-06-04 (PRD v2.1: §1.4 `raw_documents` composite PK `(canonical_doc_id, corpus)` — fixes sole-PK error; per-corpus dedup semantics documented); updated 2026-06-06 (PRD v3.0: F01 — `lok_sabha_number` + `segments` added to `speeches`, `lok_sabha_number` added to `qa_exchanges`, `canonical_doc_id` link column added to both tables (F10 debug-raw lookup), `source_url` rules reversed (IA URL is now the citation for LS and RS-via-IA/rsdebate); F05 — Meilisearch `cropLength` ≥400 words; F09 — `GET /api/record/{id}` returns `has_prev`/`has_next` (not `adjacent` ids) + new `GET /api/record/{id}/adjacent` range-fetch contract; F10 — debug envelope on `POST /api/search`, new `GET /api/debug/processed/{id}` and `GET /api/debug/raw/{id}` endpoints, debug-mode Meilisearch retrieval config); updated 2026-06-09 (PRD v3.1: F03 — `subject` added to `filterableAttributes` + §2.4 subject filter expression; F05 — `cropLength` reduced from 400 to 200 words); updated 2026-06-12 (ingestion checkpoint store moved from local SQLite to PostgreSQL: new §1.6 `processed_documents` and §1.7 `ingestion_dedup_keys` tables; §1.5/§1.4 SQLite references updated; §4.3 "Local SQLite" replaced with a PostgreSQL checkpoint-tables note. No change to `speeches`/`qa_exchanges`/`raw_documents`/`index_status` or the Meilisearch schema — the checkpoint tables hold derived state reconstructable from the canonical record tables); updated 2026-06-22 (PRD v3.3: F02/F05 — configurable snippet size. New optional top-level `snippet_size` integer field on `POST /api/search` (§3.1); Meilisearch `cropLength` is now **dynamic** = the effective snippet size (§2.3), replacing the hardcoded 200; default lowered 200→100 and made operator-configurable via env `SNIPPET_DEFAULT_WORDS`; per-request clamp to 20–1000 with non-integer/non-numeric/missing → default; NFR PERF-4. No schema, index-settings, or other contract changes)
 
 ---
 
@@ -362,11 +362,11 @@ Meilisearch's built-in typo tolerance covers the PRD's spell-correction requirem
 ```
 Maps to the PRD's "10,000+" display threshold for result counts ≥ 10,000.
 
-**Snippet / crop configuration (F05 — PRD v3.1):** Snippets are produced at search time by `api/services/search.py` via Meilisearch query-time parameters (not index settings). To satisfy the F05 ≥200-word snippet requirement:
+**Snippet / crop configuration (F05 / F02 — PRD v3.3):** Snippets are produced at search time by `api/services/search.py` via Meilisearch query-time parameters (not index settings). `cropLength` is **dynamic** — it is set to the *effective snippet size* computed per request (see "Effective snippet size" below), no longer a hardcoded value:
 ```json
 {
   "attributesToCrop": ["full_text_en"],
-  "cropLength": 200,
+  "cropLength": <effective_snippet_size>,
   "cropMarker": "…",
   "attributesToHighlight": ["full_text_en", "subject", "speaker_name",
                             "minister_name", "questioner_names"],
@@ -374,10 +374,18 @@ Maps to the PRD's "10,000+" display threshold for result counts ≥ 10,000.
   "highlightPostTag": "</mark>"
 }
 ```
-- `cropLength` is measured in **words**; `200` yields a crop window of at least 200 words centred on the densest match passage (the `_formatted.full_text_en` field of each hit is the snippet source).
-- When `full_text_en` contains fewer than `cropLength` words, Meilisearch returns the full text uncropped — satisfying the F05 "no truncation of content shorter than the minimum" rule.
+- `cropLength` is measured in **words**; the effective snippet size yields a crop window of that many words centred on the densest match passage (the `_formatted.full_text_en` field of each hit is the snippet source).
+- When `full_text_en` contains fewer than `cropLength` words, Meilisearch returns the full text uncropped (no padding) — satisfying the F05 "no truncation, no padding of content shorter than the effective snippet size" rule.
 - A match near the start/end of `full_text_en` yields a shorter crop window (still anchored on the match) — acceptable per F05.
 - `search.py` strips all HTML except the `<mark>` highlight tags before returning `snippet` (DATA-MODELS §3.1).
+
+**Effective snippet size (F02 — PRD v3.3):** `search.py` resolves the `cropLength` to use for each request from the request body's `snippet_size` field (§3.1) and the operator-configurable default:
+
+1. `snippet_size` present **and a JSON integer** → **clamp** to `[20, 1000]` (below 20 → 20; above 1000 → 1000). Bounds are inclusive: `20` and `1000` pass through unchanged. `0`, negative, and `19` clamp to `20`; `1001` and `5000` clamp to `1000`. No error is surfaced; the search executes.
+2. `snippet_size` absent, present-but-empty, non-numeric, or **non-integer numeric** (e.g. `100.5`) → fall back to the **operator-configurable default** (env `SNIPPET_DEFAULT_WORDS`, default `100`; see DEPLOYMENT). A non-integer is **not** rounded or truncated — it falls back. No error is surfaced; the search executes.
+3. The resolved value becomes Meilisearch `cropLength`.
+
+Because the request body is JSON, integer-ness is determined by the JSON type: a JSON integer (`300`) is accepted/clamped; a JSON float (`100.5`), string, boolean, `null`, or missing key all fall back to the default. The bound is enforced regardless of the operator default (NFR PERF-4): even if an operator sets `SNIPPET_DEFAULT_WORDS` outside 20–1000, the per-request resolution clamps the effective value into range so PERF-1 holds at the maximum (1000).
 
 **Debug-mode retrieval (F10 — PRD v3.0):** When `debug=1` is present on `POST /api/search`, `search.py` augments the Meilisearch query with score and full-document retrieval parameters so each hit carries its ranking score and complete index document:
 ```json
@@ -439,7 +447,8 @@ Session filter excludes CA records implicitly: CA records have `session_name` om
     "session": "string"
   },
   "sort": "relevance",
-  "page": 1
+  "page": 1,
+  "snippet_size": 300
 }
 ```
 
@@ -451,6 +460,7 @@ Field rules:
 - `date_from`/`date_to`: both optional; if both present and `date_from > date_to` = validation error `date_range_invalid`
 - `sort`: default `"relevance"`; enum: `"relevance"`, `"chronological"`, `"reverse_chronological"`
 - `page`: integer ≥ 1; default 1
+- `snippet_size` (F02 — PRD v3.3): optional top-level integer (words) setting the target snippet length; drives Meilisearch `cropLength` (§2.3 "Effective snippet size"). JSON integer → clamped to `[20, 1000]` (bounds inclusive). Absent / empty / non-numeric / non-integer (e.g. `100.5`) → operator-configurable default (env `SNIPPET_DEFAULT_WORDS`, default 100). **Never a validation error** — out-of-range and malformed values are silently resolved and the search executes. Not surfaced in the web UI; intended for programmatic API consumers.
 
 **Debug query parameter (F10):** `POST /api/search?debug=1` (also accepts `debug=true`). When present, the endpoint (a) adds the debug retrieval parameters to the Meilisearch query (§2.3 "Debug-mode retrieval"), so each result carries `_rankingScore`, `_rankingScoreDetails`, and the full index document; and (b) adds a top-level `debug` envelope to the response (below). When absent, the response is exactly as documented for normal mode (no `debug` key, no score fields). Debug mode is exempt from PERF-1 (NFR PERF-3) — the payload is large and unbounded by design.
 
@@ -514,7 +524,7 @@ Field rules:
       "method": "POST",
       "url": "https://xxx.meilisearch.io/indexes/parliamentary_records/search",
       "body": { "q": "...", "filter": "...", "sort": [], "offset": 0, "limit": 20,
-                "attributesToCrop": ["full_text_en"], "cropLength": 200,
+                "attributesToCrop": ["full_text_en"], "cropLength": 100,
                 "showRankingScore": true, "showRankingScoreDetails": true,
                 "attributesToRetrieve": ["*"] }
     },

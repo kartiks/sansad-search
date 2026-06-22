@@ -59,6 +59,18 @@ Applied in combined scoring (not strict hierarchy — all factors contribute to 
 
 All sources (CA + LS + RS) are included by default. Users narrow scope via filters (Feature 03).
 
+## Snippet Size Parameter
+
+The search API accepts an optional `snippet_size` parameter (integer, words) that sets the target length of the result snippets returned for each record. Snippet rendering itself is defined in Feature 05; this parameter only controls the requested size.
+
+- **Omitted, non-integer, or non-numeric value:** the operator-configurable default is used (default 100 words). No error is surfaced; the search executes normally.
+- **Accepted range:** 20–1000 words.
+- **Out-of-range numeric value:** clamped to the nearest bound — a value below 20 is treated as 20; a value above 1000 is treated as 1000. No error is surfaced; the search executes normally.
+- The default value is operator-configurable as a deployment setting (see NFR PERF-4).
+- The web UI does not expose a control for this parameter; it relies on the default. The parameter exists for programmatic API consumers.
+
+The exact API field name and wire format are an architecture-stage decision; `snippet_size` is the conceptual name used in this spec.
+
 ## Acceptance Criteria
 
 - Search box is visible and accessible on the homepage
@@ -71,6 +83,10 @@ All sources (CA + LS + RS) are included by default. Users narrow scope via filte
 - Search is case-insensitive: "Fundamental Rights" and "fundamental rights" return identical result sets
 - No-results state shows a clear message and suggestions; it is not an error page
 - Search response time: ≤2 seconds at p95 across the full indexed corpus
+- A search with no `snippet_size` returns snippets at the configured default size (default 100 words)
+- A search with `snippet_size=300` returns snippets targeting 300 words
+- A search with `snippet_size=5` is clamped to 20; a search with `snippet_size=5000` is clamped to 1000
+- A search with a non-integer or non-numeric `snippet_size` falls back to the default and still returns results
 
 ## UI Behavior
 
@@ -96,3 +112,4 @@ All sources (CA + LS + RS) are included by default. Users narrow scope via filte
 
 - **Response time:** ≤2 seconds at p95; query expansion increases scoring computation — architecture must account for this → update NFR
 - **Scalability:** search must remain within response time target under concurrent user load → flag for architecture sizing
+- **Snippet size payload:** the `snippet_size` parameter increases response payload at larger values; a maximum bound is required so the response time target still holds at the largest permitted size → see NFR PERF-4

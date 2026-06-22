@@ -19,7 +19,7 @@ Displayed fields, in order:
 | Time of day | `time_of_day` | Shown as HH:MM near the date field when not null; omitted silently when null |
 | Session | `session_name` | Shown if available; omitted for CA records |
 | Subject / agenda item | `subject` | The debate title or agenda item this speech belongs to |
-| Text snippet | derived from `full_text_en` | ≥200 words of context around the highest-relevance match; query terms highlighted |
+| Text snippet | derived from `full_text_en` | context around the highest-relevance match, sized to the effective snippet size (default 100 words; see Snippet Generation); query terms highlighted |
 | Language badge | `lang_original` | `hi`→"Hindi original"; `mixed`→"Mixed language"; `en`→no badge shown |
 | Source link | `source_url` | "View source" link; opens in a new tab |
 
@@ -39,7 +39,7 @@ Displayed fields, in order:
 | Questioner | `questioner_names` (primary) | First named questioner; additional questioners shown as "+N others" if co-signatories present |
 | Questioner party | `questioner_party` | Shown if available |
 | Minister and ministry | `minister_name`, `ministry` | "Answered by [Minister Name], [Ministry]" |
-| Text snippet | derived from `full_text_en` | ≥200 words of context around the highest-relevance match; query terms highlighted |
+| Text snippet | derived from `full_text_en` | context around the highest-relevance match, sized to the effective snippet size (default 100 words; see Snippet Generation); query terms highlighted |
 | Language badge | `lang_original` | `hi`→"Hindi original"; `mixed`→"Mixed language"; `en`→no badge shown |
 | Source link | `source_url` | "View source" link; opens in a new tab |
 
@@ -59,10 +59,10 @@ Displayed fields, in order:
 
 ## Snippet Generation
 
-- Snippet is a passage of at least 200 words extracted from `full_text_en`, chosen from the passage with the highest density of query term matches; the Meilisearch crop length must be configured to produce this minimum
+- Snippet is a passage extracted from `full_text_en` targeting the **effective snippet size** — the per-request `snippet_size` from Feature 02 if supplied (clamped to 20–1000 words), otherwise the operator-configurable default (default 100 words) — chosen from the passage with the highest density of query term matches; the search engine's crop length is driven by the effective snippet size
 - Query terms (original and expanded matches) are highlighted in the snippet
-- If `full_text_en` contains fewer than 200 words, the full text is shown as the snippet (no truncation of content shorter than the minimum)
-- If the matched passage is near the start or end of `full_text_en`, the snippet may be shorter than 200 words
+- If `full_text_en` contains fewer words than the effective snippet size, the full text is shown as the snippet (no truncation and no padding)
+- If the matched passage is near the start or end of `full_text_en`, the snippet may be shorter than the effective snippet size
 - If the record has `full_text_en: null` (untranslated Hindi speech): snippet area shows the message "This speech was delivered in Hindi. No English text is available." in place of a snippet; `has_untranslated_content` is the trigger
 - For Q+A records, if the match is in a supplementary exchange rather than the main question/answer, the snippet is drawn from the supplementary exchange; a label "From supplementary exchange" is shown
 

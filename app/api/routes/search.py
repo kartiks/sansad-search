@@ -63,6 +63,12 @@ class SearchRequest(BaseModel):
     filters: Optional[FilterInput] = None
     sort: str = "relevance"
     page: int = 1
+    # F02/F05 (PRD v3.3): optional snippet size (words).  Accepts any JSON value
+    # and is NEVER a validation error (DATA-MODELS §3.1): the raw value is passed
+    # through to the service, which resolves the effective size (clamp 20–1000,
+    # else operator default).  Typed as Any so Pydantic performs no coercion —
+    # integer-ness is determined from the JSON type during resolution.
+    snippet_size: Optional[Any] = None
 
     @field_validator("sort")
     @classmethod
@@ -203,6 +209,7 @@ async def search(
             meili_client=meili_client,
             expansion_notice=expansion_notice,
             debug=debug_active,
+            snippet_size=body.snippet_size,
         )
     except Exception as exc:
         logger.exception("Search failed: %s", exc)
