@@ -3,15 +3,14 @@ POST /api/search route — full-text search across parliamentary records.
 """
 from __future__ import annotations
 
-import re
-from typing import Any, Dict, List, Optional
-
+import datetime
 import logging
+import re
+import unicodedata
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-
-logger = logging.getLogger(__name__)
 from pydantic import BaseModel, field_validator
 
 from api.lib.meilisearch_client import get_client
@@ -19,6 +18,7 @@ from api.services.query_expander import expand_query, strip_stop_words
 from api.services.search import execute_search
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Maximum query length (server truncates silently)
 _MAX_QUERY_LEN = 500
@@ -39,11 +39,30 @@ _VALID_PROCEEDING_TYPES = frozenset({
 # Valid sort values
 _VALID_SORTS = frozenset({"relevance", "chronological", "reverse_chronological"})
 
-# Pattern for YYYY-MM-DD dates
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# Pattern for YYYY-MM-DD dates (ASCII digits only; used with fullmatch so a
+# trailing newline is rejected)
+_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
-# Non-alphanumeric-only query pattern (special chars only)
-_MEANINGFUL_CHAR_RE = re.compile(r"[a-zA-Z0-9]")
+
+def _count_meaningful_chars(query: str) -> int:
+    """
+    Count letters, digits and combining marks in *query*, in any script.
+
+    Combining marks are counted so that Devanagari vowel signs and viramas
+    (e.g. the two code points of "का") count as typed characters.
+    """
+    return sum(1 for c in query if unicodedata.category(c)[0] in "LNM")
+
+
+def _is_valid_date(value: str) -> bool:
+    """True when *value* is a real calendar date in YYYY-MM-DD form."""
+    if not _DATE_RE.fullmatch(value):
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
 
 # ── Pydantic request models ───────────────────────────────────────────────────
@@ -97,14 +116,8 @@ def _validate_request(
     """
     Validate the search request.  Returns an error dict on failure, else None.
     """
-    # --- query must have at least 2 meaningful characters ---
-    if not _MEANINGFUL_CHAR_RE.search(query):
-        return _validation_error_response(
-            "query_too_short",
-            "Query must contain at least 2 characters.",
-        )
-    meaningful_chars = re.findall(r"[a-zA-Z0-9]", query)
-    if len(meaningful_chars) < _MIN_QUERY_CHARS:
+    # --- query must have at least 2 meaningful characters (any script) ---
+    if _count_meaningful_chars(query) < _MIN_QUERY_CHARS:
         return _validation_error_response(
             "query_too_short",
             "Query must contain at least 2 characters.",
@@ -127,6 +140,14 @@ def _validate_request(
             "sources_empty",
             "Select at least one legislative body.",
         )
+    if filters.sources:
+        bad = [s for s in filters.sources if s not in _VALID_SOURCES]
+        if bad:
+            return _validation_error_response(
+                "source_invalid",
+                f"Unknown source(s): {', '.join(map(repr, bad))}. "
+                f"Valid sources: {', '.join(sorted(_VALID_SOURCES))}.",
+            )
 
     # --- proceeding_types ---
     if filters.proceeding_types is not None and len(filters.proceeding_types) == 0:
@@ -134,17 +155,30 @@ def _validate_request(
             "proceeding_types_empty",
             "Select at least one proceeding type.",
         )
+    if filters.proceeding_types:
+        bad = [p for p in filters.proceeding_types if p not in _VALID_PROCEEDING_TYPES]
+        if bad:
+            return _validation_error_response(
+                "proceeding_type_invalid",
+                f"Unknown proceeding type(s): {', '.join(map(repr, bad))}.",
+            )
 
-    # --- date range ordering ---
+    # --- dates must be real YYYY-MM-DD dates ---
     df = filters.date_from
     dt = filters.date_to
-    if df and dt:
-        if _DATE_RE.match(df) and _DATE_RE.match(dt):
-            if df > dt:
-                return _validation_error_response(
-                    "date_range_invalid",
-                    "From date must be on or before To date.",
-                )
+    for field, value in (("date_from", df), ("date_to", dt)):
+        if value and not _is_valid_date(value):
+            return _validation_error_response(
+                "date_invalid",
+                f"{field} must be a valid date in YYYY-MM-DD format.",
+            )
+
+    # --- date range ordering ---
+    if df and dt and df > dt:
+        return _validation_error_response(
+            "date_range_invalid",
+            "From date must be on or before To date.",
+        )
 
     return None
 

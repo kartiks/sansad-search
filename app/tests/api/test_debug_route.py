@@ -64,7 +64,7 @@ def _speech_row(**overrides):
 
 def _qa_row(**overrides):
     base = {
-        "id": "qa2b1b00-0000-0000-0000-000000000001",
+        "id": "aa2b1b00-0000-0000-0000-000000000001",
         "source": "LS",
         "lok_sabha_number": 17,
         "proceeding_type": "starred_question",
@@ -184,7 +184,7 @@ class TestDebugProcessedRoute:
         qa = _qa_row()
         side_effects = [None, qa]
         with _make_client_with_fetchrow(fetchrow_side_effect=side_effects) as client:
-            resp = client.get("/api/debug/processed/qa2b1b00-0000-0000-0000-000000000001")
+            resp = client.get("/api/debug/processed/aa2b1b00-0000-0000-0000-000000000001")
         assert resp.status_code == 200
         body = resp.json()
         assert body["table"] == "qa_exchanges"
@@ -243,7 +243,7 @@ class TestDebugRawRoute:
         # speeches → None, qa_exchanges → qa, raw_documents → raw
         side_effects = [None, qa, raw]
         with _make_client_with_fetchrow(fetchrow_side_effect=side_effects) as client:
-            resp = client.get("/api/debug/raw/qa2b1b00-0000-0000-0000-000000000001")
+            resp = client.get("/api/debug/raw/aa2b1b00-0000-0000-0000-000000000001")
         assert resp.status_code == 200
         body = resp.json()
         assert body["row"]["canonical_doc_id"] == "654321"

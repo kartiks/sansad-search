@@ -64,7 +64,7 @@ def _speech_row(**overrides):
 def _qa_row(**overrides):
     """Dict-like asyncpg Record for a Q+A record."""
     base = {
-        "id": "qa2b1b00-0000-0000-0000-000000000001",
+        "id": "aa2b1b00-0000-0000-0000-000000000001",
         "source": "LS",
         "lok_sabha_number": 17,
         "proceeding_type": "starred_question",

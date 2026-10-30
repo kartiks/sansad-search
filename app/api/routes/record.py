@@ -6,7 +6,8 @@ Record detail endpoints (F09), served from PostgreSQL.
 - GET /api/record/{record_id}/adjacent — inline adjacent range-fetch
                                           (direction, from_seq, limit).
 
-Both return 404 when the focal id is not found in either table.
+Both return 404 when the focal id is not a UUID or is not found in either
+table, and 503 when the database cannot serve the request.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
-from api.lib.db import get_pool
+from api.lib.db import DB_ERRORS, DB_UNAVAILABLE_BODY, get_pool, is_valid_uuid
 from api.services.record import fetch_adjacent, fetch_record
 
 router = APIRouter()
@@ -41,7 +42,8 @@ async def get_record_adjacent(
     order, plus `has_more`. Served from PostgreSQL.
 
     400 when `direction` is not prev/next or `from_seq` is not an integer.
-    404 when the focal `record_id` does not exist (sitting cannot be resolved).
+    404 when the focal `record_id` is not a UUID or does not exist.
+    503 when the database is unavailable.
     """
     if direction not in ("prev", "next"):
         return JSONResponse(
@@ -63,8 +65,15 @@ async def get_record_adjacent(
             },
         )
 
-    async with pool.acquire() as conn:
-        result = await fetch_adjacent(conn, record_id, direction, from_seq_int, limit)
+    if not is_valid_uuid(record_id):
+        return JSONResponse(status_code=404, content=_NOT_FOUND)
+
+    try:
+        async with pool.acquire() as conn:
+            result = await fetch_adjacent(conn, record_id, direction, from_seq_int, limit)
+    except DB_ERRORS:
+        logger.exception("Adjacent fetch failed for id=%s", record_id)
+        return JSONResponse(status_code=503, content=DB_UNAVAILABLE_BODY)
 
     if result is None:
         return JSONResponse(status_code=404, content=_NOT_FOUND)
@@ -81,10 +90,18 @@ async def get_record_detail(
     GET /api/record/{record_id}
 
     Served from PostgreSQL (not Meilisearch). Returns full record fields plus
-    sitting context (has_prev, has_next, sitting_total). 404 when id not found.
+    sitting context (has_prev, has_next, sitting_total). 404 when the id is
+    not a UUID or not found; 503 when the database is unavailable.
     """
-    async with pool.acquire() as conn:
-        record = await fetch_record(conn, record_id)
+    if not is_valid_uuid(record_id):
+        return JSONResponse(status_code=404, content=_NOT_FOUND)
+
+    try:
+        async with pool.acquire() as conn:
+            record = await fetch_record(conn, record_id)
+    except DB_ERRORS:
+        logger.exception("Record fetch failed for id=%s", record_id)
+        return JSONResponse(status_code=503, content=DB_UNAVAILABLE_BODY)
 
     if record is None:
         return JSONResponse(status_code=404, content=_NOT_FOUND)

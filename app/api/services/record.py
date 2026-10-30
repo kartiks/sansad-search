@@ -175,30 +175,22 @@ async def fetch_record(conn: Any, record_id: str) -> Optional[Dict[str, Any]]:
     Fetch a single record by id and return the formatted response dict
     (DATA-MODELS §3.3), or None if the id does not exist in either table.
 
-    Catches all DB exceptions (including invalid UUID cast errors) and returns
-    None so the caller renders a 404.
+    *record_id* must already be a valid UUID string (the route checks this).
+    Database errors propagate so the route can return 503 instead of a
+    misleading 404 or wrong sitting context.
     """
-    try:
-        row = await conn.fetchrow(_RECORD_QUERY, record_id)
-    except Exception as exc:
-        logger.debug("record fetchrow error for id=%s: %s", record_id, exc)
-        return None
-
+    row = await conn.fetchrow(_RECORD_QUERY, record_id)
     if row is None:
         return None
 
     # Fetch sequence numbers of all records in the same sitting to compute the
     # total and the boundary flags.
-    try:
-        sitting_rows = await conn.fetch(
-            _SITTING_SEQ_QUERY,
-            row["source"],
-            row["date"],
-            row["sitting_number"],
-        )
-    except Exception as exc:
-        logger.warning("sitting query error: %s", exc)
-        sitting_rows = []
+    sitting_rows = await conn.fetch(
+        _SITTING_SEQ_QUERY,
+        row["source"],
+        row["date"],
+        row["sitting_number"],
+    )
 
     return _build_response(row, sitting_rows)
 
@@ -218,33 +210,24 @@ async def fetch_adjacent(
     sequence order, plus a `has_more` flag.
 
     Returns None if the focal `record_id` does not exist (caller → 404).
+    Database errors propagate (caller → 503).
     """
     limit = max(1, min(limit, 5))
 
-    try:
-        focal = await conn.fetchrow(_FOCAL_SITTING_QUERY, record_id)
-    except Exception as exc:
-        logger.debug("adjacent focal fetch error for id=%s: %s", record_id, exc)
-        return None
-
+    focal = await conn.fetchrow(_FOCAL_SITTING_QUERY, record_id)
     if focal is None:
         return None
 
-    query = _adjacent_batch_query(direction)
-    try:
-        # Fetch one extra row to detect whether more records remain beyond
-        # the returned batch (has_more).
-        rows = await conn.fetch(
-            query,
-            focal["source"],
-            focal["date"],
-            focal["sitting_number"],
-            from_seq,
-            limit + 1,
-        )
-    except Exception as exc:
-        logger.warning("adjacent batch query error: %s", exc)
-        rows = []
+    # Fetch one extra row to detect whether more records remain beyond the
+    # returned batch (has_more).
+    rows = await conn.fetch(
+        _adjacent_batch_query(direction),
+        focal["source"],
+        focal["date"],
+        focal["sitting_number"],
+        from_seq,
+        limit + 1,
+    )
 
     rows = list(rows)
     has_more = len(rows) > limit

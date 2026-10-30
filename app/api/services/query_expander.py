@@ -124,7 +124,10 @@ def strip_stop_words(query: str) -> Tuple[str, bool]:
             kept.append(token)
 
     clean = " ".join(kept).strip()
-    is_only_stopwords = not bool(_TOKEN_RE.search(clean))
+    # _TOKEN_RE is ASCII-only (stop words and synonyms are English), so also
+    # accept letters/digits in any script: a Hindi query is not "only stop words".
+    has_content = bool(_TOKEN_RE.search(clean)) or any(c.isalnum() for c in clean)
+    is_only_stopwords = not has_content
     return clean, is_only_stopwords
 
 

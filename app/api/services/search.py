@@ -282,12 +282,27 @@ def _build_snippet(
 
 # ── Filter expression builder ─────────────────────────────────────────────────
 
+def _quote_filter_value(value: str) -> str:
+    """
+    Return *value* as a double-quoted Meilisearch filter string literal.
+
+    Backslashes are escaped before quotes, so a trailing backslash cannot
+    escape the closing quote and break out of the literal.
+    """
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def build_filter_expression(filters: Optional[Dict[str, Any]]) -> Optional[str]:
     """
     Construct a Meilisearch filter expression string from the *filters* dict.
 
     Active filter parts are joined with AND.
     Returns None when no filters are active.
+
+    The route validates sources, proceeding types and dates against fixed
+    lists before calling this; every value is still quoted and escaped here
+    so the filter string cannot be broken out of.
     """
     if not filters:
         return None
@@ -297,41 +312,33 @@ def build_filter_expression(filters: Optional[Dict[str, Any]]) -> Optional[str]:
     # sources
     sources = filters.get("sources")
     if sources:
-        quoted = ", ".join(f'"{s}"' for s in sources)
+        quoted = ", ".join(_quote_filter_value(s) for s in sources)
         parts.append(f"source IN [{quoted}]")
 
     # proceeding_types
     ptypes = filters.get("proceeding_types")
     if ptypes:
-        quoted = ", ".join(f'"{p}"' for p in ptypes)
+        quoted = ", ".join(_quote_filter_value(p) for p in ptypes)
         parts.append(f"proceeding_type IN [{quoted}]")
 
     # date range
     date_from = filters.get("date_from")
     if date_from:
-        parts.append(f'date >= "{date_from}"')
+        parts.append(f"date >= {_quote_filter_value(date_from)}")
 
     date_to = filters.get("date_to")
     if date_to:
-        parts.append(f'date <= "{date_to}"')
+        parts.append(f"date <= {_quote_filter_value(date_to)}")
 
-    # speaker substring
-    speaker = filters.get("speaker")
-    if speaker and speaker.strip():
-        escaped = speaker.strip().replace('"', '\\"')
-        parts.append(f'speaker_name CONTAINS "{escaped}"')
-
-    # session substring
-    session = filters.get("session")
-    if session and session.strip():
-        escaped = session.strip().replace('"', '\\"')
-        parts.append(f'session_name CONTAINS "{escaped}"')
-
-    # subject substring
-    subject = filters.get("subject")
-    if subject and subject.strip():
-        escaped = subject.strip().replace('"', '\\"')
-        parts.append(f'subject CONTAINS "{escaped}"')
+    # substring filters
+    for key, attr in (
+        ("speaker", "speaker_name"),
+        ("session", "session_name"),
+        ("subject", "subject"),
+    ):
+        value = filters.get(key)
+        if value and value.strip():
+            parts.append(f"{attr} CONTAINS {_quote_filter_value(value.strip())}")
 
     return " AND ".join(parts) if parts else None
 
