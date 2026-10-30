@@ -1,7 +1,7 @@
 """
 Phase 12 tests: two-stage pipeline and raw_documents store.
 
-Test requirements (from PHASES.md phase-12 stop conditions):
+Test requirements:
 - schema.sql creates raw_documents table and idx_raw_documents_corpus_date index
 - indexer.write_raw_document() inserts a row (no-op on PK conflict)
 - indexer.check_raw_document_exists() returns True for existing id, False for absent

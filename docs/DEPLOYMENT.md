@@ -468,7 +468,7 @@ python scripts/clear_corpus.py --corpus rs --target checkpoints
 | `meili` | Meilisearch documents (delete-by-filter) |
 | `all` | All stores: record tables + checkpoint tables + Meilisearch (same as `--stage fetch`) |
 
-> **Flag rename (2026-06-12):** `--target sqlite` → `--target checkpoints`. The store is no longer SQLite. The Coding Agent must update the `argparse` choices, the branch handling this target, the `--help` text, and any tests referencing `--target sqlite` (see "Implementation tasks for /build" at the end of this file).
+> **Flag rename (2026-06-12):** `--target sqlite` → `--target checkpoints`. The store is no longer SQLite. This required updating the `argparse` choices, the branch handling this target, the `--help` text, and any tests referencing `--target sqlite`.
 
 **All flags:**
 
@@ -586,19 +586,3 @@ rm -f app/data/ingestion_checkpoints.db
 **Known, harmless caveat.** A source document that was processed but yielded **zero** records (e.g. a text-less PDF) has no `speeches`/`qa_exchanges` rows, so it is not reconstructed into `processed_documents`. The next Stage 2 run will re-process it once — re-parsing it to zero records again. This is idempotent (no duplicates, `INF-R1` preserved) and costs only one redundant parse.
 
 **No new env vars, dependencies, or infrastructure.** This migration runs entirely against the existing Railway PostgreSQL.
-
----
-
-## 7. Implementation tasks for /build
-
-This change is specified entirely by the arch docs but spans code outside the `/arch` boundary. A `/build` session must implement the following (paths under `app/`):
-
-1. **`db/schema.sql`** — add `CREATE TABLE` + index statements for `processed_documents` and `ingestion_dedup_keys` exactly as in §6.7 Step 1 (DATA-MODELS §1.6/§1.7 are the authority for columns, PK, and indexes).
-2. **`ingest/checkpoints/store.py`** — rewrite from SQLite to PostgreSQL (psycopg2, reusing the ingestion DSN / `DATABASE_URL`; same connection-resilience pattern as `indexer.py`). Implement the query patterns in DATA-MODELS §1.6/§1.7. **Preserve the dedup-mirror correctness invariant in ARCHITECTURE §8 item 7** — the mirror is a pre-filter; `ON CONFLICT (dedup_key) DO NOTHING` on `speeches`/`qa_exchanges` is the authoritative guard. Remove all `sqlite3` usage and the `data/ingestion_checkpoints.db` path.
-3. **`scripts/clear_corpus.py`** — rename `--target sqlite` → `--target checkpoints` (argparse choices, branch logic, `--help`); the checkpoints clear is now a PostgreSQL `DELETE` (corpus-scoped, or the §6.4 `DELETE … USING raw_documents` join when date-scoped); `--stage fetch` clears both checkpoint tables, `--stage process` clears `processed_documents` only (§6.5). Update the per-store env-var requirements (`DATABASE_URL` now covers checkpoints).
-4. **Remove the SQLite file from `.gitignore`** (and any `data/` runtime-dir creation specific to it) if present.
-5. **Tests** — update/replace any test referencing the SQLite store, `--target sqlite`, or `data/ingestion_checkpoints.db`. Add: (a) Stage 2 resumability over the PostgreSQL `processed_documents` table (interrupt → resume → identical count, no duplicates — `INF-R1`); (b) the §8-item-7 regression test (clear `speeches`/`qa_exchanges` + `processed_documents` for a scope, leave `ingestion_dedup_keys`, re-run Stage 2, assert rows re-created); (c) `clear_corpus.py --target checkpoints` issues the PostgreSQL delete.
-6. **Migration** — operators on an existing deployment run §6.7 (create tables + backfill + delete SQLite file); **no re-ingestion**. Fresh deployments get the tables from `schema.sql`.
-7. **Deployment** — provision the Railway **Cron Job** service per §3.7 (same project, shared `DATABASE_URL`, `MEILISEARCH_URL`, `MEILISEARCH_MASTER_KEY`; start command `python -m ingest.main --source all`).
-
-**Routing note (not a /build task):** PRD F01 (lines 115/120) still names "the SQLite checkpoint store" / "the SQLite `processed_documents` store." Making those storage-agnostic is a Product Agent change — run `/spec`. It does not block this build (the product requirement, `INF-R1` resumability, is medium-agnostic and unchanged).

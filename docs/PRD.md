@@ -3,7 +3,6 @@
 **Version:** 3.3  
 **Date:** 2026-06-22  
 **Git tag:** —  
-**Generated from:** /prd/sections/
 
 ---
 

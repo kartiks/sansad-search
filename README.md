@@ -33,8 +33,8 @@ SansadSearch indexes the complete proceedings of the Constituent Assembly of Ind
 
 ## Setup and Run
 
-See [`arch/DEPLOYMENT.md §5`](arch/DEPLOYMENT.md) for full local development setup (Python env, Node, PostgreSQL, Meilisearch, env vars, and running ingestion).
+See [`docs/DEPLOYMENT.md §5`](docs/DEPLOYMENT.md) for full local development setup (Python env, Node, PostgreSQL, Meilisearch, env vars, and running ingestion).
 
-## Development
+## Documentation
 
-This project is built using the PhaseCraft agentic development framework. See `TRACKER.md` for current lifecycle status and `PHASES.md` (added after `/plan`) for the implementation roadmap.
+Product requirements, architecture, data models, deployment runbooks and the UI spec live in [`docs/`](docs/).
