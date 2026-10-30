@@ -1,19 +1,12 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import RecordDetail from '../pages/RecordDetail.jsx'
 import { makeRecordDetail, makeAdjacentRecord } from './fixtures.js'
 
-vi.mock('../lib/cookie.js', () => ({
-  areCookiesEnabled: vi.fn().mockReturnValue(false),
-  readCookie: vi.fn().mockReturnValue(null),
-  writeCookie: vi.fn(),
-  deleteCookie: vi.fn(),
-  trimRecentToFit: vi.fn((entries) => entries),
-  RECENT_COOKIE: 'ss_recent',
-  SAVED_COOKIE: 'ss_saved',
-  MAX_COMBINED_BYTES: 4096,
-}))
+beforeEach(() => {
+  window.localStorage.clear()
+})
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -725,5 +718,26 @@ describe('RecordDetail — sticky header interactions', () => {
 
     fireEvent.click(screen.getByTestId('detail-bookmark-btn'))
     expect(screen.getByTestId('saved-searches-panel')).toBeInTheDocument()
+  })
+})
+
+// ── Source link safety ────────────────────────────────────────────────────────
+
+describe('RecordDetail — source link safety', () => {
+  it('renders View source for an https source_url', async () => {
+    mockFetch(makeRecordDetail({ source_url: 'https://eparlib.sansad.in/x' }))
+    renderDetail()
+    const field = await screen.findByTestId('field-source-url')
+    expect(within(field).getByText('View source ↗')).toHaveAttribute(
+      'href',
+      'https://eparlib.sansad.in/x'
+    )
+  })
+
+  it('omits View source for a javascript: source_url', async () => {
+    mockFetch(makeRecordDetail({ source_url: 'javascript:alert(1)' }))
+    renderDetail()
+    await screen.findByTestId('record-detail')
+    expect(screen.queryByTestId('field-source-url')).toBeNull()
   })
 })

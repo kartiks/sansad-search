@@ -256,3 +256,10 @@ describe('SpeechCard — F05 v2.0: time_of_day', () => {
     expect(screen.queryByTestId('time-of-day')).toBeNull()
   })
 })
+
+describe('SpeechCard — source link safety', () => {
+  it('omits View source for a non-http(s) source_url', () => {
+    renderCard(makeSpeechResult({ source_url: 'javascript:alert(1)' }))
+    expect(screen.queryByText('View source ↗')).toBeNull()
+  })
+})

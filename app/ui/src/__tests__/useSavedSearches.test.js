@@ -1,19 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 
-vi.mock('../lib/cookie.js', () => ({
-  areCookiesEnabled: vi.fn().mockReturnValue(true),
-  readCookie: vi.fn().mockReturnValue(null),
-  writeCookie: vi.fn(),
-  deleteCookie: vi.fn(),
-  trimRecentToFit: vi.fn((entries) => entries),
-  RECENT_COOKIE: 'ss_recent',
-  SAVED_COOKIE: 'ss_saved',
-  MAX_COMBINED_BYTES: 4096,
-}))
 
 import { useSavedSearches, sanitizeStoredFilters } from '../hooks/useSavedSearches.js'
-import * as cookieModule from '../lib/cookie.js'
+import Cookies from 'js-cookie'
 import { defaultFilterState } from '../lib/filterState.js'
 
 function makeFilters(overrides = {}) {
@@ -21,10 +11,22 @@ function makeFilters(overrides = {}) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
-  cookieModule.areCookiesEnabled.mockReturnValue(true)
-  cookieModule.readCookie.mockReturnValue(null)
+  window.localStorage.clear()
 })
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+function disableStorage() {
+  vi.spyOn(Object.getPrototypeOf(window.localStorage), 'setItem').mockImplementation(() => {
+    throw new Error('SecurityError')
+  })
+}
+
+function stored(key) {
+  return JSON.parse(window.localStorage.getItem(key))
+}
 
 describe('sanitizeStoredFilters', () => {
   it('returns default state for null input', () => {
@@ -145,12 +147,45 @@ describe('useSavedSearches — saveSearch', () => {
     expect(result.current.entries[0].filters.date_from).toBe('2020-01-01')
   })
 
-  it('calls writeCookie with saved entries', () => {
+  it('persists saved entries to localStorage', () => {
     const { result } = renderHook(() => useSavedSearches())
     act(() => {
       result.current.saveSearch({ query: 'test', filters: defaultFilterState() })
     })
-    expect(cookieModule.writeCookie).toHaveBeenCalled()
+    expect(stored('ss_saved')[0].query).toBe('test')
+  })
+
+  it('stores only non-default filters', () => {
+    const { result } = renderHook(() => useSavedSearches())
+    act(() => {
+      result.current.saveSearch({ query: 'a', filters: defaultFilterState() })
+      result.current.saveSearch({
+        query: 'b',
+        filters: makeFilters({ sources: ['RS'], speaker: 'Nehru' }),
+      })
+    })
+    const entries = stored('ss_saved')
+    expect(entries[0].filters).toEqual({})
+    expect(entries[1].filters).toEqual({ sources: ['RS'], speaker: 'Nehru' })
+  })
+
+  it('keeps all 20 entries, well past the old 4 KB cookie limit', () => {
+    const { result } = renderHook(() => useSavedSearches())
+    for (let i = 0; i < 20; i++) {
+      act(() => {
+        result.current.saveSearch({
+          query: `query ${i} ${'x'.repeat(200)}`,
+          filters: makeFilters({ sources: ['LS'], speaker: 'Speaker Name', date_from: '2001-01-01' }),
+        })
+      })
+    }
+    expect(JSON.stringify(stored('ss_saved')).length).toBeGreaterThan(4096)
+    const { result: reloaded } = renderHook(() => useSavedSearches())
+    expect(reloaded.current.entries).toHaveLength(20)
+    expect(reloaded.current.entries[19].filters.sources).toEqual(['LS'])
+    expect(reloaded.current.entries[19].filters.proceeding_types).toEqual(
+      defaultFilterState().proceeding_types
+    )
   })
 
   it('stores a 500-character query field at full length without truncation', () => {
@@ -182,7 +217,7 @@ describe('useSavedSearches — atLimit', () => {
       filters: defaultFilterState(),
       timestamp: i,
     }))
-    cookieModule.readCookie.mockReturnValue(existing)
+    window.localStorage.setItem('ss_saved', JSON.stringify(existing))
     const { result } = renderHook(() => useSavedSearches())
     expect(result.current.atLimit).toBe(true)
   })
@@ -195,7 +230,7 @@ describe('useSavedSearches — atLimit', () => {
       filters: defaultFilterState(),
       timestamp: i,
     }))
-    cookieModule.readCookie.mockReturnValue(existing)
+    window.localStorage.setItem('ss_saved', JSON.stringify(existing))
     const { result } = renderHook(() => useSavedSearches())
     act(() => {
       result.current.saveSearch({ query: 'extra', filters: defaultFilterState() })
@@ -249,20 +284,37 @@ describe('useSavedSearches — renameEntry', () => {
   })
 })
 
-describe('useSavedSearches — cookiesEnabled', () => {
-  it('returns empty entries when cookies are disabled', () => {
-    cookieModule.areCookiesEnabled.mockReturnValue(false)
+describe('useSavedSearches — storage', () => {
+  it('returns empty entries when storage is blocked', () => {
+    disableStorage()
     const { result } = renderHook(() => useSavedSearches())
     expect(result.current.entries).toHaveLength(0)
-    expect(result.current.cookiesEnabled).toBe(false)
+    expect(result.current.storageEnabled).toBe(false)
   })
 
-  it('does not write when cookies are disabled', () => {
-    cookieModule.areCookiesEnabled.mockReturnValue(false)
+  it('does not save when storage is blocked', () => {
+    disableStorage()
     const { result } = renderHook(() => useSavedSearches())
     act(() => {
       result.current.saveSearch({ query: 'test', filters: defaultFilterState() })
     })
-    expect(cookieModule.writeCookie).not.toHaveBeenCalled()
+    expect(result.current.entries).toHaveLength(0)
+  })
+
+  it('migrates the legacy ss_saved cookie (full filter objects) once', () => {
+    const legacy = [
+      {
+        id: 'old-1',
+        name: 'old',
+        query: 'water',
+        filters: makeFilters({ sources: ['CA'] }),
+        timestamp: 1,
+      },
+    ]
+    Cookies.set('ss_saved', JSON.stringify(legacy))
+    const { result } = renderHook(() => useSavedSearches())
+    expect(result.current.entries).toHaveLength(1)
+    expect(result.current.entries[0].filters.sources).toEqual(['CA'])
+    expect(Cookies.get('ss_saved')).toBeUndefined()
   })
 })

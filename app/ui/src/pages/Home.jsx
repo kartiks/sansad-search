@@ -9,10 +9,11 @@ import {
   STATUS_ENDPOINT,
   BODY_BADGE_STYLES,
 } from '../lib/constants.js'
-import { defaultFilterState, isDefaultFilterState } from '../lib/filterState.js'
+import { defaultFilterState, sanitizeStoredFilters } from '../lib/filterState.js'
+import { buildSearchUrl } from '../lib/filterParams.js'
 import { formatCount, formatLongDate } from '../lib/statusFormat.js'
 import { useCookieHistory } from '../hooks/useCookieHistory.js'
-import { useSavedSearches, sanitizeStoredFilters } from '../hooks/useSavedSearches.js'
+import { useSavedSearches } from '../hooks/useSavedSearches.js'
 import AdvancedSearchModal from '../components/AdvancedSearchModal.jsx'
 import RecentSearchesDropdown from '../components/RecentSearchesDropdown.jsx'
 import SavedSearchesPanel from '../components/SavedSearchesPanel.jsx'
@@ -94,15 +95,11 @@ export default function Home() {
   const searchBarRef = useRef(null)
   const bookmarkBtnRef = useRef(null)
 
-  const { entries: recentEntries, cookiesEnabled, recordSearch, deleteEntry: deleteRecent, clearAll: clearRecent } = useCookieHistory()
+  const { entries: recentEntries, storageEnabled, recordSearch, deleteEntry: deleteRecent, clearAll: clearRecent } = useCookieHistory()
   const { entries: savedEntries, atLimit, saveSearch, deleteEntry: deleteSaved, renameEntry } = useSavedSearches()
 
   const submitSearch = (query, navFilters) => {
-    const searchParams = new URLSearchParams()
-    searchParams.set('q', query)
-    searchParams.set('page', '1')
-    const navState = navFilters && !isDefaultFilterState(navFilters) ? { filters: navFilters } : undefined
-    navigate(`/search?${searchParams.toString()}`, { state: navState })
+    navigate(buildSearchUrl({ query, filters: navFilters }))
   }
 
   const onSubmit = (e) => {
@@ -123,11 +120,11 @@ export default function Home() {
     setValue(e.target.value)
     if (validation) setValidation('')
     if (e.target.value.length > 0) setDropdownVisible(false)
-    else if (cookiesEnabled) setDropdownVisible(true)
+    else if (storageEnabled) setDropdownVisible(true)
   }
 
   const onFocus = () => {
-    if (cookiesEnabled && value.length === 0) setDropdownVisible(true)
+    if (storageEnabled && value.length === 0) setDropdownVisible(true)
   }
 
   const handleRecentSelect = (query) => {
@@ -271,6 +268,7 @@ export default function Home() {
                 onRename={(id, name) => renameEntry(id, name)}
                 onToast={setToast}
                 onDismiss={() => setSavedPanelOpen(false)}
+                anchorRef={bookmarkBtnRef}
               />
             </div>
           </div>

@@ -1,18 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('../lib/cookie.js', () => ({
-  areCookiesEnabled: vi.fn().mockReturnValue(true),
-  readCookie: vi.fn().mockReturnValue(null),
-  writeCookie: vi.fn(),
-  deleteCookie: vi.fn(),
-  trimRecentToFit: vi.fn((entries) => entries),
-  RECENT_COOKIE: 'ss_recent',
-  SAVED_COOKIE: 'ss_saved',
-  MAX_COMBINED_BYTES: 4096,
-}))
-
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 
 import Results from '../pages/Results.jsx'
 import {
@@ -20,8 +9,6 @@ import {
   makeSpeechResult,
   makeQAResult,
 } from './fixtures.js'
-import * as cookieModule from '../lib/cookie.js'
-import { ALL_PROCEEDING_TYPES } from '../lib/constants.js'
 
 function LocationCapture() {
   const loc = useLocation()
@@ -46,9 +33,7 @@ function renderResults(initial = '/search?q=rights&page=1') {
 beforeEach(() => {
   vi.clearAllMocks()
   global.fetch = vi.fn()
-  cookieModule.areCookiesEnabled.mockReturnValue(true)
-  cookieModule.readCookie.mockReturnValue(null)
-  cookieModule.trimRecentToFit.mockImplementation((entries) => entries)
+  window.localStorage.clear()
 })
 
 afterEach(() => {
@@ -778,10 +763,9 @@ describe('Results — filter chips and modal (F03 UI)', () => {
 describe('Results — F08 Search History wiring', () => {
   it('selecting a recent entry resets active filters and sort to defaults in the API call', async () => {
     // Pre-populate one recent entry so the dropdown shows a clickable item
-    cookieModule.readCookie.mockImplementation((name) =>
-      name === 'ss_recent'
-        ? [{ query: 'water rights', timestamp: Date.now() }]
-        : null
+    window.localStorage.setItem(
+      'ss_recent',
+      JSON.stringify([{ query: 'water rights', timestamp: Date.now() }])
     )
     global.fetch.mockResolvedValue({
       ok: true,
@@ -791,20 +775,7 @@ describe('Results — F08 Search History wiring', () => {
     render(
       <MemoryRouter
         initialEntries={[
-          {
-            pathname: '/search',
-            search: '?q=rights&page=1&sort=reverse_chronological',
-            state: {
-              filters: {
-                sources: ['RS'],
-                proceeding_types: [...ALL_PROCEEDING_TYPES],
-                date_from: null,
-                date_to: null,
-                speaker: null,
-                session: null,
-              },
-            },
-          },
+          '/search?q=rights&page=1&sort=reverse_chronological&source=RS',
         ]}
       >
         <Routes>
@@ -844,18 +815,17 @@ describe('Results — F08 Search History wiring', () => {
       speaker: null,
       session: null,
     }
-    cookieModule.readCookie.mockImplementation((name) =>
-      name === 'ss_saved'
-        ? [
-            {
-              id: 'saved-1',
-              name: 'RS Starred 2020',
-              query: 'health policy',
-              filters: savedFilters,
-              timestamp: Date.now(),
-            },
-          ]
-        : null
+    window.localStorage.setItem(
+      'ss_saved',
+      JSON.stringify([
+        {
+          id: 'saved-1',
+          name: 'RS Starred 2020',
+          query: 'health policy',
+          filters: savedFilters,
+          timestamp: Date.now(),
+        },
+      ])
     )
     global.fetch.mockResolvedValue({
       ok: true,
@@ -895,15 +865,10 @@ describe('Results — F08 Search History wiring', () => {
     fireEvent.change(input, { target: { value: 'parliamentary procedure' } })
     fireEvent.click(screen.getByTestId('results-search-submit'))
 
-    // recordSearch is wired into onSubmit — writeCookie must be called for ss_recent (Gap 4)
+    // recordSearch is wired into onSubmit — the query is persisted to ss_recent (Gap 4)
     await waitFor(() => {
-      expect(cookieModule.writeCookie).toHaveBeenCalledWith(
-        'ss_recent',
-        expect.arrayContaining([
-          expect.objectContaining({ query: 'parliamentary procedure' }),
-        ]),
-        { expires: 30 }
-      )
+      const recent = JSON.parse(window.localStorage.getItem('ss_recent'))
+      expect(recent[0].query).toBe('parliamentary procedure')
     })
   })
 
@@ -930,11 +895,7 @@ describe('Results — F08 Search History wiring', () => {
     fireEvent.click(screen.getByTestId('saved-search-save-btn'))
 
     await waitFor(() => {
-      const savedCalls = cookieModule.writeCookie.mock.calls.filter(
-        (c) => c[0] === 'ss_saved'
-      )
-      expect(savedCalls.length).toBeGreaterThan(0)
-      const savedEntries = savedCalls[savedCalls.length - 1][1]
+      const savedEntries = JSON.parse(window.localStorage.getItem('ss_saved'))
       expect(savedEntries).toHaveLength(1)
       // Must capture the current URL query
       expect(savedEntries[0].query).toBe('fundamental rights')
@@ -943,29 +904,6 @@ describe('Results — F08 Search History wiring', () => {
       expect(savedEntries[0].filters.sources).toEqual(
         expect.arrayContaining(['LS', 'RS'])
       )
-    })
-  })
-
-  it('saved cookie is written without an expiry option (persistent)', async () => {
-    global.fetch.mockResolvedValue({
-      ok: true,
-      json: async () => makeSearchResponse({ results: [makeSpeechResult()] }),
-    })
-    renderResults('/search?q=budget+session&page=1')
-    await screen.findByTestId('results-list')
-
-    fireEvent.click(screen.getByTestId('results-bookmark-btn'))
-    await screen.findByTestId('saved-searches-panel')
-    // Saving writes writeCookie(SAVED_COOKIE, data) with no options arg (Gap 6)
-    fireEvent.click(screen.getByTestId('saved-search-save-btn'))
-
-    await waitFor(() => {
-      const savedCalls = cookieModule.writeCookie.mock.calls.filter(
-        (c) => c[0] === 'ss_saved'
-      )
-      expect(savedCalls.length).toBeGreaterThan(0)
-      // Exactly 2 arguments (name + data); no third options/expiry argument
-      expect(savedCalls[savedCalls.length - 1]).toHaveLength(2)
     })
   })
 })
@@ -1108,5 +1046,154 @@ describe('Results — debug mode activation (?debug=1)', () => {
     renderResults('/search?q=rights&page=1')
     await screen.findByTestId('results-list')
     expect(screen.queryByTestId('debug-badge')).toBeNull()
+  })
+})
+
+// ── Filters in the URL ────────────────────────────────────────────────────────
+
+function BackButton() {
+  const navigate = useNavigate()
+  return (
+    <button type="button" data-testid="history-back" onClick={() => navigate(-1)}>
+      back
+    </button>
+  )
+}
+
+function renderResultsWithBack(initial) {
+  return render(
+    <MemoryRouter initialEntries={[initial]}>
+      <Routes>
+        <Route path="/search" element={<Results />} />
+        <Route path="/" element={<div data-testid="home-page">home</div>} />
+      </Routes>
+      <LocationCapture />
+      <BackButton />
+    </MemoryRouter>
+  )
+}
+
+function lastRequestBody() {
+  const calls = global.fetch.mock.calls
+  return JSON.parse(calls[calls.length - 1][1].body)
+}
+
+function currentParams() {
+  const loc = screen.getByTestId('loc').textContent
+  return new URLSearchParams(loc.split('?')[1] || '')
+}
+
+describe('Results — filters in the URL', () => {
+  beforeEach(() => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeSearchResponse({ results: [makeSpeechResult()] }),
+    })
+  })
+
+  it('reads filters from a shared link and sends them to the API', async () => {
+    renderResults('/search?q=rights&page=1&source=RS&speaker=Nehru&from=1950-01-01')
+    await screen.findByTestId('results-list')
+    const body = lastRequestBody()
+    expect(body.filters).toEqual({
+      sources: ['RS'],
+      speaker: 'Nehru',
+      date_from: '1950-01-01',
+    })
+    expect(screen.getAllByTestId('filter-chip')).toHaveLength(3)
+  })
+
+  it('writes filters applied in the modal to the URL', async () => {
+    renderResults('/search?q=rights&page=2')
+    await screen.findByTestId('results-list')
+    fireEvent.click(screen.getByTestId('results-advanced-search-link'))
+    await screen.findByTestId('source-chip-CA')
+    fireEvent.click(screen.getByTestId('source-chip-CA'))
+    fireEvent.click(screen.getByTestId('modal-apply'))
+    await waitFor(() => {
+      expect(currentParams().get('source')).toBe('LS,RS')
+    })
+    expect(currentParams().get('page')).toBe('1')
+  })
+
+  it('Back undoes a filter change', async () => {
+    renderResultsWithBack('/search?q=rights&page=1&source=RS')
+    await screen.findByTestId('results-list')
+
+    fireEvent.click(screen.getByTestId('filter-chip-remove'))
+    await waitFor(() => expect(currentParams().get('source')).toBeNull())
+    await waitFor(() => expect(lastRequestBody().filters).toBeUndefined())
+
+    fireEvent.click(screen.getByTestId('history-back'))
+    await waitFor(() => expect(currentParams().get('source')).toBe('RS'))
+    await waitFor(() => expect(lastRequestBody().filters).toEqual({ sources: ['RS'] }))
+    expect(screen.getByTestId('filter-chip')).toBeInTheDocument()
+  })
+
+  it('keeps filters and debug when the sort changes', async () => {
+    renderResults('/search?q=rights&page=3&type=debate&debug=1')
+    await screen.findByTestId('results-list')
+    fireEvent.change(screen.getByTestId('sort-dropdown'), {
+      target: { value: 'chronological' },
+    })
+    await waitFor(() => expect(currentParams().get('sort')).toBe('chronological'))
+    const params = currentParams()
+    expect(params.get('type')).toBe('debate')
+    expect(params.get('debug')).toBe('1')
+    expect(params.get('page')).toBe('1')
+  })
+
+  it('keeps filters when a new query is submitted', async () => {
+    renderResults('/search?q=rights&page=1&source=CA')
+    await screen.findByTestId('results-list')
+    fireEvent.change(screen.getByTestId('results-search-input'), {
+      target: { value: 'minorities' },
+    })
+    fireEvent.click(screen.getByTestId('results-search-submit'))
+    await waitFor(() => expect(currentParams().get('q')).toBe('minorities'))
+    expect(currentParams().get('source')).toBe('CA')
+  })
+})
+
+describe('Results — expansion notice while loading', () => {
+  it('hides the previous expansion notice while a new search loads', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () =>
+        makeSearchResponse({
+          results: [makeSpeechResult()],
+          expansion_notice: ['Prime Minister'],
+        }),
+    })
+    renderResults()
+    await screen.findByTestId('expansion-notice')
+
+    global.fetch.mockImplementation(() => new Promise(() => {}))
+    fireEvent.change(screen.getByTestId('sort-dropdown'), {
+      target: { value: 'chronological' },
+    })
+    await screen.findByTestId('loading-state')
+    expect(screen.queryByTestId('expansion-notice')).toBeNull()
+  })
+})
+
+describe('Results — saved searches toggle', () => {
+  it('the bookmark button closes the panel it opened', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => makeSearchResponse({ results: [makeSpeechResult()] }),
+    })
+    renderResults()
+    await screen.findByTestId('results-list')
+    const btn = screen.getByTestId('results-bookmark-btn')
+
+    fireEvent.mouseDown(btn)
+    fireEvent.click(btn)
+    expect(screen.getByTestId('saved-searches-panel')).toBeInTheDocument()
+
+    // A real click fires mousedown first; it must not count as an outside click.
+    fireEvent.mouseDown(btn)
+    fireEvent.click(btn)
+    expect(screen.queryByTestId('saved-searches-panel')).toBeNull()
   })
 })

@@ -84,3 +84,48 @@ export function toApiFilters(state) {
   if (state.subject && state.subject.trim()) out.subject = state.subject.trim()
   return Object.keys(out).length === 0 ? null : out
 }
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+function cleanText(value) {
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+function cleanDate(value) {
+  return typeof value === 'string' && ISO_DATE.test(value) ? value : null
+}
+
+// Turns an untrusted filter object (from storage or the URL) into a full,
+// valid filter state. Missing keys take their defaults, unrecognised values
+// are dropped, and an empty source / proceeding-type list falls back to all
+// so the search still runs.
+export function sanitizeStoredFilters(stored) {
+  const def = defaultFilterState()
+  if (!stored || typeof stored !== 'object') return def
+
+  const sources = Array.isArray(stored.sources)
+    ? stored.sources.filter((s) => ALL_SOURCES.includes(s))
+    : null
+  const proceedingTypes = Array.isArray(stored.proceeding_types)
+    ? stored.proceeding_types.filter((pt) => ALL_PROCEEDING_TYPES.includes(pt))
+    : null
+
+  return {
+    sources: sources && sources.length > 0 ? sources : def.sources,
+    proceeding_types:
+      proceedingTypes && proceedingTypes.length > 0
+        ? proceedingTypes
+        : def.proceeding_types,
+    date_from: cleanDate(stored.date_from),
+    date_to: cleanDate(stored.date_to),
+    speaker: cleanText(stored.speaker),
+    session: cleanText(stored.session),
+    subject: cleanText(stored.subject),
+  }
+}
+
+// Only the filters that differ from the defaults, for compact storage.
+// sanitizeStoredFilters() turns the result back into a full filter state.
+export function compactFilters(state) {
+  return toApiFilters(state) || {}
+}

@@ -31,7 +31,7 @@ The two subsystems share no runtime coupling. Ingestion runs as a standalone CLI
 | PostgreSQL client | asyncpg (API) / psycopg2 (ingestion) | asyncpg for async API reads; psycopg2 for bulk ingestion writes |
 | Meilisearch Python client | meilisearch-python | Document push, index configuration |
 | Frontend routing | React Router v6 | Homepage ↔ Results page; query params encode search state |
-| Cookie management | js-cookie | F08 recent/saved searches |
+| Browser storage | localStorage (js-cookie only for the one-time legacy cookie migration) | F08 recent/saved searches |
 | API hosting | Railway | Managed Python deploy; same platform as PostgreSQL |
 | Ingestion hosting | Railway (Cron Job) | Standalone scheduled job in the same Railway project as the API and PostgreSQL; runs the pipeline to completion and exits. **Cron Job, not an always-on Worker** — a Worker restarts on process exit and would re-run the pipeline endlessly. All checkpoint state is in PostgreSQL, so the job is stateless between runs and resumable. May also be run locally as a plain CLI |
 | Frontend hosting | Vercel | CDN-edge static file serving |
@@ -376,7 +376,7 @@ Decisions that must not be changed without explicit user approval. Changes to an
 
 5. **`index_status` PostgreSQL table is the sole data source for the F07 status panel.** The API never queries Meilisearch document counts at request time for status display.
 
-6. **Cookie-only storage for F08.** Recent searches and saved searches are stored exclusively in browser cookies. No server-side user data. No user identifiers created or stored.
+6. **Browser-only storage for F08.** Recent searches and saved searches are stored exclusively in the browser (`localStorage`; formerly cookies, which hit the ~4 KB cookie limit). No server-side user data. No user identifiers created or stored.
 
 7. **Ingestion runs only as a standalone CLI process — never via the production API.** The pipeline is invoked as a CLI (`python -m ingest.main …`), whether run locally on an operator's machine or as a scheduled Railway Cron Job in the same project. It is **never** triggered through the web API: there is no `/api/ingest` endpoint or equivalent, and the API service neither imports nor invokes ingestion code. (Wording updated 2026-06-12: the pre-existing "local CLI only" phrasing predated cloud deployment; the invariant being protected is *no API-triggered ingestion*, which a Cron Job — a CLI process, not an API route — does not violate.)
 

@@ -1,27 +1,27 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 
-// Mock the cookie module so tests control storage without real cookies
-vi.mock('../lib/cookie.js', () => ({
-  areCookiesEnabled: vi.fn().mockReturnValue(true),
-  readCookie: vi.fn().mockReturnValue(null),
-  writeCookie: vi.fn(),
-  deleteCookie: vi.fn(),
-  trimRecentToFit: vi.fn((entries) => entries),
-  RECENT_COOKIE: 'ss_recent',
-  SAVED_COOKIE: 'ss_saved',
-  MAX_COMBINED_BYTES: 4096,
-}))
 
 import { useCookieHistory } from '../hooks/useCookieHistory.js'
-import * as cookieModule from '../lib/cookie.js'
+import Cookies from 'js-cookie'
 
 beforeEach(() => {
-  vi.clearAllMocks()
-  cookieModule.areCookiesEnabled.mockReturnValue(true)
-  cookieModule.readCookie.mockReturnValue(null)
-  cookieModule.trimRecentToFit.mockImplementation((entries) => entries)
+  window.localStorage.clear()
 })
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+function disableStorage() {
+  vi.spyOn(Object.getPrototypeOf(window.localStorage), 'setItem').mockImplementation(() => {
+    throw new Error('SecurityError')
+  })
+}
+
+function stored(key) {
+  return JSON.parse(window.localStorage.getItem(key))
+}
 
 describe('useCookieHistory — recordSearch', () => {
   it('adds a new entry to the list', () => {
@@ -90,10 +90,10 @@ describe('useCookieHistory — recordSearch', () => {
     expect(result.current.entries).toHaveLength(0)
   })
 
-  it('calls writeCookie with updated entries', () => {
+  it('persists entries to localStorage', () => {
     const { result } = renderHook(() => useCookieHistory())
     act(() => result.current.recordSearch('test query'))
-    expect(cookieModule.writeCookie).toHaveBeenCalled()
+    expect(stored('ss_recent')[0].query).toBe('test query')
   })
 
   it('stores a 500-character query at full length without truncation', () => {
@@ -123,46 +123,69 @@ describe('useCookieHistory — clearAll', () => {
     act(() => result.current.recordSearch('beta'))
     act(() => result.current.clearAll())
     expect(result.current.entries).toHaveLength(0)
-    expect(cookieModule.deleteCookie).toHaveBeenCalled()
+    expect(stored('ss_recent')).toEqual([])
   })
 })
 
-describe('useCookieHistory — cookiesEnabled', () => {
-  it('returns cookiesEnabled: true when areCookiesEnabled returns true', () => {
-    cookieModule.areCookiesEnabled.mockReturnValue(true)
+describe('useCookieHistory — storageEnabled', () => {
+  it('returns storageEnabled: true when localStorage works', () => {
     const { result } = renderHook(() => useCookieHistory())
-    expect(result.current.cookiesEnabled).toBe(true)
+    expect(result.current.storageEnabled).toBe(true)
   })
 
-  it('returns cookiesEnabled: false and empty entries when cookies disabled', () => {
-    cookieModule.areCookiesEnabled.mockReturnValue(false)
+  it('returns storageEnabled: false and empty entries when storage is blocked', () => {
+    window.localStorage.setItem('ss_recent', JSON.stringify([{ query: 'x', timestamp: Date.now() }]))
+    disableStorage()
     const { result } = renderHook(() => useCookieHistory())
-    expect(result.current.cookiesEnabled).toBe(false)
+    expect(result.current.storageEnabled).toBe(false)
     expect(result.current.entries).toHaveLength(0)
   })
 
-  it('does not write when cookies are disabled', () => {
-    cookieModule.areCookiesEnabled.mockReturnValue(false)
+  it('does not throw or record when storage is blocked', () => {
+    disableStorage()
     const { result } = renderHook(() => useCookieHistory())
     act(() => result.current.recordSearch('something'))
-    expect(cookieModule.writeCookie).not.toHaveBeenCalled()
+    expect(result.current.entries).toHaveLength(0)
   })
 })
 
-describe('useCookieHistory — init from cookie', () => {
-  it('loads pre-existing entries from cookie on mount', () => {
+describe('useCookieHistory — init from storage', () => {
+  it('loads pre-existing entries on mount', () => {
+    const now = Date.now()
     const existing = [
-      { query: 'older query', timestamp: 100 },
-      { query: 'newest query', timestamp: 200 },
+      { query: 'newest query', timestamp: now },
+      { query: 'older query', timestamp: now - 1000 },
     ]
-    cookieModule.readCookie.mockReturnValue(existing)
+    window.localStorage.setItem('ss_recent', JSON.stringify(existing))
     const { result } = renderHook(() => useCookieHistory())
     expect(result.current.entries).toEqual(existing)
   })
 
-  it('returns empty array if cookie value is not an array', () => {
-    cookieModule.readCookie.mockReturnValue({ invalid: 'shape' })
+  it('returns empty array if stored value is not an array', () => {
+    window.localStorage.setItem('ss_recent', JSON.stringify({ invalid: 'shape' }))
     const { result } = renderHook(() => useCookieHistory())
     expect(result.current.entries).toEqual([])
+  })
+
+  it('drops entries older than 30 days', () => {
+    const now = Date.now()
+    window.localStorage.setItem(
+      'ss_recent',
+      JSON.stringify([
+        { query: 'fresh', timestamp: now - 1000 },
+        { query: 'stale', timestamp: now - 31 * 24 * 60 * 60 * 1000 },
+      ])
+    )
+    const { result } = renderHook(() => useCookieHistory())
+    expect(result.current.entries.map((e) => e.query)).toEqual(['fresh'])
+  })
+
+  it('migrates the legacy ss_recent cookie once', () => {
+    const legacy = [{ query: 'from cookie', timestamp: Date.now() }]
+    Cookies.set('ss_recent', JSON.stringify(legacy))
+    const { result } = renderHook(() => useCookieHistory())
+    expect(result.current.entries).toEqual(legacy)
+    expect(stored('ss_recent')).toEqual(legacy)
+    expect(Cookies.get('ss_recent')).toBeUndefined()
   })
 })
