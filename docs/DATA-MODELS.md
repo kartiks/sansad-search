@@ -332,13 +332,13 @@ Fields excluded from Meilisearch (stored in PostgreSQL only, served by the F09 d
 ["date", "sequence_within_sitting"]
 ```
 
-**rankingRules** (default order; no custom overrides):
+**rankingRules:**
 ```json
-["sort", "words", "typo", "proximity", "attribute", "exactness"]
+["words", "sort", "typo", "proximity", "attribute", "exactness"]
 ```
 
-`sort` — first position so that chronological/reverse_chronological sort takes full effect; skipped entirely when no sort parameter is provided (relevance mode), so relevance ordering is unaffected.
-`words` — records matching more original query terms rank higher.
+`words` — records matching more original query terms rank higher. First, so that a chronological sort never ranks a record matching one query term above one matching all of them.
+`sort` — immediately after `words`: chronological/reverse_chronological sort orders results by date within each words-matched group. Skipped entirely when no sort parameter is provided (relevance mode), so relevance ordering is unaffected.
 `typo` — fewer typo corrections needed = higher rank (handles spell-correction weight).
 `attribute` — matches in earlier searchableAttributes (speaker, minister, subject) rank above full_text matches.
 `exactness` — exact-token matches rank above synonym-expanded matches.
@@ -455,9 +455,11 @@ Session filter excludes CA records implicitly: CA records have `session_name` om
 Field rules:
 - `query`: required; server truncates to 500 characters; after stop-word stripping if only stop words remain, return empty results with `validation_error: "query_only_stopwords"`
 - `filters`: optional; omitting a field means no restriction on that dimension
-- `sources`: omit = all three; empty array = validation error `sources_empty`
-- `proceeding_types`: omit = all; empty array = validation error `proceeding_types_empty`
-- `date_from`/`date_to`: both optional; if both present and `date_from > date_to` = validation error `date_range_invalid`
+- `query`: must contain at least 2 letters or digits in any script (Hindi and other non-Latin queries are accepted); otherwise validation error `query_too_short`
+- `sources`: omit = all three; empty array = validation error `sources_empty`; any value other than `"CA"`, `"LS"`, `"RS"` (case-sensitive) = validation error `source_invalid`
+- `proceeding_types`: omit = all; empty array = validation error `proceeding_types_empty`; any value outside the `proceeding_type` enum (§1.1/§1.2) = validation error `proceeding_type_invalid`
+- `date_from`/`date_to`: both optional; each must be a real calendar date in `YYYY-MM-DD` form, else validation error `date_invalid`; if both present and `date_from > date_to` = validation error `date_range_invalid`
+- `speaker`/`session`/`subject`: free text; `\` and `"` are escaped before being placed in the Meilisearch `CONTAINS` filter
 - `sort`: default `"relevance"`; enum: `"relevance"`, `"chronological"`, `"reverse_chronological"`
 - `page`: integer ≥ 1; default 1
 - `snippet_size` (F02 — PRD v3.3): optional top-level integer (words) setting the target snippet length; drives Meilisearch `cropLength` (§2.3 "Effective snippet size"). JSON integer → clamped to `[20, 1000]` (bounds inclusive). Absent / empty / non-numeric / non-integer (e.g. `100.5`) → operator-configurable default (env `SNIPPET_DEFAULT_WORDS`, default 100). **Never a validation error** — out-of-range and malformed values are silently resolved and the search executes. Not surfaced in the web UI; intended for programmatic API consumers.
@@ -542,7 +544,7 @@ Field rules:
 ```json
 {
   "error": "validation_error",
-  "code": "sources_empty | proceeding_types_empty | date_range_invalid | query_too_short | query_only_stopwords",
+  "code": "sources_empty | source_invalid | proceeding_types_empty | proceeding_type_invalid | date_invalid | date_range_invalid | query_too_short | query_only_stopwords",
   "message": "human-readable description"
 }
 ```
@@ -667,7 +669,13 @@ Field rules:
 ```json
 { "error": "not_found", "message": "Record not found." }
 ```
-Returned when no row in either table has the given `id`. The client renders a "Record not found" page (no blank page, no JS error).
+Returned when `id` is not a valid UUID or no row in either table has the given `id`. The client renders a "Record not found" page (no blank page, no JS error).
+
+**Database unavailable (503):**
+```json
+{ "error": "database_unavailable", "message": "The database is temporarily unavailable." }
+```
+Returned when PostgreSQL cannot serve the request (connection refused or dropped, pool timeout, server error). A database outage is never reported as 404. The same 503 body applies to §3.4–§3.6.
 
 ---
 
@@ -743,9 +751,11 @@ Field rules:
 ```json
 { "error": "not_found", "message": "Record not found." }
 ```
-Returned when no record with the given focal `id` exists (cannot resolve a sitting). The client treats this the same as a failed adjacent load (F09 edge case: show an error in place of the loaded records; the control returns to its pre-click enabled state).
+Returned when the focal `id` is not a valid UUID or no record with that `id` exists (cannot resolve a sitting). The client treats this the same as a failed adjacent load (F09 edge case: show an error in place of the loaded records; the control returns to its pre-click enabled state).
 
 **Validation error (400):** `direction` not in `{prev,next}`, or `from_seq` not an integer → `{ "error": "validation_error", "message": "..." }`.
+
+**Database unavailable (503):** as §3.3.
 
 ---
 
@@ -781,7 +791,9 @@ F10 "Processed record" section (lazy fetch). Returns the **complete** PostgreSQL
 ```json
 { "error": "not_found", "message": "Record not found." }
 ```
-Returned when no row in either table has the given `id`. The UI shows an error message in the "Processed record" section (not blank, no crash) per F10 acceptance criteria.
+Returned when `id` is not a valid UUID or no row in either table has the given `id`. The UI shows an error message in the "Processed record" section (not blank, no crash) per F10 acceptance criteria.
+
+**Database unavailable (503):** as §3.3.
 
 ---
 
@@ -818,7 +830,9 @@ F10 "Raw document" section (lazy fetch). Returns the **complete** `raw_documents
 ```json
 { "error": "not_found", "message": "Raw document not available." }
 ```
-Returned when **either** no processed record has the given `id`, **or** the processed record exists but has `canonical_doc_id = NULL` or no matching `raw_documents` row (e.g. the raw document was deleted after processing — F10 edge case). The UI shows "Raw document not available" in the section.
+Returned when **either** no processed record has the given `id`, **or** the processed record exists but has `canonical_doc_id = NULL` or no matching `raw_documents` row (e.g. the raw document was deleted after processing — F10 edge case). Also returned when `id` is not a valid UUID. The UI shows "Raw document not available" in the section.
+
+**Database unavailable (503):** as §3.3.
 
 ---
 
