@@ -26,7 +26,7 @@ Primary canonical store for all speech-type records (debates, zero hour, calling
 | `speaker_constituency_or_state` | VARCHAR(200) | NULL | Constituency (LS), state (RS), NULL for CA |
 | `speaker_role` | VARCHAR(30) | CHECK IN ('member','minister','presiding_officer') | Role in this speech |
 | `sequence_within_sitting` | INTEGER | NULL | 1-based position within sitting proceedings |
-| `full_text_en` | TEXT | NULL | Full English text; NULL if no translation available |
+| `full_text_en` | TEXT | NULL | Full English text; NULL if no translation available. Text that is mostly Latin script keeps its English lines: lines that are mostly Devanagari and untranslated are dropped (and `has_untranslated_content` set), and stray Devanagari characters in English lines (OCR noise such as "(0०)") are removed |
 | `lang_original` | VARCHAR(5) | NOT NULL, CHECK IN ('en','hi','mixed') | Language of the original speech before translation. Derived from F01 Language Handling: case 1→`en`; cases 2 & 4→`hi`; case 3→`mixed` if genuinely alternating, `hi` if predominantly Hindi with only translation fragments |
 | `time_of_day` | VARCHAR(5) | NULL | Speech start time as `HH:MM` (24-hour), stored verbatim (no reformatting). Extracted from HTML sources only; NULL for Internet Archive pre-OCR text and PDF sources |
 | `word_count` | INTEGER | NULL | Word count of `full_text_en`, computed at ingest; NULL when `full_text_en` is NULL |
@@ -73,9 +73,9 @@ Primary canonical store for starred and unstarred question records.
 | `sitting_number` | INTEGER | NULL | Sitting number within session |
 | `question_number` | INTEGER | NULL | Official question number |
 | `subject` | TEXT | NULL | Question subject/title |
-| `questioner_names` | TEXT[] | NOT NULL | Primary questioner + co-signatories; always an array; unstarred has exactly 1 element |
+| `questioner_names` | TEXT[] | NOT NULL | Primary questioner + co-signatories; always an array, one element per person. IA `eparlib_members` often runs names together ("Nitish KumarRamji Lal Suman"); ingestion splits them (`split_joined_names`) |
 | `questioner_party` | VARCHAR(200) | NULL | Party affiliation of primary questioner |
-| `minister_name` | VARCHAR(300) | NULL | Name of the minister who answered the question, extracted from the minister's response section (PRD v3.0 rule). **Never** set to question-preamble text (e.g. "Will the minister of [Ministry] be pleased to state…"). When the name is not identifiable from the response section, set to `"Minister of [Ministry]"` using the `ministry` value |
+| `minister_name` | VARCHAR(300) | NULL | Name of the minister who answered the question, extracted from the minister's response section (PRD v3.0 rule). **Never** set to question-preamble text (e.g. "Will the minister of [Ministry] be pleased to state…"). The minister's own name is taken from the answer attribution ("THE MINISTER OF STATE IN THE MINISTRY OF X (SHRI Y)" → "SHRI Y"), including attributions that wrap over several lines or put the name on the line after the designation. When the name is not identifiable from the response section, set to `"Minister of [Ministry]"` using the `ministry` value |
 | `ministry` | VARCHAR(300) | NULL | Ministry responsible |
 | `lok_sabha_number` | INTEGER | NULL | Lok Sabha term number (e.g. 17); extracted from source metadata at ingest. **LS only** — NULL for RS records |
 | `sequence_within_sitting` | INTEGER | NULL | 1-based position within the sitting's proceedings, in document order. **Shared sequence space with `speeches`** for the same sitting (a Q+A exchange and a speech never share a number); powers F09 inline adjacent loading. **Not** part of the dedup key (see §1.4) |

@@ -9,6 +9,7 @@ from ingest.canonical.names import (
     canonicalize_name,
     load_names_dict,
     normalize_for_dedup,
+    split_joined_names,
     strip_honorifics,
 )
 
@@ -167,3 +168,21 @@ class TestCanonicalizeNameIntegration:
         assert name is not None
         assert name != ""
         assert name == "Unknown Member"
+
+
+class TestSplitJoinedNames:
+    @pytest.mark.parametrize("raw,expected", [
+        ("Nitish KumarRamji Lal Suman", ["Nitish Kumar", "Ramji Lal Suman"]),
+        ("P. Jaya Prada NahataYashvir Singh", ["P. Jaya Prada Nahata", "Yashvir Singh"]),
+        ("Mahabal MishraM. Anjan Kumar Yadav", ["Mahabal Mishra", "M. Anjan Kumar Yadav"]),
+        ("Feroze Varun GandhiRamesh RathodKumbakudi Sudhakaran",
+         ["Feroze Varun Gandhi", "Ramesh Rathod", "Kumbakudi Sudhakaran"]),
+        ("Ian McDonald", ["Ian McDonald"]),
+        ("Robert MacLeod", ["Robert MacLeod"]),
+        ("SHRI NITISH KUMAR", ["SHRI NITISH KUMAR"]),   # capitals: boundary not visible
+        ("Hari Vishnu Kamath", ["Hari Vishnu Kamath"]),
+        ("", []),
+        (None, []),
+    ])
+    def test_split(self, raw, expected):
+        assert split_joined_names(raw) == expected

@@ -361,6 +361,12 @@ class TestEparlibQAMetadataFields:
         assert result is not None
         assert result["questioner_names"] == ["Shri Ram Kumar", "Shri A Singh"]
 
+    def test_questioner_names_run_together_are_split(self):
+        """eparlib_members often has no delimiter between co-questioners."""
+        meta = _meta(eparlib_members="Nitish KumarRamji Lal Suman")
+        result = parse_ia_text(_SAMPLE_TEXT, meta, "LS")
+        assert result["questioner_names"] == ["Nitish Kumar", "Ramji Lal Suman"]
+
     def test_questioner_names_from_list(self):
         """eparlib_members as list → all elements returned."""
         meta = _meta(eparlib_members=["Shri A Kumar", "Shri B Singh", "Shri C Rao"])

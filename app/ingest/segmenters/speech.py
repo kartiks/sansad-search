@@ -313,15 +313,36 @@ def _detect_language_handling(text: str) -> tuple[str | None, bool, bool]:
         return text.strip() or None, False, False
 
     if has_translation_marker:
-        # Case 2 or 3: Extract text after translation markers (and English portions)
+        # Case 2: Extract text after translation markers (and English portions)
         en_text = _extract_english_portions(text)
         return en_text or None, True, False
+
+    if has_hindi_script and _latin_share(text) >= 0.5:
+        # Case 3: mostly English with some Devanagari — a Hindi passage, or just
+        # OCR noise such as "(0०)". Keep the English lines; flag dropped Hindi ones.
+        kept, dropped = [], False
+        for line in text.splitlines():
+            if _HINDI_SCRIPT_RE.search(line) and _latin_share(line) < 0.5:
+                dropped = True
+                continue
+            # Stray Devanagari in an English line is OCR noise ("(0०)"); the
+            # English text must carry no Devanagari.
+            kept.append(re.sub(r" {2,}", " ", _HINDI_SCRIPT_RE.sub("", line)))
+        en_text = "\n".join(kept).strip()
+        return en_text or None, False, dropped
 
     if has_hindi_script:
         # Case 4: Hindi only, no translation
         return None, False, True
 
     return text.strip() or None, False, False
+
+
+def _latin_share(text: str) -> float:
+    """Latin letters as a share of Latin + Devanagari letters (1.0 when neither)."""
+    latin = sum(1 for c in text if c.isascii() and c.isalpha())
+    deva = len(_HINDI_SCRIPT_RE.findall(text))
+    return latin / (latin + deva) if latin + deva else 1.0
 
 
 def _extract_english_portions(text: str) -> str:

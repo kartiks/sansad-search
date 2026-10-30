@@ -140,7 +140,11 @@ The two subsystems share no runtime coupling. Ingestion runs as a standalone CLI
                                  # word_count = combined, sequence = first segment's position)
       qa.py                      # Raw text/markup → Q+A exchange unit dicts (never merged);
                                  # minister_name from the response section, never question
-                                 # preamble; fallback "Minister of [Ministry]" (PRD v3.0)
+                                 # preamble; fallback "Minister of [Ministry]" (PRD v3.0).
+                                 # An item with a metadata question_number is one question:
+                                 # a cited "Starred Question No. N" never splits it, and in a
+                                 # 1990s scan of printed Written Answers pages only the item's
+                                 # own numbered question ("75. SHRI X :") is kept
     canonical/
       names.py                   # Speaker name canonicalization against names_dict.csv
       sessions.py                # Session name canonicalization to canonical format

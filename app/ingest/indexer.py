@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Iterator, Optional
 
@@ -134,8 +135,21 @@ def build_meili_document(record: dict[str, Any]) -> dict[str, Any]:
             continue
         if v is None:
             continue
-        doc[k] = v
+        doc[k] = _json_safe(v)
     return doc
+
+
+def _json_safe(value: Any) -> Any:
+    """Turn values read back from PostgreSQL into what a fresh record holds.
+
+    reindex_from_db reads rows, so DATE comes back as datetime.date and UUID as
+    uuid.UUID; Meilisearch needs the same ISO date / string forms as Stage 2.
+    """
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    return value
 
 
 def _is_dead_connection(exc: Exception) -> bool:

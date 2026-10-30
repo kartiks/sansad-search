@@ -39,6 +39,35 @@ _QUESTION_NUM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The same marker at the start of a line (optionally after "*" or a leading
+# number), which is how a new question begins in a multi-question document.
+_QUESTION_START_RE = re.compile(
+    r"(?m)^[\s*\d.]*(?:STARRED\s+QUESTION\s+NO|UNSTARRED\s+QUESTION\s+NO|Q\.?\s*NO)[\.:\s]*\d+",
+    re.IGNORECASE,
+)
+
+# A question opening in printed Written Answers: "73. SHRI X :", "*475. DR. Y :"
+_PRINTED_QUESTION_RE = re.compile(
+    r"(?m)^\s*\*?\s*(\d{1,5})\s*[.,]\s*"
+    r"(?:SHRI|SHRIMATI|SMT|DR|PROF|KUMARI|SUSHRI|MR|MRS|SARDAR|PANDIT|CHOUDHARY|MAJ|COL|GEN|CAPT)\b"
+)
+
+# "Answer" label on a line of its own, ahead of the minister's attribution
+_ANSWER_LABEL_RE = re.compile(r"^\s*(?:WRITTEN\s+)?ANSWER\s*[:.]?\s*$", re.IGNORECASE)
+# OCR reads brackets as braces or square brackets
+_BRACKETS = str.maketrans("{[]}", "(())")
+# A name that opens with an honorific: "SHRI Y", "Smt. Y", "Dr. Y", "Gen. (Dr) Y"
+_HONORIFIC_START_RE = re.compile(
+    r"(?i)^(?:SHRI|SRI|SHRIMATI|SMT|KUMARI|SUSHRI|DR|PROF|GEN|MAJ|COL|CAPT|LT|ADV|MR|MRS|MS)\b"
+)
+# A line holding only a bracketed name: "(SHRI PON. RADHAKRISHNAN)"
+_PAREN_NAME_LINE_RE = re.compile(
+    r"(?i)^\(\s*(?:SHRI|SRI|SHRIMATI|SMT|KUMARI|SUSHRI|DR|PROF|GEN|MAJ|COL|CAPT|LT|ADV|MR|MRS|MS)\b"
+    r"[^()]{2,80}\)\s*:?\s*$"
+)
+# How many continuation lines a wrapped attribution may span
+_MAX_WRAP_LINES = 5
+
 # Supplementary question marker
 _SUPPLEMENTARY_RE = re.compile(
     r"\bSUPPLEMENTARY\b|\bSUPP\b",
@@ -112,6 +141,8 @@ def segment_qa(
 
     raw_text: str = raw_record.get("raw_text", "")
     is_starred = proceeding_type == "starred_question"
+    if raw_record.get("question_number") is not None:
+        raw_text = _own_question_text(raw_text, raw_record["question_number"])
 
     # Split text into logical blocks separated by blank lines
     blocks = _split_blocks(raw_text)
@@ -121,7 +152,14 @@ def segment_qa(
 
     # Heuristic: if the entire document is one question, parse it as one.
     # If multiple question-number markers are found, split into per-question records.
-    question_starts = _find_question_starts(blocks)
+    # A question number in the source metadata means the item holds exactly one
+    # question (Internet Archive / eLibrary items); splitting it would cut the
+    # answer off whenever the text cites another question ("reply given to
+    # Starred Question No. 310").
+    if raw_record.get("question_number") is not None:
+        question_starts = []
+    else:
+        question_starts = _find_question_starts(blocks)
 
     if not question_starts:
         # Treat the whole document as a single Q+A
@@ -147,11 +185,118 @@ def _split_blocks(text: str) -> list[str]:
     return [b.strip() for b in re.split(r"\n{2,}", text) if b.strip()]
 
 
+def _own_question_text(text: str, question_number: int) -> str:
+    """The item's own question from a scan of printed "Written Answers" pages.
+
+    1990s eParlib items are page scans holding several questions, each opening
+    "73. SHRI SANTOSH KUMAR GANGWAR : Will the Minister…". Keep the text from the
+    item's own number to the next numbered question. Text without such numbering,
+    or where the item's number can't be found (OCR damage), is returned unchanged.
+    """
+    starts = [(int(m.group(1)), m.start()) for m in _PRINTED_QUESTION_RE.finditer(text)]
+    if len({n for n, _ in starts}) < 2:
+        return text
+    for i, (n, pos) in enumerate(starts):
+        if n == question_number:
+            end = next((p for m, p in starts[i + 1:] if m != n), len(text))
+            return text[pos:end]
+    return text
+
+
+def _attribution_first(lines: list[str]) -> list[str]:
+    """Bring a block's attribution line to the front, whole.
+
+    eParlib answers often read "Answer" on one line with the minister on the
+    next, and a long attribution wraps: "(SHRI DHARMENDRA" / "PRADHAN)". Drop
+    the bare label and join wrapped lines until the brackets balance, so the
+    minister checks below see the full attribution as the first line.
+    """
+    if len(lines) > 1 and _ANSWER_LABEL_RE.match(lines[0]):
+        lines = lines[1:]
+    if not lines:
+        return lines
+    head = lines[0].rstrip()
+    i = 1
+    while head.count("(") > head.count(")") and i < len(lines) and i <= _MAX_WRAP_LINES:
+        head = f"{head} {lines[i].strip()}"
+        i += 1
+    if head.count("(") > head.count(")"):
+        return lines   # never closed: not a wrapped attribution
+    joined = [head, *lines[i:]]
+    if head.endswith(")") or not _is_minister_heading(head):
+        return joined
+    # "MINISTER OF HUMAN RESOURCE DEVELOPMENT" / "(SMT. SMRITI ZUBIN IRANI)":
+    # the designation continues in capitals and ends with the bracketed name.
+    while (
+        i < len(lines) and i <= _MAX_WRAP_LINES
+        and (
+            _is_capitals(lines[i]) or lines[i].lstrip().startswith("(")
+            or head.count("(") > head.count(")")   # the bracketed name wraps
+        )
+    ):
+        head = f"{head} {lines[i].strip()}"
+        i += 1
+        if head.count("(") == head.count(")") and re.search(r"\)\s*:?(?:\s|$)", head + " "):
+            return [head, *lines[i:]]
+    if i == len(lines):
+        return [head]   # the whole block is the designation; the name follows
+    return joined
+
+
+def _minister_person(text: str) -> str:
+    """The minister's own name from an answer attribution, else the text as found.
+
+    "THE MINISTER OF X (SHRI Y): (a) Yes, Sir." → "SHRI Y". Handles OCR'd
+    brackets ("{Shri Y)", "[Gen. V. K. Singh]") and the bracket-less
+    "MINISTER OF X: SHRI Y:" form.
+    """
+    s = text.translate(_BRACKETS).strip()
+    m = re.search(r"\)\s*:", s)
+    if m and s.count("(", 0, m.start()) == s.count(")", 0, m.start() + 1):
+        s = s[: m.start() + 1]                       # drop answer text after "):"
+    if "(" not in s:
+        parts = [p.strip() for p in s.split(":")]
+        if len(parts) > 1 and _HONORIFIC_START_RE.match(parts[1]):
+            s = f"{parts[0]} ({parts[1]})"            # "MINISTER OF X: SHRI Y"
+    att = parse_attribution(s.rstrip(" :"))
+    if att is not None and att.role == "minister" and att.name and att.name != att.portfolio:
+        return att.name
+    # Fall back to the last bracketed group that starts with an honorific.
+    for inner in reversed(re.findall(r"\(([^()]+)\)", s)):
+        if _HONORIFIC_START_RE.match(inner.strip()):
+            return inner.strip()
+    return text
+
+
+def _is_minister_heading(line: str) -> bool:
+    """A minister designation line ("MINISTER OF STATE IN THE …", "Minister of
+    CIVIL AVIATION"), not the "Will the Minister…" preamble or answer prose."""
+    s = line.strip()
+    return (
+        bool(re.match(r"(?i)^(?:THE\s+)?(?:PRIME\s+|DEPUTY\s+)?MINISTER\b", s))
+        and not _WILL_THE_MINISTER_RE.search(s)
+        and len(s) <= 400
+        and not s.endswith(".")
+    )
+
+
+def _is_capitals(line: str) -> bool:
+    """True when the line's Latin letters are (almost) all capitals."""
+    letters = [c for c in line if c.isascii() and c.isalpha()]
+    if len(letters) < 3:
+        return False
+    return sum(c.isupper() for c in letters) / len(letters) >= 0.9
+
+
 def _find_question_starts(blocks: list[str]) -> list[int]:
-    """Return indices of blocks that start a new question."""
+    """Return indices of blocks that start a new question.
+
+    Only a marker at the start of a line counts: "Starred Question No. 310"
+    in the middle of a sentence is a citation, not a new question.
+    """
     starts = []
     for i, block in enumerate(blocks):
-        if _QUESTION_NUM_RE.search(block):
+        if _QUESTION_START_RE.search(block):
             starts.append(i)
     return starts
 
@@ -182,9 +327,20 @@ def _parse_single_qa(
     in_answer = False
 
     for block in blocks:
-        lines = block.splitlines()
+        lines = _attribution_first(block.splitlines())
         first_line = lines[0].strip() if lines else ""
         rest_content = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+
+        # The minister's name in brackets, a blank line after the designation:
+        # "THE MINISTER OF STATE IN THE MINISTRY OF …" / "" / "(SHRI PON. RADHAKRISHNAN)"
+        if (
+            in_answer and minister_name and "(" not in minister_name
+            and _PAREN_NAME_LINE_RE.match(first_line)
+        ):
+            minister_name = f"{minister_name} {first_line}"
+            if rest_content:
+                text_parts.append(rest_content)
+            continue
 
         # Question number (always in first line)
         qnum = _extract_question_number(first_line)
@@ -214,8 +370,12 @@ def _parse_single_qa(
                     break
             continue
 
-        # Issue 5: fallback — first line contains 'Minister' but no trailing colon
-        if not in_answer and _MINISTER_CONTAINS_RE.search(first_line) and not first_line.endswith(":"):
+        # Issue 5: fallback — first line contains 'Minister' but no trailing colon,
+        # or is a (joined) designation such as "THE MINISTER OF … (SHRI Y):"
+        if not in_answer and (
+            (_MINISTER_CONTAINS_RE.search(first_line) and not first_line.endswith(":"))
+            or _is_minister_heading(first_line.rstrip(" :"))
+        ):
             in_answer = True
             minister_name = first_line.strip()
             if rest_content:
@@ -298,9 +458,7 @@ def _parse_single_qa(
         minister_name = None
     if minister_name is not None:
         # "THE MINISTER OF X (SHRI Y)" → "SHRI Y"
-        att = parse_attribution(minister_name.rstrip(" :"))
-        if att is not None and att.role == "minister" and att.name != att.portfolio:
-            minister_name = att.name
+        minister_name = _minister_person(minister_name)
     if metadata_minister:
         minister_name = metadata_minister
     if minister_name is None and ministry:

@@ -65,16 +65,30 @@ def is_presiding_compact(head: str) -> bool:
     compact = re.sub(r"[^A-Z]", "", head)
     if _PRESIDING_COMPACT_RE.match(compact):
         return True
-    # Heavier OCR damage ("MR. CHAICMAN", "MR. CHATRMAA"): fuzzy-match the office
-    # word after a mandatory MR/MADAM/HON prefix, so ordinary names never qualify.
-    m = re.match(r"^(?:MR|MADAM|HON|HONBLE)(?:D[EB]PUTY|VICE)?([A-Z]{6,12})$", compact)
-    if m and m.group(1)[:2] in ("CH", "SP", "SF", "SB"):
-        office = m.group(1)
-        return any(
-            SequenceMatcher(None, office, target).ratio() >= 0.75
+    # Heavier OCR damage ("MR. CHAICMAN", "MR. DEPATY-SPEAKER", "MRA. SPEAKER"):
+    # fuzzy-match the office after a mandatory MR/MADAM/HON prefix, so ordinary
+    # names never qualify.
+    for prefix in _FUZZY_PREFIXES:
+        if not compact.startswith(prefix):
+            continue
+        rest = compact[len(prefix):]
+        m = re.match(r"^(?:D[EB]PUTY|VICE)?([A-Z]{6,12})$", rest)
+        if m and m.group(1)[:2] in ("CH", "SP", "SF", "SB") and any(
+            SequenceMatcher(None, m.group(1), target).ratio() >= 0.75
             for target in ("SPEAKER", "CHAIRMAN", "CHAIRPERSON")
-        )
+        ):
+            return True
+        # Damaged "DEPUTY" too: match the whole office, with a stricter ratio.
+        if rest[:1] == "D" and 11 <= len(rest) <= 16 and any(
+            SequenceMatcher(None, rest, target).ratio() >= 0.8
+            for target in ("DEPUTYSPEAKER", "DEPUTYCHAIRMAN")
+        ):
+            return True
     return False
+
+
+# Prefixes for the fuzzy presiding check; "MRA" is OCR for "MR." ("MRA. SPEAKER").
+_FUZZY_PREFIXES = ("MADAM", "HONBLE", "HON", "MRA", "MR")
 
 
 _MINISTER_RE = re.compile(

@@ -1,6 +1,9 @@
 """Tests for ingest.indexer — dedup key construction, document building, indexing."""
 from __future__ import annotations
 
+import datetime
+import json
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 import psycopg2
@@ -815,21 +818,23 @@ class TestIndexerReindexFromDb:
             "source_url", "page_reference", "dedup_key", "created_at",
         ]
 
+        # psycopg2 returns DATE / UUID / TIMESTAMPTZ columns as Python objects.
         def _speech_row(idx):
             return (
-                f"uuid-{idx}", "LS", "debate", "2023-03-15", None, 261, 5, None,
+                uuid.UUID(int=idx), "LS", "debate", datetime.date(2023, 3, 15), None, 261, 5, None,
                 f"Member {idx}", None, None, "member", idx, "Speech text",
                 False, False, False,
                 "https://sansad.in/doc.html", None, None,
-                f"dedup_{idx}", "2023-01-01",
+                f"dedup_{idx}", datetime.datetime(2023, 1, 1, tzinfo=datetime.timezone.utc),
             )
 
         def _qa_row(idx):
             return (
-                f"uuid-qa-{idx}", "LS", "starred_question", "2023-03-15", None, 261, 5,
+                uuid.UUID(int=100 + idx), "LS", "starred_question", datetime.date(2023, 3, 15), None, 261, 5,
                 idx, None, ["Member A"], None, "Minister", "Ministry",
                 "Q&A text", False, False,
-                "https://sansad.in/qa.html", None, f"qa_dedup_{idx}", "2023-01-01",
+                "https://sansad.in/qa.html", None, f"qa_dedup_{idx}",
+                datetime.datetime(2023, 1, 1, tzinfo=datetime.timezone.utc),
             )
 
         speech_rows = [_speech_row(1), _speech_row(2)]
@@ -872,6 +877,11 @@ class TestIndexerReindexFromDb:
                 assert field not in doc, (
                     f"Excluded field '{field}' must not appear in Meilisearch document"
                 )
+
+        # Same shapes as a Stage 2 push: ISO date and string id, so the batch serializes.
+        json.dumps(pushed_docs)
+        assert {d["date"] for d in pushed_docs} == {"2023-03-15"}
+        assert pushed_docs[0]["id"] == str(uuid.UUID(int=1))
 
 
 # ── Language handling integration ─────────────────────────────────────────────
