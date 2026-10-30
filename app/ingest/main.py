@@ -140,8 +140,9 @@ async def _async_main(args: argparse.Namespace) -> int:
         logger.info("Reindex mode: reading all records from PostgreSQL")
         total = indexer.reindex_from_db()
         logger.info("Reindex complete: %d documents pushed to Meilisearch", total)
+        problems = indexer.verify_meili_tasks()
         pg_conn.close()
-        return 0
+        return _report_meili_problems(problems)
 
     # ── Validate date args ────────────────────────────────────────────────────
     date_from: Optional[str] = None
@@ -184,8 +185,10 @@ async def _async_main(args: argparse.Namespace) -> int:
                         stage2_stats[k] += s2.get(k, 0)
 
     # Flush any remaining buffered Meilisearch documents (Stage 2 only)
+    meili_problems: list[str] = []
     if stage in ("process", "all"):
         indexer.flush()
+        meili_problems = indexer.verify_meili_tasks()
         try:
             indexer.update_index_status()
         except Exception as exc:
@@ -220,7 +223,21 @@ async def _async_main(args: argparse.Namespace) -> int:
         )
         logger.info("  Errors: %d", stage2_stats["errors"])
 
-    return 0
+    return _report_meili_problems(meili_problems)
+
+
+def _report_meili_problems(problems: list[str]) -> int:
+    """Log Meilisearch indexing failures; exit code 1 if records are missing from search."""
+    if not isinstance(problems, list) or not problems:
+        return 0
+    for p in problems[:20]:
+        logger.error("Meilisearch indexing problem: %s", p)
+    logger.error(
+        "%d Meilisearch indexing problem(s): some records are in PostgreSQL but not "
+        "searchable. Fix the cause, then run: python -m ingest.main --source all --reindex-from-db",
+        len(problems),
+    )
+    return 1
 
 
 def main(argv: Optional[list[str]] = None) -> int:

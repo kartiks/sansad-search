@@ -349,122 +349,108 @@ class TestInternetArchiveProviderDiscover:
 # ── InternetArchiveProvider.discover() — RS corpus (Phase 9, PRD v1.3) ───────
 
 class TestInternetArchiveProviderDiscoverRS:
-    async def test_rs_citation_url_is_ia_item_url(self):
-        """PRD v3.0 (Non-Neg #9 reversal): RS citation_url is the archive.org item URL."""
-        search_resp_1 = _ia_search_response(["eparlib.nic.in.55501"])
-        meta_resp = MagicMock(status_code=200)
-        meta_resp.json.return_value = {
-            "server": "ia801205.us.archive.org",
-            "dir": "/5/items/eparlib.nic.in.55501",
-            "files": [{"name": "RS_20_02_12_djvu.txt", "format": "DjVuTXT"}],
-            "metadata": {
-                "identifier": "eparlib.nic.in.55501",
-                "eparlib_date": "2020-02-12",
-                "title": "Rajya Sabha Debates",
-            },
+    @staticmethod
+    def _rs_meta_response(identifier: str = "rsdebate.nic.in.48275", **extra) -> MagicMock:
+        """IA metadata for a Rajya Sabha mirror item (rsdebate_* fields, as published)."""
+        resp = MagicMock(status_code=200)
+        meta = {
+            "identifier": identifier,
+            "creator": "Rajya Sabha Secretariat",
+            "rsdebate_debate_date": "7-Dec-2004",
+            "rsdebate_debate_title": "Demand and supply of LPG",
+            "rsdebate_question_type": "Unstarred",
+            "rsdebate_question_number": "541",
+            "rsdebate_questioner_name": "ABU ASIM AZMI",
+            "rsdebate_ministers_name": "MANI SHANKAR AIYAR",
+            "rsdebate_ministry": "PETROLEUM AND NATURAL GAS",
+            "rsdebate_session_number": "203",
+            "rsdebate_page_number_from_to": "148-149",
+            "rsdebate_document_url": "https://rsdebate.nic.in/bitstream/123456789/48275/1/PQ.pdf",
+            "title": "Demand and supply of LPG (7-Dec-2004)",
         }
+        meta.update(extra)
+        resp.json.return_value = {
+            "server": "ia801205.us.archive.org",
+            "dir": f"/5/items/{identifier}",
+            "files": [{"name": "IQ_203_07122004_U541_djvu.txt", "format": "DjVuTXT"}],
+            "metadata": meta,
+        }
+        return resp
 
+    async def _discover_rs(self, identifiers, *meta_responses):
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get.side_effect = [search_resp_1, meta_resp]
-
+        client.get.side_effect = [_ia_search_response(identifiers), *meta_responses]
         with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
             provider = InternetArchiveProvider(client, corpus="RS", rate_delay=0.0)
-            doc_refs = await provider.discover()
+            return await provider.discover()
 
-        assert len(doc_refs) == 1
-        ref = doc_refs[0]
+    async def test_rs_uses_rajya_sabha_mirror_query(self):
+        client = AsyncMock(spec=httpx.AsyncClient)
+        provider = InternetArchiveProvider(client, corpus="RS")
+        assert provider._query.startswith("identifier:rsdebate.nic.in")
+        assert "eparlib" not in provider._query
+
+    async def test_ls_query_excludes_committee_reports(self):
+        client = AsyncMock(spec=httpx.AsyncClient)
+        provider = InternetArchiveProvider(client, corpus="LS")
+        assert "eparlib.nic.in" in provider._query
+        assert "Committee Reports" in provider._query
+
+    async def test_rs_citation_url_and_handle(self):
+        refs = await self._discover_rs(["rsdebate.nic.in.48275"], self._rs_meta_response())
+        assert len(refs) == 1
+        ref = refs[0]
         assert ref.corpus == "RS"
-        assert ref.citation_url == "https://archive.org/details/eparlib.nic.in.55501"
-        assert "rsdebate.nic.in" not in (ref.citation_url or "")
-        assert ref.canonical_doc_id == "55501"
+        assert ref.citation_url == "https://archive.org/details/rsdebate.nic.in.48275"
+        assert ref.canonical_doc_id == "48275"
+
+    async def test_rs_metadata_mapped_to_parser_fields(self):
+        refs = await self._discover_rs(["rsdebate.nic.in.48275"], self._rs_meta_response())
+        m = refs[0].metadata
+        assert m["eparlib_date"] == "7-Dec-2004"
+        assert m["eparlib_question_type"] == "Unstarred"
+        assert m["eparlib_question_number"] == "541"
+        assert m["eparlib_members"] == "ABU ASIM AZMI"
+        assert m["eparlib_minister_name"] == "MANI SHANKAR AIYAR"
+        assert m["eparlib_relation_ministry"] == "PETROLEUM AND NATURAL GAS"
+        assert m["eparlib_page_range"] == "148-149"
 
     async def test_rs_lok_sabha_number_always_null(self):
-        """PRD v3.0: lok_sabha_number is LS-only; RS DocumentRefs carry null even if present in metadata."""
-        search_resp_1 = _ia_search_response(["eparlib.nic.in.55501"])
-        meta_resp = MagicMock(status_code=200)
-        meta_resp.json.return_value = {
-            "server": "ia801205.us.archive.org",
-            "dir": "/5/items/eparlib.nic.in.55501",
-            "files": [{"name": "RS_20_02_12_djvu.txt", "format": "DjVuTXT"}],
-            "metadata": {
-                "identifier": "eparlib.nic.in.55501",
-                "eparlib_date": "2020-02-12",
-                "eparlib_lok_sabha_number": "17",  # spurious on an RS item — must be ignored
-                "title": "Rajya Sabha Debates",
-            },
-        }
+        refs = await self._discover_rs(
+            ["rsdebate.nic.in.48275"],
+            self._rs_meta_response(eparlib_lok_sabha_number="17"),  # spurious; must be ignored
+        )
+        assert refs[0].metadata["lok_sabha_number"] is None
 
+    async def test_identifiers_from_other_house_mirror_skipped(self):
+        """An eparlib (Lok Sabha) item never becomes an RS document, and vice versa."""
+        refs = await self._discover_rs(
+            ["rsdebate.nic.in.48275", "eparlib.nic.in.55501"], self._rs_meta_response()
+        )
+        assert [r.canonical_doc_id for r in refs] == ["48275"]
+
+    async def test_known_documents_skip_metadata_fetch(self):
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get.side_effect = [search_resp_1, meta_resp]
-
+        client.get.side_effect = [
+            _ia_search_response(["rsdebate.nic.in.1", "rsdebate.nic.in.2"]),
+            self._rs_meta_response("rsdebate.nic.in.2"),
+        ]
         with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
-            provider = InternetArchiveProvider(client, corpus="RS", rate_delay=0.0)
-            doc_refs = await provider.discover()
+            provider = InternetArchiveProvider(
+                client, corpus="RS", rate_delay=0.0, is_known=lambda cid: cid == "1"
+            )
+            refs = await provider.discover()
+        assert [r.canonical_doc_id for r in refs] == ["2"]
+        assert client.get.call_count == 2   # listing + one metadata request
 
-        assert doc_refs[0].metadata["lok_sabha_number"] is None
-
-    async def test_rs_no_derivable_handle_still_cites_ia_item(self, caplog):
-        """PRD v3.0: an RS IA item with no derivable handle still cites the archive.org item URL.
-
-        citation_url is null only when no IA identifier exists; here the
-        identifier is present (just not an eparlib.nic.in.{N} handle), so the
-        IA item URL is used and the item is tracked via the identifier.
-        """
-        search_resp_1 = _ia_search_response(["rs_misc_item_no_handle"])
-        meta_resp = MagicMock(status_code=200)
-        meta_resp.json.return_value = {
-            "server": "ia801205.us.archive.org",
-            "dir": "/5/items/rs_misc_item_no_handle",
-            "files": [{"name": "RS_19_07_22_djvu.txt", "format": "DjVuTXT"}],
-            "metadata": {
-                "identifier": "rs_misc_item_no_handle",
-                "eparlib_date": "2019-07-22",
-                "title": "Rajya Sabha Debates (untagged)",
-            },
-        }
-
+    async def test_committee_report_item_skipped(self):
+        meta = _ia_metadata_response("eparlib.nic.in.9", "https://eparlib.sansad.in/handle/123456789/9")
+        meta.json.return_value["metadata"]["eparlib_appears_in_collections"] = "Parliamentary Committee Reports"
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get.side_effect = [search_resp_1, meta_resp]
-
-        import logging
-
+        client.get.side_effect = [_ia_search_response(["eparlib.nic.in.9"]), meta]
         with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
-            with caplog.at_level(logging.WARNING):
-                provider = InternetArchiveProvider(client, corpus="RS", rate_delay=0.0)
-                doc_refs = await provider.discover()
-
-        assert len(doc_refs) == 1
-        ref = doc_refs[0]
-        assert ref.citation_url == "https://archive.org/details/rs_misc_item_no_handle"
-        # The item is still tracked via the IA identifier as canonical id.
-        assert ref.canonical_doc_id == "rs_misc_item_no_handle"
-
-    async def test_rs_unmatched_identifier_retained_ls_skipped(self):
-        """An identifier with no handle is retained for RS but skipped for LS — divergent behavior."""
-        search_resp = _ia_search_response(["weird_identifier_42"])
-        meta_resp = MagicMock(status_code=200)
-        meta_resp.json.return_value = {
-            "server": "ia801205.us.archive.org",
-            "dir": "/5/items/weird_identifier_42",
-            "files": [{"name": "weird_djvu.txt", "format": "DjVuTXT"}],
-            "metadata": {"identifier": "weird_identifier_42", "title": "X"},
-        }
-
-        # RS run: retained
-        client_rs = AsyncMock(spec=httpx.AsyncClient)
-        client_rs.get.side_effect = [search_resp, meta_resp]
-        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
-            rs_refs = await InternetArchiveProvider(client_rs, corpus="RS", rate_delay=0.0).discover()
-
-        # LS run: skipped (metadata never fetched because identifier is skipped first)
-        search_resp_ls = _ia_search_response(["weird_identifier_42"])
-        client_ls = AsyncMock(spec=httpx.AsyncClient)
-        client_ls.get.side_effect = [search_resp_ls]
-        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
-            ls_refs = await InternetArchiveProvider(client_ls, corpus="LS", rate_delay=0.0).discover()
-
-        assert len(rs_refs) == 1
-        assert len(ls_refs) == 0
+            refs = await InternetArchiveProvider(client, corpus="LS", rate_delay=0.0).discover()
+        assert refs == []
 
 
 # ── InternetArchiveProvider.fetch() ──────────────────────────────────────────

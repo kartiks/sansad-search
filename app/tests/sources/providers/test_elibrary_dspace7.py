@@ -353,3 +353,39 @@ class TestElibraryFetch:
             result = await provider.fetch(ref)
 
         assert result is None
+
+
+class TestElibraryIncremental:
+    @pytest.mark.asyncio
+    async def test_default_collection_is_current_debates_collection(self):
+        assert COLLECTION_UUID == "b2770639-c57b-4ba3-a9f1-57761c60d195"
+
+    @pytest.mark.asyncio
+    async def test_known_items_skip_bitstream_lookups(self):
+        items = [
+            _make_item(uuid="known", handle="123456789/1", date_issued="2026-08-13"),
+            _make_item(uuid="new", handle="123456789/2", date_issued="2026-08-12"),
+        ]
+        calls = [
+            _mock_response(_search_response(items)),
+            _mock_response(_bundles_response()),
+            _mock_response(_bitstreams_response()),
+        ]
+        client = AsyncMock(spec=httpx.AsyncClient)
+        with patch("ingest.sources.providers.elibrary_dspace7.fetch_with_retry", side_effect=calls) as f:
+            provider = ElibraryDSpace7Provider(
+                client, date_from="2019-01-01", rate_delay=0, is_known=lambda cid: cid == "1"
+            )
+            refs = await provider.discover()
+        assert [r.canonical_doc_id for r in refs] == ["2"]
+        assert f.call_count == 3   # one listing page + 2 lookups for the new item only
+
+    @pytest.mark.asyncio
+    async def test_listing_is_newest_first(self):
+        client = AsyncMock(spec=httpx.AsyncClient)
+        with patch(
+            "ingest.sources.providers.elibrary_dspace7.fetch_with_retry",
+            side_effect=[_mock_response(_search_response([]))],
+        ) as f:
+            await ElibraryDSpace7Provider(client, rate_delay=0).discover()
+        assert "dc.date.issued%2CDESC" in f.call_args_list[0].args[1]

@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ingest.segmenters.attribution import parse_attribution
+
 from ingest.segmenters.speech import (
     _HINDI_SCRIPT_RE,
     _TRANSLATION_RE,
@@ -169,6 +171,9 @@ def _parse_single_qa(
     subject: str | None = raw_record.get("subject")
     questioner_names: list[str] = list(raw_record.get("questioner_names") or [])
     questioner_party: str | None = None
+    # Source metadata (e.g. rsdebate_ministers_name) is authoritative; a name read
+    # from OCR text is only a fallback.
+    metadata_minister: str | None = raw_record.get("minister_name")
     minister_name: str | None = None
     ministry: str | None = raw_record.get("ministry")
 
@@ -291,6 +296,13 @@ def _parse_single_qa(
     # "Minister of [Ministry]" using the ministry field. Never emit preamble.
     if minister_name is not None and _WILL_THE_MINISTER_RE.search(minister_name):
         minister_name = None
+    if minister_name is not None:
+        # "THE MINISTER OF X (SHRI Y)" → "SHRI Y"
+        att = parse_attribution(minister_name.rstrip(" :"))
+        if att is not None and att.role == "minister" and att.name != att.portfolio:
+            minister_name = att.name
+    if metadata_minister:
+        minister_name = metadata_minister
     if minister_name is None and ministry:
         minister_name = f"Minister of {ministry}"
 

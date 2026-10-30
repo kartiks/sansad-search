@@ -440,3 +440,25 @@ class TestLokSabhaNumberPassthrough:
     def test_lok_sabha_number_null_when_absent(self):
         result = parse_ia_text(_SAMPLE_TEXT, _meta(), source="LS")
         assert result["lok_sabha_number"] is None
+
+
+def test_rs_minister_and_page_from_mapped_metadata():
+    """RS mirror metadata (mapped to eparlib_* by the provider) reaches the raw record."""
+    from ingest.parsers.ia_text_parser import parse_ia_text
+
+    meta = {
+        "eparlib_date": "7-Dec-2004",
+        "eparlib_question_type": "Unstarred",
+        "eparlib_question_number": "541",
+        "eparlib_members": "ABU ASIM AZMI",
+        "eparlib_minister_name": "MANI SHANKAR AIYAR",
+        "eparlib_relation_ministry": "PETROLEUM AND NATURAL GAS",
+        "eparlib_page_range": "148-149",
+        "eparlib_title": "Demand and supply of LPG",
+    }
+    rec = parse_ia_text("Some answer text about LPG supply in the country.", meta, source="RS")
+    assert rec["date"] == "2004-12-07"
+    assert rec["proceeding_type"] == "unstarred_question"
+    assert rec["minister_name"] == "MANI SHANKAR AIYAR"
+    assert rec["page_reference"] == 148
+    assert rec["questioner_names"] == ["ABU ASIM AZMI"]

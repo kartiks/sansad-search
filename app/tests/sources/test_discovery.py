@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -544,3 +544,69 @@ class TestEnumerateIaSearch:
         assert any("/1" in u for u in urls), "in-scope item must be included"
         assert not any("/2" in u for u in urls), "post-scope item must be excluded"
         assert any("/3" in u for u in urls), "page 2 in-scope item must be included"
+
+
+# ── enumerate_ia_scrape ───────────────────────────────────────────────────────
+
+from ingest.sources._discovery import enumerate_ia_scrape  # noqa: E402
+
+
+def _scrape_page(identifiers, cursor=None, dates=None):
+    resp = MagicMock(status_code=200)
+    items = [
+        {"identifier": i, **({"date": dates[n]} if dates else {})}
+        for n, i in enumerate(identifiers)
+    ]
+    body = {"items": items, "count": len(items), "total": 999}
+    if cursor:
+        body["cursor"] = cursor
+    resp.json.return_value = body
+    return resp
+
+
+class TestEnumerateIaScrape:
+    async def test_follows_cursor_past_ten_thousand_limit(self):
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [
+            _scrape_page(["rsdebate.nic.in.1", "rsdebate.nic.in.2"], cursor="c1"),
+            _scrape_page(["rsdebate.nic.in.3"]),
+        ]
+        out = await enumerate_ia_scrape(client, "identifier:rsdebate.nic.in*", identifier_prefix="rsdebate.nic.in.")
+        assert [i["identifier"] for i in out] == ["rsdebate.nic.in.1", "rsdebate.nic.in.2", "rsdebate.nic.in.3"]
+        assert "cursor=c1" in client.get.call_args_list[1].args[0]
+
+    async def test_cached_page_for_other_query_is_retried(self):
+        """IA can serve another query's cached first page; it must be detected and re-requested."""
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [
+            _scrape_page(["eparlib.nic.in.100", "eparlib.nic.in.101"]),   # wrong house
+            _scrape_page(["rsdebate.nic.in.5"]),
+        ]
+        out = await enumerate_ia_scrape(client, "identifier:rsdebate.nic.in*", identifier_prefix="rsdebate.nic.in.")
+        assert [i["identifier"] for i in out] == ["rsdebate.nic.in.5"]
+        first, second = (c.args[0] for c in client.get.call_args_list)
+        assert first != second   # different count → different cache key
+
+    async def test_out_of_window_dates_detected(self):
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [
+            _scrape_page(["rsdebate.nic.in.1"], dates=["1957-03-19T00:00:00Z"]),
+        ] * 4
+        with pytest.raises(RuntimeError, match="do not match"):
+            await enumerate_ia_scrape(
+                client, "identifier:rsdebate.nic.in*", identifier_prefix="rsdebate.nic.in.",
+                date_from="1990-01-01", date_to="1990-12-31",
+            )
+
+    async def test_error_payload_raises(self):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"error": "query timed out"}
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.return_value = resp
+        with pytest.raises(RuntimeError, match="query timed out"):
+            await enumerate_ia_scrape(client, "identifier:x*")
+
+    async def test_failed_fetch_raises_instead_of_returning_partial(self):
+        with patch("ingest.sources._discovery.fetch_with_retry", AsyncMock(return_value=None)):
+            with pytest.raises(RuntimeError, match="failed"):
+                await enumerate_ia_scrape(AsyncMock(), "identifier:x*")

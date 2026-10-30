@@ -244,6 +244,13 @@ def parse_ia_text(
 
     questioner_names: list[str] = _get_list(metadata, "eparlib_members")
     ministry: str | None = _get(metadata, "eparlib_relation_ministry")
+    minister_name: str | None = _get(metadata, "eparlib_minister_name")
+
+    page_reference: int | None = None
+    pages = _get(metadata, "eparlib_page_range")
+    if pages:
+        m_page = re.match(r"\s*(\d+)", str(pages))
+        page_reference = int(m_page.group(1)) if m_page else None
 
     # PRD v3.0: lok_sabha_number is pre-parsed to an int by the IA provider and
     # is LS-only. RS records always carry null.
@@ -259,9 +266,10 @@ def parse_ia_text(
         "question_number": question_number,
         "questioner_names": questioner_names,
         "ministry": ministry,
+        "minister_name": minister_name,
         "subject": title[:500] if title else None,
         "source_url": source_url,
-        "page_reference": None,     # IA text has no page numbers
+        "page_reference": page_reference,  # RS IA metadata gives a page range
         "volume": None,
         "time_of_day": None,        # IA pre-OCR text has no sitting start time
         "lok_sabha_number": lok_sabha_number,

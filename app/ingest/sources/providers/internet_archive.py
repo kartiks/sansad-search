@@ -1,8 +1,9 @@
 """
-Internet Archive provider for LS corpus (Phase 8) and RS corpus (Phase 9).
+Internet Archive provider for the LS corpus (eparlib.nic.in.* mirror, Lok Sabha
+Secretariat) and the RS corpus (rsdebate.nic.in.* mirror, Rajya Sabha Secretariat).
 
 Discovery:
-  advancedsearch.php enumerate eparlib.nic.in.{N} identifiers →
+  IA Scraping API (cursor-paged) enumerates {eparlib|rsdebate}.nic.in.{N} identifiers →
   metadata JSON fetch per identifier (https://archive.org/metadata/{id}) →
   locate DjVuTXT entry in top-level `files` array (format == "DjVuTXT") →
   build fetch_url as https://{server}{dir}/{name} →
@@ -26,11 +27,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
-from ingest.sources._discovery import enumerate_ia_search
+from ingest.sources._discovery import enumerate_ia_scrape
 from ingest.sources._http import DEFAULT_RATE_DELAY, fetch_with_retry
 from ingest.sources._provider import DocumentRef, Provider
 
@@ -38,6 +39,36 @@ logger = logging.getLogger(__name__)
 
 # Matches eparlib.nic.in.{N} — N is the cross-provider DSpace handle number
 _IDENTIFIER_RE = re.compile(r"eparlib\.nic\.in\.(\d+)$", re.IGNORECASE)
+# Matches rsdebate.nic.in.{N} — the Rajya Sabha debates mirror (rsdebate.nic.in handle N)
+_RS_IDENTIFIER_RE = re.compile(r"rsdebate\.nic\.in\.(\d+)$", re.IGNORECASE)
+
+# Each house has its own IA mirror. eparlib.nic.in.* is published by the Lok Sabha
+# Secretariat (every item, checked 2026-10) and also holds ~9k committee reports,
+# which are not proceedings. rsdebate.nic.in.* is the Rajya Sabha Secretariat's
+# mirror (1952 – Dec 2009 as of 2026-10).
+_LS_QUERY = (
+    'identifier:eparlib.nic.in* '
+    'AND NOT eparlib_appears_in_collections:"Parliamentary Committee Reports"'
+)
+_RS_QUERY = "identifier:rsdebate.nic.in*"
+_CORPUS_CONFIG: dict[str, dict[str, Any]] = {
+    "LS": {"query": _LS_QUERY, "prefix": "eparlib.nic.in.", "id_re": _IDENTIFIER_RE},
+    "RS": {"query": _RS_QUERY, "prefix": "rsdebate.nic.in.", "id_re": _RS_IDENTIFIER_RE},
+}
+
+# rsdebate_* metadata → the eparlib_* keys ia_text_parser reads
+_RS_FIELD_MAP = {
+    "rsdebate_document_url": "eparlib_document_url",
+    "rsdebate_debate_date": "eparlib_date",
+    "rsdebate_session_number": "eparlib_session_number",
+    "rsdebate_debate_title": "eparlib_title",
+    "rsdebate_question_type": "eparlib_question_type",
+    "rsdebate_question_number": "eparlib_question_number",
+    "rsdebate_questioner_name": "eparlib_members",
+    "rsdebate_ministry": "eparlib_relation_ministry",
+    "rsdebate_ministers_name": "eparlib_minister_name",
+    "rsdebate_page_number_from_to": "eparlib_page_range",
+}
 
 _IA_METADATA_BASE = "https://archive.org/metadata"
 
@@ -55,10 +86,19 @@ RSDEBATE_ITEM_PATTERN = f"{RSDEBATE_BASE}/handle/123456789/{{handle}}"
 _IA_SEARCH_FIELDS = ["identifier"]
 
 
-def _extract_handle_number(identifier: str) -> str | None:
-    """Extract the DSpace handle number N from eparlib.nic.in.{N}."""
-    m = _IDENTIFIER_RE.match(str(identifier))
+def _extract_handle_number(identifier: str, pattern: re.Pattern = _IDENTIFIER_RE) -> str | None:
+    """Extract the DSpace handle number N from eparlib.nic.in.{N} (or rsdebate.nic.in.{N})."""
+    m = pattern.match(str(identifier))
     return m.group(1) if m else None
+
+
+def _rs_metadata_as_eparlib(meta: dict[str, Any]) -> dict[str, Any]:
+    """Return *meta* with rsdebate_* fields copied onto the eparlib_* names the parser reads."""
+    out = dict(meta)
+    for src, dst in _RS_FIELD_MAP.items():
+        if meta.get(src) not in (None, "", []) and out.get(dst) in (None, "", []):
+            out[dst] = meta[src]
+    return out
 
 
 def _get_meta(raw: dict[str, Any], key: str) -> str | None:
@@ -84,7 +124,7 @@ class InternetArchiveProvider(Provider):
     Null only when no IA identifier is derivable.
     """
 
-    IA_QUERY = "identifier:(eparlib.nic.in*)"
+    IA_QUERY = _LS_QUERY  # LS default; RS uses _RS_QUERY
 
     def __init__(
         self,
@@ -95,15 +135,21 @@ class InternetArchiveProvider(Provider):
         date_to: str | None = None,
         rate_delay: float = DEFAULT_RATE_DELAY,
         ia_query: str | None = None,
+        is_known: Callable[[str], bool] | None = None,
     ) -> None:
         if corpus not in ("LS", "RS"):
             raise ValueError(f"corpus must be 'LS' or 'RS'; got {corpus!r}")
+        cfg = _CORPUS_CONFIG[corpus]
         self._client = client
         self._corpus = corpus
         self._date_from = date_from
         self._date_to = date_to
         self._rate_delay = rate_delay
-        self._query = ia_query or self.IA_QUERY
+        self._query = ia_query or cfg["query"]
+        self._prefix = cfg["prefix"]
+        self._id_re = cfg["id_re"]
+        # Skips the per-item metadata request for documents already stored.
+        self._is_known = is_known
 
     async def discover(self) -> list[DocumentRef]:
         """
@@ -114,36 +160,31 @@ class InternetArchiveProvider(Provider):
         to the archive.org item URL (Non-Negotiable #9 v3.0 — archive.org is the
         canonical citation for both LS and RS records fetched via IA).
         """
-        ia_results = await enumerate_ia_search(
+        ia_results = await enumerate_ia_scrape(
             self._client,
             self._query,
-            fields=_IA_SEARCH_FIELDS,
+            identifier_prefix=self._prefix,
             date_from=self._date_from,
             date_to=self._date_to,
         )
 
         doc_refs: list[DocumentRef] = []
+        known = 0
         for item in ia_results:
             identifier = item.get("identifier")
             if not identifier:
                 continue
 
-            handle_n = _extract_handle_number(str(identifier))
+            handle_n = _extract_handle_number(str(identifier), self._id_re)
             if handle_n is None:
-                if self._corpus == "LS":
-                    logger.warning(
-                        "IA identifier %r does not match eparlib.nic.in.{N}; skipping",
-                        identifier,
-                    )
-                    continue
-                # RS: retain the item — _build_citation_url() will return the
-                # archive.org item URL even without a DSpace handle (Non-Neg #9
-                # v3.0). citation_url is set below via _build_citation_url().
                 logger.warning(
-                    "RS IA identifier %r has no derivable DSpace handle; "
-                    "citation_url will be set to archive.org URL (Non-Neg #9 v3.0)",
-                    identifier,
+                    "IA identifier %r does not match %s{N}; skipping", identifier, self._prefix
                 )
+                continue
+
+            if self._is_known is not None and self._is_known(handle_n):
+                known += 1
+                continue
 
             full_data = await self._fetch_ia_metadata(str(identifier))
             if full_data is None:
@@ -164,11 +205,13 @@ class InternetArchiveProvider(Provider):
             djvu_url = f"https://{server}{dir_}/{djvu_entry['name']}"
 
             meta = full_data.get("metadata", {})
+            if self._corpus == "RS":
+                meta = _rs_metadata_as_eparlib(meta)
+            if "committee" in str(_get_meta(meta, "eparlib_appears_in_collections") or "").lower():
+                logger.debug("IA item %r is a committee report; skipping", identifier)
+                continue
             citation_url = self._build_citation_url(str(identifier))
-            # When no DSpace handle is derivable (RS edge case), fall back to the
-            # IA identifier as the checkpoint/dedup key so the item is still
-            # tracked for resumability.
-            canonical_id = handle_n if handle_n is not None else str(identifier)
+            canonical_id = handle_n
 
             # PRD v3.0: lok_sabha_number is LS-only, derived from the IA metadata
             # field eparlib_lok_sabha_number. RS and CA are always null.
@@ -198,13 +241,16 @@ class InternetArchiveProvider(Provider):
                         "eparlib_question_number": _get_meta(meta, "eparlib_question_number"),
                         "eparlib_members": meta.get("eparlib_members"),  # may be a list
                         "eparlib_relation_ministry": _get_meta(meta, "eparlib_relation_ministry"),
+                        "eparlib_minister_name": _get_meta(meta, "eparlib_minister_name"),
+                        "eparlib_page_range": _get_meta(meta, "eparlib_page_range"),
                         "title": _get_meta(meta, "title"),
                     },
                 )
             )
 
         logger.info(
-            "internet_archive: discovered %d %s documents", len(doc_refs), self._corpus
+            "internet_archive: discovered %d new %s documents (%d already stored)",
+            len(doc_refs), self._corpus, known,
         )
         return doc_refs
 

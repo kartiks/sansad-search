@@ -169,6 +169,10 @@ class Indexer:
         self._pg_dsn = pg_dsn
         self._meili = meili_client
         self._meili_batch: list[dict] = []
+        # Meilisearch indexing is asynchronous: keep task ids so failures can be
+        # checked at the end of the run instead of passing silently.
+        self._meili_task_ids: list[int] = []
+        self.meili_failed_docs = 0
 
         # Counters for index_status
         self.counts: dict[str, int] = {"CA": 0, "LS": 0, "RS": 0}
@@ -463,11 +467,35 @@ class Indexer:
         self._meili_batch.clear()
         try:
             index = self._meili.index(MEILI_INDEX_NAME)
-            index.add_documents(batch)
+            task = index.add_documents(batch)
+            task_id = getattr(task, "task_uid", None)
+            if isinstance(task_id, int):
+                self._meili_task_ids.append(task_id)
             logger.debug("Pushed %d documents to Meilisearch", len(batch))
         except Exception as exc:
-            logger.error("Meilisearch push failed: %s", exc)
+            self.meili_failed_docs += len(batch)
+            logger.error("Meilisearch push failed for %d documents: %s", len(batch), exc)
         return len(batch)
+
+    def verify_meili_tasks(self, timeout_in_ms: int | None = 600_000) -> list[str]:
+        """
+        Wait for every indexing task pushed in this run; return one message per
+        failure (failed push, failed task, or a task that could not be checked).
+        An empty list means everything pushed this run is searchable.
+        """
+        problems: list[str] = []
+        if self.meili_failed_docs:
+            problems.append(f"{self.meili_failed_docs} documents could not be sent to Meilisearch")
+        for task_id in self._meili_task_ids:
+            try:
+                result = self._meili.wait_for_task(task_id, timeout_in_ms=timeout_in_ms)
+            except Exception as exc:
+                problems.append(f"task {task_id}: could not check status ({exc})")
+                continue
+            if getattr(result, "status", None) == "failed":
+                problems.append(f"task {task_id}: {getattr(result, 'error', None)}")
+        self._meili_task_ids.clear()
+        return problems
 
     # ── index_status update ───────────────────────────────────────────────────
 
