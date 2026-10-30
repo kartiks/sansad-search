@@ -1,5 +1,4 @@
 SansadSearch.code-workspace
-app/ui/package-lock.json
 .claude/
 app/.env
 app/.venv/
