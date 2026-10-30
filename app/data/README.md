@@ -30,9 +30,12 @@ For each member the generator writes:
 
 - the full name;
 - initials forms (`H. Vishnu Kamath`, `H. V. Kamath`, `H.V. Kamath`);
+- the first name and surname with middle names dropped (`Morarji Desai` for Morarji Ranchhodji Desai), only when no other member has that key;
 - the surname alone (`Kamath`);
 - Wikidata aliases that share a word with the name;
 - the same forms prefixed with any title that `strip_honorifics` keeps (`Acharya Kripalani`, `Sardar Hukam Singh`).
+
+Two directory entries for one person are merged into the fuller spelling: `Lal K. Advani` (Rajya Sabha) and `Lal Krishna Advani` (Lok Sabha) both become `Lal Krishna Advani`. They must have the same surname and number of words, agree word for word (equal, or one an initial of the other), and share at least one full given name. A directory "title" that is really part of the name (`Diwan`, `Syed`, `Mirza`, `Mohammad`, `Mohd.`) is moved into the given names, so `Shri Diwan` + `Chand Sharma` is `Diwan Chand Sharma` (`D. C. Sharma`); the form without that word is kept too.
 
 A key that maps to more than one person is left out. The exact full name of one member beats an initials form of another. The surname alone, or any one-word key, is kept only when no other member in any source has that surname. The dictionary has no dates, so it cannot tell Mahavir Tyagi (1950s) from K. C. Tyagi (2010s), and `Shri Tyagi` stays unresolved.
 

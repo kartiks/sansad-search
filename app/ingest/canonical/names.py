@@ -82,6 +82,37 @@ def tidy_name(name: Optional[str]) -> Optional[str]:
     return normalize_name_form(strip_honorifics(name)) or None
 
 
+# A lowercase letter directly followed by a capitalised word or an initial marks
+# two names run together with no separator, as in eparlib_members
+# "Nitish KumarRamji Lal Suman" or "Mahabal MishraM. Anjan Kumar Yadav".
+_JOINED_NAME_BOUNDARY_RE = re.compile(r"(?<=[a-z])(?=[A-Z](?:[a-z]|\.))")
+# Name prefixes that legitimately take an internal capital (McDonald, MacLeod).
+_INTERNAL_CAPITAL_PREFIXES = ("Mc", "Mac")
+
+
+def split_joined_names(name: Optional[str]) -> list[str]:
+    """
+    Split a string holding several names run together into separate names.
+
+    The Internet Archive eparlib_members field often lists co-questioners with
+    no delimiter: "P. Jaya Prada NahataYashvir Singh" → ["P. Jaya Prada Nahata",
+    "Yashvir Singh"]. Names written in capitals are left alone, since the
+    boundary can't be seen in them.
+    """
+    if not name or not name.strip():
+        return []
+    parts: list[str] = []
+    start = 0
+    for m in _JOINED_NAME_BOUNDARY_RE.finditer(name):
+        word_start = max(name.rfind(" ", 0, m.start()), name.rfind(".", 0, m.start())) + 1
+        if name[word_start:m.start()] in _INTERNAL_CAPITAL_PREFIXES:
+            continue
+        parts.append(name[start:m.start()])
+        start = m.start()
+    parts.append(name[start:])
+    return [p.strip(" ,;") for p in parts if p.strip(" ,;")]
+
+
 def _normalize_for_lookup(name: str) -> str:
     """Lowercase and collapse internal whitespace for dictionary lookup."""
     return re.sub(r"\s+", " ", name.strip().lower())

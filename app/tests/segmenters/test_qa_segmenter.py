@@ -679,3 +679,143 @@ class TestMinisterNameSources:
         )
         result = segment_qa(_raw_record(text, ministry="Railways"), "LS", "starred_question")
         assert result[0]["minister_name"] == "SHRI PIYUSH GOYAL"
+
+
+class TestEparlibAnswerLayouts:
+    """Layouts of the eParlib (Internet Archive) question items, one question each."""
+
+    _HEAD = (
+        "GOVERNMENT OF INDIA\nPETROLEUM AND NATURAL GAS\nLOK SABHA\n"
+        "UNSTARRED QUESTION NO:5059\nANSWERED ON:28.04.2005\n\n"
+        "SCARCITY OF PETROLEUM PRODUCTS\nNitish Kumar Shri ;Suman Shri Ramji Lal\n\n"
+    )
+
+    def _one(self, body: str, **meta) -> dict:
+        record = _raw_record(self._HEAD + body, proceeding_type="unstarred_question",
+                             question_number=5059, ministry="PETROLEUM AND NATURAL GAS", **meta)
+        result = segment_qa(record, "LS", "unstarred_question")
+        assert len(result) == 1
+        return result[0]
+
+    def test_cited_question_number_does_not_split_the_item(self):
+        rec = self._one(
+            "Will the Minister of PETROLEUM AND NATURAL GAS be pleased to state:\n"
+            "to the reply given to Starred Question No. 310 dated march 24, 2005 and state:\n"
+            "(a) whether exports caused scarcity?\nAnswer\n\n"
+            "MINISTER OF PETROLEUM & NATURAL GAS AND PANCHAYATI RAJ (SHRI MANI SHANKAR AIYAR)\n\n"
+            "(a): No, Sir.\n"
+        )
+        assert rec["minister_name"] == "SHRI MANI SHANKAR AIYAR"
+        assert "No, Sir." in rec["full_text_en"]
+
+    def test_minister_on_the_line_after_answer_label(self):
+        rec = self._one(
+            "Will the Minister of PETROLEUM AND NATURAL GAS be pleased to state:\n(a) the details?\n\n"
+            "Answer\nTHE MINISTER OF STATE IN THE MINISTRY OF PETROLEUM (SHRI K.H. MUNIYAPPA)\n"
+            "(a) As per information received.\n"
+        )
+        assert rec["minister_name"] == "SHRI K.H. MUNIYAPPA"
+
+    def test_wrapped_name_and_independent_charge(self):
+        rec = self._one(
+            "Will the Minister of PETROLEUM AND NATURAL GAS be pleased to state:\n(a) the details?\n\n"
+            "Answer\n\nMINISTER OF STATE IN THE MINISTRY OF PETROLEUM & NATURAL GAS "
+            "(INDEPENDENT CHARGE) (SHRI DHARMENDRA\nPRADHAN)\n\n(a) Yes.\n"
+        )
+        assert rec["minister_name"] == "SHRI DHARMENDRA PRADHAN"
+
+    def test_designation_then_name_on_next_line(self):
+        rec = self._one(
+            "Will the Minister of PETROLEUM AND NATURAL GAS be pleased to state:\n(a) the details?\n\n"
+            "Answer\n\nMinister of CIVIL AVIATION\n(Shri Ashok Gajapathi Raju Pusapati)\n\n(a) Yes.\n"
+        )
+        assert rec["minister_name"] == "Shri Ashok Gajapathi Raju Pusapati"
+
+    def test_name_in_the_block_after_the_designation(self):
+        rec = self._one(
+            "Will the Minister of PETROLEUM AND NATURAL GAS be pleased to state:\n(a) the details?\n\n"
+            "Answer\n\nTHE MINISTER OF STATE IN THE\nMINISTRY OF ROAD TRANSPORT AND HIGHWAYS\n\n"
+            "(SHRI PON. RADHAKRISHNAN)\n(a) No, Madam.\n"
+        )
+        assert rec["minister_name"] == "SHRI PON. RADHAKRISHNAN"
+        assert "No, Madam." in rec["full_text_en"]
+
+    def test_answer_text_after_the_name_is_dropped(self):
+        rec = self._one(
+            "Will the Minister of PETROLEUM AND NATURAL GAS be pleased to state:\n(a) the details?\n\n"
+            "THE MINISTER OF STATE OF THE\nMINISTRY OF FINANCE (SHRI DALBIR\n"
+            "SINGH): (a) The Hon'ble Supreme Court of\nIndia has directed.\n"
+        )
+        assert rec["minister_name"] == "SHRI DALBIR SINGH"
+        assert rec["questioner_names"] == ["Unknown"] or all(
+            "MINISTER" not in n for n in rec["questioner_names"]
+        )
+
+    def test_ocr_brace_for_bracket(self):
+        rec = self._one(
+            "Will the Minister of PETROLEUM AND NATURAL GAS be pleased to state:\n(a) the details?\n\n"
+            "Answer\n\nMinister Of State In The Ministry Of Finance {Shri Shiv Pratap Shukla)\n\n(a) Yes.\n"
+        )
+        assert rec["minister_name"] == "Shri Shiv Pratap Shukla"
+
+    def test_falls_back_to_ministry_without_any_attribution(self):
+        rec = self._one(
+            "Will the Minister of PETROLEUM AND NATURAL GAS be pleased to state:\n(a) the details?\n\n"
+            "(a) The information is being collected.\n"
+        )
+        assert rec["minister_name"] == "Minister of PETROLEUM AND NATURAL GAS"
+
+    def test_multi_question_document_still_splits_without_metadata_number(self):
+        text = (
+            "STARRED QUESTION NO. 1\n\nWill the Minister of Coal be pleased to state:\n(a) output?\n\n"
+            "THE MINISTER OF COAL (SHRI A):\nRising.\n\n"
+            "STARRED QUESTION NO. 2\n\nWill the Minister of Coal be pleased to state:\n"
+            "(a) whether the reply to Starred Question No. 1 was correct?\n\n"
+            "THE MINISTER OF COAL (SHRI A):\nYes.\n"
+        )
+        result = segment_qa(_raw_record(text), "LS", "starred_question")
+        assert [r["question_number"] for r in result] == [1, 2]
+
+
+class TestPrintedWrittenAnswersPages:
+    """1990s eParlib items: a scan of printed pages holding several questions."""
+
+    _PAGES = (
+        "102 Written Answers\n\n"
+        "Clearance of Uttar Pradesh Projects\n\n"
+        "73. SHRI SANTOSH KUMAR GANGWAR : Will the Minister of PLANNING be pleased to state :\n"
+        "(a) the number of projects pending?\n\n"
+        "THE MINISTER OF STATE OF THE MINISTRY OF PLANNING (SHRI YOGINDER K. ALAGH) : (a) Several.\n\n"
+        "Supply of Petroleum Products\n\n"
+        "75. SHRI NARAYAN ATHAWALAY : Will the\nPRIME MINISTER be pleased to state :\n"
+        "(a) the estimated demand for cooking gas?\n\n"
+        "THE MINISTER OF STATE IN THE MINISTRY OF\nPETROLEUM AND NATURAL GAS (SHRI T.R. BAALU) :\n"
+        "(a) Demand has been fully met.\n\n"
+        "(Fig. in TMT)\nLPG 554 606 677\n\n"
+        "76. SHRI RAM SAGAR : Will the PRIME MINISTER be pleased to refer to the answer?\n\n"
+        "THE PRIME MINISTER (SHRI H. D. DEVE GOWDA) : Yes.\n"
+    )
+
+    def test_own_question_is_cut_out(self):
+        record = _raw_record(self._PAGES, proceeding_type="unstarred_question", question_number=75)
+        result = segment_qa(record, "LS", "unstarred_question")
+        assert len(result) == 1
+        rec = result[0]
+        assert rec["minister_name"] == "SHRI T.R. BAALU"
+        assert "Demand has been fully met" in rec["full_text_en"]
+        assert "GANGWAR" not in rec["full_text_en"] and "RAM SAGAR" not in rec["full_text_en"]
+
+    def test_unknown_own_number_keeps_the_whole_page(self):
+        record = _raw_record(self._PAGES, proceeding_type="unstarred_question", question_number=999)
+        result = segment_qa(record, "LS", "unstarred_question")
+        assert len(result) == 1
+        assert "GANGWAR" in result[0]["full_text_en"]
+
+    def test_bracketed_non_name_is_not_taken_as_minister(self):
+        text = (
+            "UNSTARRED QUESTION NO:5\n\nWill the Minister of COAL be pleased to state:\n(a) output?\n\n"
+            "Answer\n\nTHE MINISTER OF STATE IN THE\nMINISTRY OF COAL\n\n(Fig. in TMT)\nLPG 554\n"
+        )
+        record = _raw_record(text, proceeding_type="unstarred_question", question_number=5)
+        rec = segment_qa(record, "LS", "unstarred_question")[0]
+        assert "Fig." not in (rec["minister_name"] or "")

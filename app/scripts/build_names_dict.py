@@ -18,6 +18,7 @@ strip_honorifics and normalize_name_form in ingest/canonical/names.py):
   tier 1  Wikidata aliases; the full name   "Acharya J. B. Kripalani"
           with a title the stripper keeps
   tier 2  initials forms                    "H. Vishnu Kamath", "H. V. Kamath", "H.V. Kamath"
+          middle names dropped              "Morarji Desai" (only if no one else has the key)
   tier 3  surname only                      "Kamath"
 A lookup key produced by several people is resolved by the lowest tier; a tie means
 the key is ambiguous and is left out. Surname-only keys (tier 3) are written only
@@ -40,7 +41,7 @@ import sys
 import time
 import unicodedata
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -67,6 +68,8 @@ EARLY_LOK_SABHAS = {1, 2}
 EARLY_RS_START_YEAR = 1962
 
 FULL, ALIAS, INITIALS, SURNAME = 0, 1, 2, 3
+# Middle names dropped ("Morarji Desai"): kept only when no one else claims the key.
+MIDDLE_DROPPED = 2.5
 
 # Service decorations and suffixes that appear inside name fields.
 _DECORATIONS = {"avsm", "pvsm", "uysm", "ysm", "vsm", "vrc", "mvc", "retd", "retd.", "tps"}
@@ -80,6 +83,10 @@ _LEADING_TITLES = {"sardar", "sardarni", "pandit", "acharya", "maulana", "molana
                    "swami", "mahant", "sadhvi", "haji", "hafiz", "seth", "kunwar", "kunwarani",
                    "rajkumari", "maharaja", "maharani", "maharajkumar", "thiru", "jathedar",
                    "diwan", "kazi", "qazi"}
+
+# Directory titles that are really the first word of the name: "Shri Diwan" +
+# "Chand Sharma" is Diwan Chand Sharma, "D. C. Sharma" in the debates.
+_NAME_TITLES = {"diwan", "syed", "mirza", "mohammad", "mohd."}
 
 
 @dataclass(frozen=True)
@@ -254,6 +261,9 @@ def variants_for(member: Member, full: str) -> list[Variant]:
     out = [Variant(full, FULL)]
     out += [Variant(v, INITIALS) for v in initials_forms(g, s)]
     surname = " ".join(s)
+    if len(g) >= 2 and not _is_initial(g[0]) and surname_ok:
+        # Middle names dropped: "Morarji Ranchhodji Desai" → "Morarji Desai"
+        out.append(Variant(f"{g[0]} {surname}", MIDDLE_DROPPED))
     if surname_ok and len(surname.replace(".", "")) >= 3 and not _is_initial(surname):
         out.append(Variant(surname, SURNAME, lookup_key(surname)))
 
@@ -300,9 +310,75 @@ def _full_name(member: Member) -> str:
     return _collapse(f"{member.given} {member.surname}")
 
 
+def _fold_name_title(member: Member) -> Member:
+    """Move a title that is really part of the name into the given names."""
+    words = member.honorific.split()
+    if not words or words[-1].lower() not in _NAME_TITLES:
+        return member
+    return replace(
+        member,
+        given=_collapse(f"{words[-1]} {member.given}"),
+        honorific=" ".join(words[:-1]),
+    )
+
+
+def _same_token(a: str, b: str) -> bool:
+    """Equal, or one is the other's initial ("K." / "Krishna")."""
+    a, b = a.lower().rstrip("."), b.lower().rstrip(".")
+    if a == b:
+        return True
+    if len(a) == 1 and len(b) > 1:
+        return b.startswith(a)
+    if len(b) == 1 and len(a) > 1:
+        return a.startswith(b)
+    return False
+
+
+def _fuller_spellings(names: list[str]) -> dict[str, str]:
+    """
+    Map a name to the one fuller spelling of the same person elsewhere in the
+    directories: "Lal K. Advani" (Rajya Sabha) → "Lal Krishna Advani" (Lok Sabha).
+
+    The names must have the same surname and number of words, agree word for word
+    (equal, or an initial of the other), and share at least one full given name,
+    so "S. Singh" is never merged into "Sant Singh". A name with two or more fuller
+    candidates is left alone.
+    """
+    by_shape: dict[tuple[str, int], set[str]] = defaultdict(set)
+    for n in names:
+        toks = n.split()
+        if len(toks) >= 3:
+            by_shape[(toks[-1].lower(), len(toks))].add(n)
+
+    def letters(n: str) -> int:
+        return sum(c.isalpha() for c in n)
+
+    out: dict[str, str] = {}
+    for group in by_shape.values():
+        for n in group:
+            toks = n.split()
+            cands = [
+                o for o in group
+                if o != n and letters(o) > letters(n)
+                and all(_same_token(a, b) for a, b in zip(toks, o.split()))
+                and any(a.lower() == b.lower() and not _is_initial(a)
+                        for a, b in zip(toks[:-1], o.split()[:-1]))
+            ]
+            if len(cands) == 1:
+                out[n] = cands[0]
+    return out
+
+
 def build_rows(members: Iterable[Member]) -> BuildResult:
     """Resolve members into (variant, canonical_name) rows. Pure; no network."""
-    members = list(members)
+    folded_from: dict[int, Member] = {}
+    folded: list[Member] = []
+    for m in members:
+        f = _fold_name_title(m)
+        if f is not m:
+            folded_from[id(f)] = m
+        folded.append(f)
+    members = folded
     sansad = [m for m in members if m.source in ("ls", "rs")]
     ca = [m for m in members if m.source == "ca"]
 
@@ -312,11 +388,12 @@ def build_rows(members: Iterable[Member]) -> BuildResult:
     def canonical_for(name: str) -> str:
         return canon_by_key.setdefault(lookup_key(name), name)
 
+    fuller = _fuller_spellings([_full_name(m) for m in sansad])
     assigned: list[tuple[Member, str]] = []
     for m in sansad:
         full = _full_name(m)
         if full:
-            assigned.append((m, canonical_for(full)))
+            assigned.append((m, canonical_for(fuller.get(full, full))))
 
     # Link CA members to a sansad entry: (1) label or alias equals a full name;
     # (2) for early-Parliament members only, names agree once given names are
@@ -357,6 +434,12 @@ def build_rows(members: Iterable[Member]) -> BuildResult:
     for m, c in assigned:
         own_full = _full_name(m)
         vs = variants_for(m, own_full)
+        if id(m) in folded_from:
+            # Debates also omit the folded word: "Bashir Husain Zaidi" for Syed Bashir Husain Zaidi.
+            original = folded_from[id(m)]
+            for v in variants_for(original, _full_name(original)):
+                v.tier = max(v.tier, ALIAS)
+                vs.append(v)
         if own_full != c:
             # Linked CA member or differently spelled duplicate: its own name is an alias.
             for v in vs:
@@ -377,6 +460,12 @@ def build_rows(members: Iterable[Member]) -> BuildResult:
     rows: list[tuple[str, str]] = []
     ambiguous: dict[str, list[str]] = {}
     for key, entries in by_key.items():
+        if len(entries) > 1:
+            # A middle-name-dropped form yields to anyone else claiming the key.
+            entries = {c: e for c, e in entries.items() if e[0] != MIDDLE_DROPPED} or entries
+            if len(entries) > 1 and all(e[0] == MIDDLE_DROPPED for e in entries.values()):
+                ambiguous[key] = sorted(entries)
+                continue
         best = min(e[0] for e in entries.values())
         winners = [c for c, e in entries.items() if e[0] == best]
         if len(winners) > 1:

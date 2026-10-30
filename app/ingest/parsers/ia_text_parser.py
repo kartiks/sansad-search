@@ -15,7 +15,8 @@ Maps IA custom eparlib_* fields:
   eparlib_session_number   → session_number (int or Roman numeral I–XVII)
   eparlib_question_type    → proceeding_type ('Starred'/'Unstarred' → typed string)
   eparlib_question_number  → question_number (int)
-  eparlib_members          → questioner_names (list; string split on comma or list)
+  eparlib_members          → questioner_names (list; string split on semicolon, and
+                             names run together without a separator are split)
   eparlib_relation_ministry → ministry
   lok_sabha_number         → lok_sabha_number (LS only; pre-parsed int set on the
                              DocumentRef metadata by InternetArchiveProvider; null
@@ -51,6 +52,8 @@ import logging
 import re
 from datetime import datetime
 from typing import Any
+
+from ingest.canonical.names import split_joined_names
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +245,11 @@ def parse_ia_text(
         except (ValueError, TypeError):
             pass
 
-    questioner_names: list[str] = _get_list(metadata, "eparlib_members")
+    # eparlib_members often runs co-questioners together ("Nitish KumarRamji Lal Suman").
+    questioner_names: list[str] = [
+        part for name in _get_list(metadata, "eparlib_members")
+        for part in split_joined_names(name)
+    ]
     ministry: str | None = _get(metadata, "eparlib_relation_ministry")
     minister_name: str | None = _get(metadata, "eparlib_minister_name")
 

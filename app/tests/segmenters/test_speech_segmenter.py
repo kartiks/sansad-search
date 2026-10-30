@@ -103,6 +103,32 @@ class TestLanguageHandling:
         assert "The first part is in English" in full_text
         assert "translated portion" in full_text
 
+    def test_english_with_ocr_devanagari_noise_keeps_text(self):
+        # eParlib OCR turns digits and brackets into Devanagari: "(0०) to (d)".
+        text = "(0०) to (d). The feasibility of introducing a Rajdhani type train\nshall be examined."
+        full_text, is_translated, has_untranslated = _detect_language_handling(text)
+        assert full_text == "(0) to (d). The feasibility of introducing a Rajdhani type train\nshall be examined."
+        assert is_translated is False
+        assert has_untranslated is False
+
+    def test_english_with_untranslated_hindi_passage(self):
+        text = (
+            "Sir, I rise to support the Bill and I have a few points to make.\n"
+            "यह पूरी तरह से हिंदी में है।\n"
+            "The second point concerns the funding of the scheme."
+        )
+        full_text, is_translated, has_untranslated = _detect_language_handling(text)
+        assert "support the Bill" in full_text and "funding of the scheme" in full_text
+        assert not any("ऀ" <= ch <= "ॿ" for ch in full_text)
+        assert is_translated is False
+        assert has_untranslated is True   # the Hindi line had no translation
+
+    def test_mostly_hindi_with_a_few_latin_letters_is_case4(self):
+        text = "यह पूरी तरह से हिंदी में है और कोई अनुवाद उपलब्ध नहीं है। (a) GST"
+        full_text, _, has_untranslated = _detect_language_handling(text)
+        assert full_text is None
+        assert has_untranslated is True
+
     def test_case4_hindi_no_translation(self):
         text = "यह पूरी तरह से हिंदी में है और कोई अनुवाद उपलब्ध नहीं है।"
         full_text, is_translated, has_untranslated = _detect_language_handling(text)

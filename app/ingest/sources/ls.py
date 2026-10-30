@@ -28,7 +28,7 @@ from typing import AsyncGenerator, Optional, Union
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.canonical.names import canonicalize_name, tidy_name
+from ingest.canonical.names import canonicalize_name, split_joined_names, tidy_name
 from ingest.canonical.sessions import canonicalize_session
 from ingest.checkpoints.store import CheckpointStore
 from ingest.indexer import Indexer
@@ -402,7 +402,11 @@ class LSOrchestrator:
                     record["speaker_name_unresolved"] = unresolved
                 else:
                     record["questioner_names"] = [
-                        n for n in (tidy_name(q) for q in record.get("questioner_names") or []) if n
+                        n for n in (
+                            tidy_name(part)
+                            for q in record.get("questioner_names") or []
+                            for part in split_joined_names(q)
+                        ) if n
                     ]
                     record["minister_name"] = tidy_name(record.get("minister_name"))
                 record["session_name"] = canonicalize_session(

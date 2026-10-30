@@ -164,10 +164,10 @@ If the Meilisearch index needs to be rebuilt (schema change, index corruption, p
 
 ```bash
 cd app
-python -m ingest.indexer --reindex-from-db
+python -m ingest.main --source all --reindex-from-db
 ```
 
-This reads all records from `speeches` and `qa_exchanges` in PostgreSQL and pushes them to Meilisearch in batches. Does not re-scrape any source websites. Does not update the checkpoint store.
+This reads all records from `speeches` and `qa_exchanges` in PostgreSQL and pushes them to Meilisearch in batches. Does not re-scrape any source websites. Does not update the checkpoint store. Documents keep their PostgreSQL `id`, so re-pushing overwrites them in place and is safe to repeat. It always covers every corpus; `--source` is required by the CLI but does not narrow it.
 
 ---
 
@@ -322,7 +322,7 @@ Use when PostgreSQL data is intact but the Meilisearch index is stale, corrupt, 
 
 ```bash
 cd app
-python -m ingest.indexer --reindex-from-db
+python -m ingest.main --source all --reindex-from-db
 ```
 
 Reads all records from `speeches` and `qa_exchanges` in PostgreSQL and pushes them to Meilisearch in batches. Does not modify the checkpoint store or PostgreSQL data. See §3.6 for full details.

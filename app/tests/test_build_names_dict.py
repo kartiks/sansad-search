@@ -115,6 +115,43 @@ class TestBuildRows:
         assert rows["a. kumar"] == "A. Kumar"
         assert rows["ajay kumar"] == "Ajay Kumar"
 
+    def test_fuller_spelling_of_the_same_person_is_merged(self):
+        rows = _rows(
+            Member("ls", "9", "Lal Krishna", "Advani", "Shri"),
+            Member("rs", "275", "Lal K.", "Advani", "Shri"),
+        )
+        assert rows["l. k. advani"] == "Lal Krishna Advani"
+        assert rows["lal k. advani"] == "Lal Krishna Advani"
+
+    def test_initial_only_names_are_not_merged(self):
+        rows = _rows(Member("ls", "1", "Sant Ram", "Singh"), Member("rs", "2", "S. R.", "Singh"))
+        assert rows["s. r. singh"] == "S. R. Singh"   # no shared full given name
+
+    def test_two_fuller_candidates_are_not_merged(self):
+        rows = _rows(
+            Member("ls", "1", "Ram Krishna", "Yadav"),
+            Member("ls", "2", "Ram Kishore", "Yadav"),
+            Member("rs", "3", "Ram K.", "Yadav"),
+        )
+        assert rows["ram k. yadav"] == "Ram K. Yadav"
+
+    def test_name_title_folded_into_given_names(self):
+        rows = _rows(Member("ls", "1004", "Chand", "Sharma", "Shri Diwan"))
+        assert rows["d. c. sharma"] == "Diwan Chand Sharma"
+        assert rows["diwan chand sharma"] == "Diwan Chand Sharma"
+        assert rows["chand sharma"] == "Diwan Chand Sharma"   # the form without the word
+
+    def test_middle_name_dropped_form(self):
+        rows = _rows(Member("ls", "1", "Morarji Ranchhodji", "Desai", "Shri"))
+        assert rows["morarji desai"] == "Morarji Ranchhodji Desai"
+
+    def test_middle_name_dropped_form_yields_to_another_member(self):
+        rows = _rows(
+            Member("ls", "1", "Krishna Mohan Pyare", "Sinha"),
+            Member("ls", "2", "Krishna", "Sinha", "Shri"),
+        )
+        assert rows["krishna sinha"] == "Krishna Sinha"
+
     def test_initials_shared_by_two_members_are_left_out(self):
         rows = _rows(
             Member("ls", "1", "Ram Surat", "Prasad"),
@@ -281,6 +318,9 @@ def test_committed_csv_keys_match_normalize_name_form(committed):
     ("Dr. B. R. Ambedkar", ("B. R. Ambedkar", False)),
     ("Shri K. C. Tyagi", ("K. C. Tyagi", False)),
     ("Shri Tyagi", ("Tyagi", True)),          # several members named Tyagi
+    ("Shri D. C. Sharma", ("Diwan Chand Sharma", False)),
+    ("SHRI L. K. ADVANI", ("Lal Krishna Advani", False)),
+    ("Shri Morarji Desai", ("Morarji Ranchhodji Desai", False)),
 ])
 def test_committed_csv_known_variants(raw, expected):
     assert canonicalize_name(raw, load_names_dict(_CSV)) == expected

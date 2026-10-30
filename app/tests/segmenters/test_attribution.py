@@ -81,11 +81,16 @@ class TestPresidingCompact:
     @pytest.mark.parametrize("head", [
         "MR, SPEAKER", "MR.SPEAKER", "MR DEPUT Y-SPEAKER", "MR. SPBAKER",
         "MR. SPFAKER", "MR. CHATRMAN", "MR. CHAICMAN", "HON'BLE SPEAKER", "HON. CHAIRMEN",
+        "MR. DEPATY-SPEAKER", "Mr. Depnty-Speaker", "MR. DFPUTY-SPEAKER", "MR. DEPIWTY-SPEAKER",
+        "MR. DEPUITY-SPEAKER", "MRA. SPEAKER", "MR. DEPUTY-CHAIRMAN", "MR. DEPUTY-CHATRMAN",
     ])
     def test_ocr_variants_detected(self, head):
         assert is_presiding_compact(head)
 
-    @pytest.mark.parametrize("head", ["MR. SHARMAN", "MR. MENON", "SHRI SPEAKMAN"])
+    @pytest.mark.parametrize("head", [
+        "MR. SHARMAN", "MR. MENON", "SHRI SPEAKMAN", "MR. DESHPANDE", "MR. DEVASAHAYAM",
+        "MR. DESHMUKH", "MRA. RAO", "MR. DEPUTY MINISTER",
+    ])
     def test_names_not_mistaken_for_presiding(self, head):
         assert not is_presiding_compact(head)
 
