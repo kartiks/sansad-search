@@ -1,7 +1,7 @@
 # Deployment — SansadSearch
 
 **PRD version:** v3.3
-**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks); updated 2026-06-01 for PRD v2.0 — §6.3 schema migration for F01 new columns/indexes + re-ingestion; no new env vars, dependencies, or infrastructure (F09 detail endpoint reuses the existing Railway Postgres pool); updated 2026-06-03 — raw document store: §3.3/§3.5/§6.1 updated for `raw_documents`; §6.4 selective re-processing runbook added; no new env vars, dependencies, or infrastructure; updated 2026-06-05 — post-deploy production fixes: `app/ui/vercel.json` proxy+SPA rewrites documented (§3.2); `app/.python-version` Railway/Nixpacks pin documented (§3.1); `app/ui/.npmrc` legacy-peer-deps documented (§3.2); `VITE_API_URL` removed from §2.2 (not used in production — API calls proxied via vercel.json); §4 Vercel row updated; updated 2026-06-06 for PRD v3.0 — §6.6 schema migration for F01 new columns (`lok_sabha_number`, `segments`, `canonical_doc_id`) + full re-ingestion; no new env vars, dependencies, or infrastructure (F09 adjacent endpoint and F10 debug endpoints reuse the existing Railway Postgres pool and Meilisearch client; debug mode is exempt from response-time SLAs per NFR PERF-3 and is an unauthenticated v1 choice per NFR SEC-1); reviewed 2026-06-09 for PRD v3.1 — no deployment-relevant changes (F03 subject filter, F04 curly quote normalization, F05 cropLength reduction, F08 subject in saved search state are all ingestion-logic and application-code changes only; no new env vars, dependencies, or infrastructure); updated 2026-06-12 — ingestion checkpoint store moved from local SQLite to PostgreSQL and the pipeline made deployable as a Railway Cron Job: §1 hosting table + §2.3 + §3.3/§3.5 updated; new §3.7 (Railway Cron Job deployment) and §6.7 (SQLite→PostgreSQL backfill migration — no re-ingestion); §6.1 (TRUNCATE includes the two checkpoint tables, `rm …db` step removed), §6.4 Step 3 (SQL DELETE replaces the sqlite3 snippet), and §6.5 (`clear_corpus.py` — `--target sqlite` renamed to `--target checkpoints`) updated. **No new env vars, cloud providers, or infrastructure beyond the existing Railway project**; reviewed 2026-06-14 (PRD v3.2 — wording-only diff, no deployment-relevant change; header bumped v3.1→v3.2; verification pass fixed three doc defects: §6.3 PRD-v2.0-migration body had been displaced below §6.5 and was relocated under its header; §6.6 F05 snippet figure corrected to note cropLength ≥400 at v3.0 / ≥200 at v3.1); updated 2026-06-22 (PRD v3.3: F02/F05 — configurable snippet size. New optional `SNIPPET_DEFAULT_WORDS` API env var (§2.1, default 100) sets the operator-configurable default snippet size; per-request `snippet_size` overrides within 20–1000 (NFR PERF-4); Meilisearch `cropLength` is now dynamic. No new dependencies, services, cloud providers, index re-configuration, or migration — purely a query-time parameter + one optional env var); updated 2026-06-22 (top-line PRD version header reconciled v3.2→v3.3 — body already carried the v3.3 changelog; closes Phase 18 arch review escalation 2)
+**Generated:** 2026-05-28 (v1.0); updated 2026-05-29 (v1.1); updated 2026-05-30 (ingestion source redesign — per-source base-URL overrides; Internet Archive bulk path; reconciled to PRD v1.2: OCR removed, no Tesseract dependency); reviewed 2026-05-31 for PRD v1.3 — no deployment-relevant changes (RS-via-IA citation rule is an ingestion-logic change only; no new env vars, dependencies, or infrastructure); updated 2026-06-01 — added §6 Operations (full clean reindex and Meilisearch-only reindex runbooks); updated 2026-06-01 for PRD v2.0 — §6.3 schema migration for F01 new columns/indexes + re-ingestion; no new env vars, dependencies, or infrastructure (F09 detail endpoint reuses the existing Railway Postgres pool); updated 2026-06-03 — raw document store: §3.3/§3.5/§6.1 updated for `raw_documents`; §6.4 selective re-processing runbook added; no new env vars, dependencies, or infrastructure; updated 2026-06-05 — post-deploy production fixes: `app/ui/vercel.json` proxy+SPA rewrites documented (§3.2); `app/.python-version` Railway/Nixpacks pin documented (§3.1); `app/ui/.npmrc` legacy-peer-deps documented (§3.2); `VITE_API_URL` removed from §2.2 (not used in production — API calls proxied via vercel.json); §4 Vercel row updated; updated 2026-06-06 for PRD v3.0 — §6.6 schema migration for F01 new columns (`lok_sabha_number`, `segments`, `canonical_doc_id`) + full re-ingestion; no new env vars, dependencies, or infrastructure (F09 adjacent endpoint and F10 debug endpoints reuse the existing Railway Postgres pool and Meilisearch client; debug mode is exempt from response-time SLAs per NFR PERF-3 and is an unauthenticated v1 choice per NFR SEC-1); reviewed 2026-06-09 for PRD v3.1 — no deployment-relevant changes (F03 subject filter, F04 curly quote normalization, F05 cropLength reduction, F08 subject in saved search state are all ingestion-logic and application-code changes only; no new env vars, dependencies, or infrastructure); updated 2026-06-12 — ingestion checkpoint store moved from local SQLite to PostgreSQL and the pipeline made deployable as a Railway Cron Job: §1 hosting table + §2.3 + §3.3/§3.5 updated; new §3.7 (Railway Cron Job deployment) and §6.7 (SQLite→PostgreSQL backfill migration — no re-ingestion); §6.1 (TRUNCATE includes the two checkpoint tables, `rm …db` step removed), §6.4 Step 3 (SQL DELETE replaces the sqlite3 snippet), and §6.5 (`clear_corpus.py` — `--target sqlite` renamed to `--target checkpoints`) updated. **No new env vars, cloud providers, or infrastructure beyond the existing Railway project**; reviewed 2026-06-14 (PRD v3.2 — wording-only diff, no deployment-relevant change; header bumped v3.1→v3.2; verification pass fixed three doc defects: §6.3 PRD-v2.0-migration body had been displaced below §6.5 and was relocated under its header; §6.6 F05 snippet figure corrected to note cropLength ≥400 at v3.0 / ≥200 at v3.1); updated 2026-06-22 (PRD v3.3: F02/F05 — configurable snippet size. New optional `SNIPPET_DEFAULT_WORDS` API env var (§2.1, default 100) sets the operator-configurable default snippet size; per-request `snippet_size` overrides within 20–1000 (NFR PERF-4); Meilisearch `cropLength` is now dynamic. No new dependencies, services, cloud providers, index re-configuration, or migration — purely a query-time parameter + one optional env var); updated 2026-06-22 (top-line PRD version header reconciled v3.2→v3.3 — body already carried the v3.3 changelog; closes Phase 18 arch review escalation 2); updated 2026-10-30 — §3.2: `app/ui/package-lock.json` now committed, `.npmrc` (`legacy-peer-deps`) removed after upgrading `@vitejs/plugin-react` to 6.x for Vite 8, Vercel Node.js 20.19+/22.12+ requirement noted; §5: local venv pinned to Python 3.12, frontend installs via `npm ci`
 
 ---
 
@@ -103,7 +103,9 @@ Output directory:  dist
     ]
   }
   ```
-- `.npmrc` — sets `legacy-peer-deps=true`; resolves npm peer dependency conflicts during `npm install` on Vercel.
+- `package-lock.json` — pins the full dependency tree so Vercel builds are reproducible. Vercel detects it and installs with npm. All peer dependencies resolve cleanly (no `.npmrc` / `legacy-peer-deps` override needed).
+
+Vercel's Node.js version (Project Settings → Build and Deployment) must be 20.19+ or 22.12+ (required by Vite 8 and `@vitejs/plugin-react` 6); the 22.x default works.
 
 No Vercel environment variables are required. Vercel rebuilds and deploys on each push to the connected branch.
 
@@ -213,8 +215,8 @@ The pipeline can run unattended in the cloud as a **Railway Cron Job** in the sa
 
 ### 5.1 Prerequisites
 
-- Python 3.12+
-- Node.js 20+
+- Python 3.12 (matches the `app/.python-version` pin used by Railway)
+- Node.js 20.19+ or 22.12+
 - PostgreSQL 16 (local instance, or use the Railway connection string directly)
 - A Meilisearch instance — either a local Meilisearch binary or a Meilisearch Cloud dev instance
 
@@ -222,17 +224,22 @@ The pipeline can run unattended in the cloud as a **Railway Cron Job** in the sa
 
 ```bash
 cd app
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
+python --version   # should print 3.12.x
 pip install -r requirements.txt
 ```
+
+Use `python3.12` explicitly: on macOS, `python3` may be the system Python 3.9. If an existing `.venv` was built with another version, delete it and recreate it with the commands above.
 
 ### 5.3 Frontend
 
 ```bash
 cd app/ui
-npm install
+npm ci
 ```
+
+`npm ci` installs exactly what `package-lock.json` pins. Use `npm install <pkg>` only when changing dependencies, and commit the updated lockfile.
 
 ### 5.4 Environment variables
 
