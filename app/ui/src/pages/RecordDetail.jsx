@@ -3,7 +3,9 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'reac
 import { useRecord } from '../hooks/useRecord.js'
 import { useAdjacent } from '../hooks/useAdjacent.js'
 import { useCookieHistory } from '../hooks/useCookieHistory.js'
-import { useSavedSearches, sanitizeStoredFilters } from '../hooks/useSavedSearches.js'
+import { useSavedSearches } from '../hooks/useSavedSearches.js'
+import { buildSearchUrl } from '../lib/filterParams.js'
+import { safeHttpUrl } from '../lib/safeUrl.js'
 import {
   getProceedingTypeLabel,
   getSourceLabel,
@@ -19,7 +21,7 @@ import {
   LOAD_NEXT,
   ADJACENT_ERROR,
 } from '../lib/constants.js'
-import { defaultFilterState, isDefaultFilterState } from '../lib/filterState.js'
+import { defaultFilterState, sanitizeStoredFilters } from '../lib/filterState.js'
 import { toOrdinal } from '../lib/ordinal.js'
 import AdvancedSearchModal from '../components/AdvancedSearchModal.jsx'
 import SavedSearchesPanel from '../components/SavedSearchesPanel.jsx'
@@ -119,12 +121,7 @@ function RecordDetailHeader({ debugMode }) {
     const trimmed = (q || '').trim()
     if (trimmed.length < 2) return
     recordSearch(trimmed)
-    const sp = new URLSearchParams()
-    sp.set('q', trimmed)
-    sp.set('page', '1')
-    navigate(`/search?${sp.toString()}`, {
-      state: f && !isDefaultFilterState(f) ? { filters: f } : undefined,
-    })
+    navigate(buildSearchUrl({ query: trimmed, filters: f }))
   }
 
   const onSubmit = (e) => {
@@ -237,6 +234,7 @@ function RecordDetailHeader({ debugMode }) {
               onRename={(id, name) => renameEntry(id, name)}
               onToast={() => {}}
               onDismiss={() => setSavedPanelOpen(false)}
+              anchorRef={bookmarkBtnRef}
             />
           </div>
           {debugMode && (
@@ -340,11 +338,7 @@ export default function RecordDetail() {
                   <button
                     className="record-back-btn"
                     data-testid="back-to-results"
-                    onClick={() =>
-                      navigate(resultsPath || '/', {
-                        state: { filters: location.state?.filters },
-                      })
-                    }
+                    onClick={() => navigate(resultsPath || '/')}
                   >
                     {BACK_TO_RESULTS}
                   </button>
@@ -501,10 +495,10 @@ export default function RecordDetail() {
                 </div>
               )}
 
-              {data.source_url && (
+              {safeHttpUrl(data.source_url) && (
                 <div className="record-meta-field" data-testid="field-source-url">
                   <a
-                    href={data.source_url}
+                    href={safeHttpUrl(data.source_url)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="record-view-source"

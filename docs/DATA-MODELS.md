@@ -874,13 +874,15 @@ The ingestion pipeline holds **no local checkpoint file**. Stage 2 checkpoint st
 
 **Derived, not source-of-truth.** Both tables are reconstructable from the canonical record tables (`speeches`/`qa_exchanges` joined to `raw_documents`) — this is what makes the SQLite→PostgreSQL migration a backfill rather than a re-ingestion (DEPLOYMENT §6.7). `processed_documents` is partially cleared (for the re-processing scope) before a selective Stage 2 re-run (DEPLOYMENT §6.4); both are truncated on a full clean reindex (DEPLOYMENT §6.1). Co-locating them in PostgreSQL (rather than a local SQLite file) is what allows the pipeline to run as a stateless Railway Cron Job (ARCHITECTURE §2, DEPLOYMENT §3.7).
 
-### 4.4 Browser Cookies (client-side only)
+### 4.4 Browser localStorage (client-side only)
 
 **Purpose:** F08 recent searches and saved searches.
 
-Two separate cookies:
-- `ss_recent`: JSON array of `{ query: string, timestamp: number }`, max 10 entries, 30-day expiry
-- `ss_saved`: JSON array of `{ id: string, name: string, query: string, filters: FilterState, timestamp: number }`, max 20 entries, no expiry
+Two separate `localStorage` keys (moved from cookies on 2026-10-30; a cookie silently stopped saving past ~4 KB, which full filter objects reached after about 7 saved searches):
+- `ss_recent`: JSON array of `{ query: string, timestamp: number }`, max 10 entries; entries older than 30 days are dropped on read
+- `ss_saved`: JSON array of `{ id: string, name: string, query: string, filters: Partial<FilterState>, timestamp: number }`, max 20 entries, no expiry
+
+Saved entries store only the filters that differ from the defaults (`{}` for no filters); missing keys are read back as defaults, and unrecognised values are dropped.
 
 `FilterState` shape:
 ```json
@@ -890,8 +892,11 @@ Two separate cookies:
   "date_from": "YYYY-MM-DD | null",
   "date_to": "YYYY-MM-DD | null",
   "speaker": "string | null",
-  "session": "string | null"
+  "session": "string | null",
+  "subject": "string | null"
 }
 ```
 
-Combined cookie size must not exceed 4 KB. Near-capacity handling: trim oldest `ss_recent` entries first; never auto-remove `ss_saved` entries.
+**Migration:** the first time a key is read and is absent from `localStorage`, the legacy `ss_recent` / `ss_saved` cookie of the same name is copied in and then deleted. If `localStorage` is unavailable, history is hidden and search works normally.
+
+**Results URL:** active filters are also encoded in the results page query string (only non-default values): `source=LS,RS`, `type=debate,zero_hour`, `from`, `to`, `speaker`, `session`, `subject` — alongside `q`, `page`, `sort` and `debug`.

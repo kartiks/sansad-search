@@ -259,3 +259,22 @@ describe('SavedSearchesPanel — dismiss', () => {
     expect(onDismiss).not.toHaveBeenCalled()
   })
 })
+
+describe('SavedSearchesPanel — outside clicks', () => {
+  it('dismisses on mousedown outside the panel', () => {
+    const onDismiss = vi.fn()
+    renderPanel({ onDismiss })
+    fireEvent.mouseDown(document.body)
+    expect(onDismiss).toHaveBeenCalled()
+  })
+
+  it('does not dismiss on mousedown inside anchorRef (the toggle button)', () => {
+    const onDismiss = vi.fn()
+    const anchor = document.createElement('button')
+    document.body.appendChild(anchor)
+    renderPanel({ onDismiss, anchorRef: { current: anchor } })
+    fireEvent.mouseDown(anchor)
+    expect(onDismiss).not.toHaveBeenCalled()
+    anchor.remove()
+  })
+})

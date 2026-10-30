@@ -71,6 +71,10 @@ export default function SavedSearchesPanel({
   onRename,
   onToast,
   onDismiss,
+  // Element wrapping the button that toggles this panel. Clicks inside it are
+  // not "outside" clicks; otherwise mousedown closes the panel and the
+  // button's click immediately reopens it.
+  anchorRef,
 }) {
   const containerRef = useRef(null)
   const [renamingId, setRenamingId] = useState(null)
@@ -84,9 +88,9 @@ export default function SavedSearchesPanel({
     }
 
     function handleMouseDown(e) {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
-        onDismiss()
-      }
+      if (!containerRef.current || containerRef.current.contains(e.target)) return
+      if (anchorRef?.current && anchorRef.current.contains(e.target)) return
+      onDismiss()
     }
     function handleKeyDown(e) {
       if (e.key === 'Escape') onDismiss()
@@ -98,7 +102,7 @@ export default function SavedSearchesPanel({
       document.removeEventListener('mousedown', handleMouseDown)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [visible, onDismiss])
+  }, [visible, onDismiss, anchorRef])
 
   if (!visible) return null
 
