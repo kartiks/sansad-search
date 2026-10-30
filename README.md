@@ -28,8 +28,8 @@ SansadSearch indexes the complete proceedings of the Constituent Assembly of Ind
 | Source | URL |
 |--------|-----|
 | Constituent Assembly debates | constitutionofindia.net (HTML) |
-| Lok Sabha debates and questions | Internet Archive (archive.org) · eparlib.sansad.in (DSpace 7 fallback, 2019+) |
-| Rajya Sabha debates and questions | Internet Archive (archive.org) — post-2018 data not available |
+| Lok Sabha debates and questions | Internet Archive eparlib mirror (to Aug 2018) · elibrary.sansad.in "Lok Sabha Debates (Text)" (2019 onward) |
+| Rajya Sabha debates and questions | Internet Archive rsdebate mirror (1952 – Dec 2009) — later data not yet available |
 
 ## Setup and Run
 

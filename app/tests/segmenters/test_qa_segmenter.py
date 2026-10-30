@@ -653,3 +653,29 @@ class TestMinisterNameExtraction:
         )
         result = segment_qa(_raw_record(text), "LS", "starred_question")
         assert result[0]["lok_sabha_number"] is None
+
+
+class TestMinisterNameSources:
+    def test_metadata_minister_preferred_over_ocr_text(self):
+        text = (
+            "UNSTARRED QUESTION NO. 488\n\n"
+            "Will the Minister of Petroleum be pleased to state:\n"
+            "(a) the details?\n\n"
+            "FH MINISTER OF STATE OF THe MINISTRY OF PETROLEUM :\n"
+            "The details are being collected.\n"
+        )
+        record = _raw_record(text, ministry="PETROLEUM AND NATURAL GAS")
+        record["minister_name"] = "MANI SHANKAR AIYAR"
+        result = segment_qa(record, "RS", "unstarred_question")
+        assert result[0]["minister_name"] == "MANI SHANKAR AIYAR"
+
+    def test_portfolio_attribution_reduced_to_name(self):
+        text = (
+            "STARRED QUESTION NO. 12\n\n"
+            "Will the Minister of Railways be pleased to state:\n"
+            "(a) the status?\n\n"
+            "THE MINISTER OF RAILWAYS (SHRI PIYUSH GOYAL):\n"
+            "The project is on schedule.\n"
+        )
+        result = segment_qa(_raw_record(text, ministry="Railways"), "LS", "starred_question")
+        assert result[0]["minister_name"] == "SHRI PIYUSH GOYAL"

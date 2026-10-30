@@ -23,7 +23,8 @@ from typing import Optional
 # Each pass of the regex removes one prefix; callers strip in a loop.
 _HONORIFIC_RE = re.compile(
     r"^\s*(?:"
-    r"Shri|Smt\.|Smt|Dr\.|Dr|Prof\.|Prof|Adv\.|Adv|Kumari|"
+    r"The\s+Hon(?:ou|o)rable|Hon(?:ou|o)rable|Hon'ble|Hon\.|"
+    r"Shrimati|Shri|Sushri|Smt\.|Smt|Dr\.|Dr|Prof\.|Prof|Adv\.|Adv|Kumari|"
     r"Sri|Mr\.|Mr|Mrs\.|Mrs|Ms\.|Ms|"
     r"Col\.|Col|Capt\.|Capt|Maj\.|Maj|Gen\.|Gen|Lt\.|Lt|"
     r"Brig\.|Brig|Air\s+Cmde\.|Air\s+Marshal|"
@@ -46,6 +47,39 @@ def strip_honorifics(name: str) -> str:
             break
         result = stripped
     return result
+
+
+def normalize_name_form(name: str) -> str:
+    """
+    Tidy the written form of a name without changing who it refers to.
+
+    - OCR commas between initials: "A, B, A. GHANI" → "A. B. A. GHANI"
+    - initials spacing: "A.C.GEORGE" / "M.M. PALLAM RAJU" → "A. C. GEORGE" / "M. M. PALLAM RAJU"
+    - names written entirely in capitals become title case ("ADHIR RANJAN
+      CHOWDHURY" → "Adhir Ranjan Chowdhury"), matching how other sources store names.
+    """
+    s = re.sub(r"\s+", " ", name.strip())
+    s = re.sub(r"\b([A-Z]),\s*(?=[A-Z][.,\s])", r"\1. ", s)   # A, B, → A. B.
+    s = re.sub(r"\b([A-Z])\.(?=[A-Z])", r"\1. ", s)            # A.C. → A. C.
+    s = re.sub(r"\s+", " ", s).strip(" ,;:")
+    letters = [c for c in s if c.isalpha() and c.isascii()]
+    if letters and all(c.isupper() for c in letters):
+        def cap(word: str) -> str:
+            return re.sub(
+                r"[A-Za-z]+",
+                lambda m: m.group(0)[0].upper() + m.group(0)[1:].lower(),
+                word,
+            )
+        s = " ".join(cap(w) for w in s.split(" "))
+        s = re.sub(r"\b(Mc|Mac|O'|D')([a-z])", lambda m: m.group(1) + m.group(2).upper(), s)
+    return s
+
+
+def tidy_name(name: Optional[str]) -> Optional[str]:
+    """Honorifics stripped and written form normalized; None for empty input."""
+    if not name or not name.strip():
+        return None
+    return normalize_name_form(strip_honorifics(name)) or None
 
 
 def _normalize_for_lookup(name: str) -> str:
@@ -92,7 +126,7 @@ def canonicalize_name(
     if not raw_name or not raw_name.strip():
         return None, False
 
-    stripped = strip_honorifics(raw_name)
+    stripped = normalize_name_form(strip_honorifics(raw_name))
     if not stripped:
         # Entire name was honorifics — treat as unresolved, use raw
         return raw_name.strip(), True

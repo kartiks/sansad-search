@@ -1,15 +1,15 @@
 """
 elibrary.sansad.in DSpace 7 provider for LS corpus.
 
-Covers the "Text of Debates (English)" collection — official corrected English
-transcripts of Lok Sabha debates from the 8th Lok Sabha (~1985) to the present.
+Covers the "Lok Sabha Debates (Text)" collection — one item per sitting with a
+Tika-extracted text bundle, 1952 to the present.
 Use with date_from="2019-01-01" (or after the IA provider cutoff) so that the
 Internet Archive and this provider cover non-overlapping date ranges:
   InternetArchiveProvider  →  1947-08-15 to Aug 2018  (IA djvu.txt, best quality)
   ElibraryDSpace7Provider  →  2019-01-01 to present    (Tika-extracted PDF text)
 
 Discovery:
-  DSpace 7 search API paginated by date (ASC) →
+  DSpace 7 search API paginated by date (newest first) →
   for each in-scope item: /core/items/{uuid}/bundles → TEXT bundle →
   /core/bundles/{text_uuid}/bitstreams → .pdf.txt bitstream UUID →
   fetch_url = /core/bitstreams/{bs_uuid}/content
@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -41,7 +41,12 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-COLLECTION_UUID = "bba0ba48-e063-4938-94bb-f98e5a14b939"
+# "Lok Sabha Debates (Text)" — one item per sitting, 1952 to present (6,691 items,
+# newest 2026-08-13 when checked on 2026-10-30), each with a Tika TEXT bundle.
+COLLECTION_UUID = "b2770639-c57b-4ba3-a9f1-57761c60d195"
+# "Text of Debates (English)" — the collection used before 2026-10. It stopped
+# receiving items after 2025-04-04 and covers only a sparse subset of sittings.
+LEGACY_COLLECTION_UUID = "bba0ba48-e063-4938-94bb-f98e5a14b939"
 ELIBRARY_API_BASE = "https://elibrary.sansad.in/server/api"
 ELIBRARY_HANDLE_BASE = "https://elibrary.sansad.in/handle"
 
@@ -119,12 +124,15 @@ class ElibraryDSpace7Provider(Provider):
         date_to: str | None = None,
         rate_delay: float = DEFAULT_RATE_DELAY,
         collection_uuid: str = COLLECTION_UUID,
+        is_known: Callable[[str], bool] | None = None,
     ) -> None:
         self._client = client
         self._date_from = date_from
         self._date_to = date_to
         self._rate_delay = rate_delay
         self._collection_uuid = collection_uuid
+        # Skips the two bitstream-lookup requests for items already stored.
+        self._is_known = is_known
 
     # ── Public interface ───────────────────────────────────────────────────────
 
@@ -133,9 +141,11 @@ class ElibraryDSpace7Provider(Provider):
         Enumerate all in-scope items from the collection and resolve their
         TEXT bitstream URLs.
 
-        Paginates the DSpace 7 search API (ASC by date), skips items before
-        date_from, and stops once items exceed date_to (ASC ordering means
-        once we pass the window, no later pages can match).
+        Paginates the DSpace 7 search API newest first, so the most recent
+        sittings are found even if a later page fails. Items outside the date
+        window and items already stored (``is_known``) are skipped before their
+        bitstream lookups. Pagination stops after a page whose items are all
+        older than date_from.
 
         Returns a list of DocumentRef objects ready for fetch().
         """
@@ -146,15 +156,16 @@ class ElibraryDSpace7Provider(Provider):
             search_url = (
                 f"{ELIBRARY_API_BASE}/discover/search/objects"
                 f"?scope={self._collection_uuid}"
-                f"&sort=dc.date.issued%2CASC"
+                f"&sort=dc.date.issued%2CDESC"
                 f"&size={_PAGE_SIZE}"
                 f"&page={page}"
             )
 
             resp = await fetch_with_retry(self._client, search_url)
             if resp is None:
-                logger.warning(
-                    "elibrary_dspace7: search fetch failed at page=%d; stopping", page
+                logger.error(
+                    "elibrary_dspace7: search fetch failed at page=%d; discovery is "
+                    "incomplete (older items not listed)", page
                 )
                 break
 
@@ -177,6 +188,7 @@ class ElibraryDSpace7Provider(Provider):
             if not objects:
                 break  # Last page reached
 
+            all_older = True
             for obj in objects:
                 item = obj.get("_embedded", {}).get("indexableObject", {})
                 item_date = _get_meta(item, "dc.date.issued")
@@ -184,6 +196,7 @@ class ElibraryDSpace7Provider(Provider):
                 # Pre-scope: skip
                 if self._date_from and item_date and item_date < self._date_from:
                     continue
+                all_older = False
 
                 # Post-scope: skip but keep paginating — the API sort order is
                 # unreliable so later pages may still contain in-scope items.
@@ -196,6 +209,9 @@ class ElibraryDSpace7Provider(Provider):
 
                 if not item_uuid:
                     logger.warning("elibrary_dspace7: item with no UUID; skipping")
+                    continue
+
+                if self._is_known is not None and self._is_known(handle_n or item_uuid):
                     continue
 
                 # Resolve the Tika plain-text bitstream URL (2 API calls per item)
@@ -232,8 +248,9 @@ class ElibraryDSpace7Provider(Provider):
                     )
                 )
 
-            # DSpace 7 pagination: stop when fewer items returned than page size
-            if len(objects) < _PAGE_SIZE:
+            # DSpace 7 pagination: stop when fewer items returned than page size,
+            # or once a whole page is older than the window (newest-first order).
+            if len(objects) < _PAGE_SIZE or (self._date_from and all_older):
                 break
 
             page += 1

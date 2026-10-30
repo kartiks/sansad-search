@@ -1174,3 +1174,37 @@ class TestV3Columns:
         _, values = cursor.execute.call_args[0]
         # No accidental "null" string serialization for a None segments value.
         assert "null" not in [v for v in values if isinstance(v, str)]
+
+
+class TestMeiliTaskVerification:
+    def _indexer(self, meili):
+        from ingest.indexer import Indexer
+        return Indexer(MagicMock(), meili)
+
+    def test_failed_task_reported(self):
+        meili = MagicMock()
+        meili.index.return_value.add_documents.return_value = MagicMock(task_uid=7)
+        meili.wait_for_task.return_value = MagicMock(status="failed", error="invalid document id")
+        ix = self._indexer(meili)
+        ix._meili_batch.append({"id": "x"})
+        ix.flush()
+        problems = ix.verify_meili_tasks()
+        assert problems and "invalid document id" in problems[0]
+        meili.wait_for_task.assert_called_once()
+
+    def test_push_exception_reported(self):
+        meili = MagicMock()
+        meili.index.return_value.add_documents.side_effect = RuntimeError("connection reset")
+        ix = self._indexer(meili)
+        ix._meili_batch.extend([{"id": "a"}, {"id": "b"}])
+        ix.flush()
+        assert ix.verify_meili_tasks() == ["2 documents could not be sent to Meilisearch"]
+
+    def test_succeeded_tasks_no_problems(self):
+        meili = MagicMock()
+        meili.index.return_value.add_documents.return_value = MagicMock(task_uid=1)
+        meili.wait_for_task.return_value = MagicMock(status="succeeded")
+        ix = self._indexer(meili)
+        ix._meili_batch.append({"id": "x"})
+        ix.flush()
+        assert ix.verify_meili_tasks() == []

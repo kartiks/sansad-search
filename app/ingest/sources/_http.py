@@ -5,7 +5,7 @@ Handles per-F01 spec:
   - 4xx (excl. 429) → log warning, return None (caller skips the document)
   - 5xx → exponential backoff, retry up to MAX_RETRIES_5XX, then return None
   - 429 → exponential backoff, retry indefinitely (never skip)
-  - Network error → log error, return None
+  - Network error / timeout → retried like 5xx, then log error and return None
 
 Rate limiting (inter-request delay) is the caller's responsibility; this
 module handles only retries and robots.txt compliance.
@@ -78,7 +78,18 @@ async def fetch_with_retry(
         try:
             resp = await client.get(url, follow_redirects=True)
         except httpx.RequestError as exc:
-            logger.error("Request error fetching %s: %s", url, exc)
+            # Timeouts and dropped connections are common on the source sites;
+            # retry them like a 5xx instead of silently skipping the document.
+            if retries_5xx < max_retries_5xx:
+                logger.warning(
+                    "Request error on %s (%s); retry %d/%d in %.1f s",
+                    url, exc, retries_5xx + 1, max_retries_5xx, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 120.0)
+                retries_5xx += 1
+                continue
+            logger.error("Request error fetching %s after %d retries: %s", url, max_retries_5xx, exc)
             return None
 
         if resp.status_code == 200:

@@ -23,6 +23,17 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ingest.segmenters.attribution import (
+    Attribution,
+    assemble_wrapped_attributions,
+    is_presiding_compact,
+    match_title_case_attribution,
+    parse_attribution,
+)
+
+# Starred-question number in front of an attribution: "*184. SHRI X:", "2481. SHRI X:"
+_QNUM_PREFIX_RE = re.compile(r"^\*?\s*\d{1,5}\s*[.,]\s*\*?\s*(?=[A-Z])")
+
 # ── Attribution patterns ──────────────────────────────────────────────────────
 
 # Unattributed speaker strings — never become standalone records
@@ -44,7 +55,7 @@ _PRESIDING_OFFICER_RE = re.compile(
 # Attribution line pattern: "SHRI NARENDRA MODI :" or "DR. MANMOHAN SINGH:"
 # Matches a speaker name that fills the ENTIRE line (nothing after the colon).
 _ATTRIBUTION_RE = re.compile(
-    r"^([A-Z][A-Z\s\.\,\(\)\'\/\-]{1,150})\s*:\s*$",
+    r"^([A-Z][A-Z\s\.\,\(\)\'\/\-]{1,300})\s*:\s*$",
 )
 
 # Inline attribution pattern: "SHRI NAME (CONSTITUENCY): text..."
@@ -52,7 +63,7 @@ _ATTRIBUTION_RE = re.compile(
 # first sentence of the speech appear on the same line.
 # Checked only when _ATTRIBUTION_RE does not match; captures (speaker, body).
 _INLINE_ATTRIBUTION_RE = re.compile(
-    r"^([A-Z][A-Z\s\.\,\(\)\'\/\-]{1,150})\s*:\s+(.+)",
+    r"^([A-Z][A-Z\s\.\,\(\)\'\/\-]{1,300})\s*:\s+(.+)",
 )
 
 # Trailing constituency/role parenthetical: "(VIRUDHUNAGAR)", "(GODDA)", etc.
@@ -151,6 +162,91 @@ def _is_unattributed(speaker: str) -> bool:
 
 def _is_presiding_officer(speaker: str) -> bool:
     return bool(_PRESIDING_OFFICER_RE.match(speaker.strip()))
+
+
+# ── Time markers and section-heading subjects (flat text) ─────────────────────
+
+# "11.02 hrs", "12.00 hrs.", "14:30 hours" on a line of their own
+_TIME_MARKER_RE = re.compile(
+    r"^\(?\s*(\d{1,2})\s*[.:]\s*(\d{2})\s*(?:hrs?|hours)\b\.?\s*\)?$", re.IGNORECASE
+)
+
+# Document-level subjects that say nothing about the topic
+_GENERIC_SUBJECT_RE = re.compile(
+    r"^\s*(?:lok\s+sabha|rajya\s+sabha|parliamentary)\s+debates?\s*$", re.IGNORECASE
+)
+
+# Running headers / boilerplate that must never become a subject
+_SUBJECT_BOILERPLATE_RE = re.compile(
+    r"^(?:LOK\s+SABHA|RAJYA\s+SABHA|COUNCIL\s+OF\s+STATES|HOUSE\s+OF\s+THE\s+PEOPLE"
+    r"|PARLIAMENTARY\s+DEBATES|(?:LOK|RAJYA)\s+SABHA\s+DEBATES|DEBATES|UNCORRECTED"
+    r"|NOT\s+FOR\s+PUBLICATION|INTERRUPTIONS|CONTENTS|INDEX"
+    r"|(?:STARRED\s+|UNSTARRED\s+)?QUESTIONS?|(?:ORAL|WRITTEN)\s+ANSWERS?(?:\s+TO\s+(?:STARRED\s+|UNSTARRED\s+)?QUESTIONS?)?)\s*$"
+    r"|\bSAK[AE]\b|OFFICIAL\s+REPORT|\bSESSION\b|\bPRICE\b|\bCOLUMNS?\b|\bVOL(?:UME)?\b\.?\s*[IVXL\d]"
+    r"|^\W*\d|[;!?|]"
+    r"|\b(?:JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER"
+    r"|NOVEMBER|DECEMBER|CHAITRA|VAISAKHA|JYAISTHA|ASADHA|SRAVANA|BHADRA|ASVINA"
+    r"|KARTIKA|AGRAHAYANA|PAUSA|MAGHA|PHALGUNA)\s+\d",
+)
+
+_PERSON_START_RE = re.compile(
+    r"^(?:SHRI|SHRIMATI|SMT|SUSHRI|KUMARI|DR|PROF|MR|MADAM|HON|THE\s+MINISTER"
+    r"|THE\s+PRIME\s+MINISTER|MINISTER|THE\s+DEPUTY\s+MINISTER)\b"
+)
+
+_SMALL_WORDS = frozenset("a an and as at by for in of on or the to with vs via from into".split())
+_ROMAN_RE = re.compile(r"^[IVXLC]+$")
+
+
+def _parse_time_marker(line: str) -> str | None:
+    m = _TIME_MARKER_RE.match(line.strip())
+    if not m:
+        return None
+    hh, mm = int(m.group(1)), int(m.group(2))
+    if hh > 23 or mm > 59:
+        return None
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _subject_heading(line: str) -> str | None:
+    """Return *line* as a usable subject heading, or None if it is boilerplate/noise."""
+    s = re.sub(r"\s+", " ", line.strip()).strip(" .:-_")
+    if len(s) < 6 or _SUBJECT_BOILERPLATE_RE.search(s) or _PERSON_START_RE.match(s):
+        return None
+    words = re.findall(r"[A-Za-z]{2,}", s)
+    if len(words) < 2:
+        return None
+    digits = sum(c.isdigit() for c in s)
+    if digits > len(s) * 0.3:
+        return None
+    return s
+
+
+def _title_case(s: str) -> str:
+    """'PAPERS LAID ON THE TABLE' → 'Papers Laid on the Table' (keeps acronyms/numerals)."""
+    if any(c.islower() for c in s):
+        return s
+    out = []
+    for i, tok in enumerate(s.split(" ")):
+        core = tok.strip("()[],.:;'\"")
+        if _ROMAN_RE.match(core) or any(c.isdigit() for c in core) or (
+            tok.startswith("(") and len(core) <= 5 and core.isalpha()
+        ):
+            out.append(tok)
+        elif i > 0 and core.lower() in _SMALL_WORDS:
+            out.append(tok.lower())
+        else:
+            out.append("-".join(
+                re.sub(r"[A-Za-z]", lambda m: m.group(0).upper(), p.lower(), count=1)
+                for p in tok.split("-")
+            ))
+    return " ".join(out)
+
+
+def _person_key(name: str) -> str:
+    from ingest.canonical.names import strip_honorifics
+
+    return re.sub(r"[^A-Z]", "", strip_honorifics(name).upper())
 
 
 def _speaker_role(speaker: str) -> str:
@@ -266,36 +362,51 @@ def _count_words(text: str | None) -> int | None:
     return len(text.split())
 
 
-def _tokenize(raw_text: str) -> list[tuple[str, ...]]:
+def _tokenize(raw_text: str) -> list[tuple[Any, ...]]:
     """
     Tokenize parliamentary text into an ordered stream of:
-        ("speech", speaker, body)   — one attributed speech
-        ("break", text)             — a section heading or procedural marker
+        ("speech", Attribution, body, ctx)  — one attributed speech; ctx carries the
+                                              time marker and section heading in force
+                                              where the speech starts
+        ("break", text)                     — a section heading or procedural marker
 
-    A line is treated as a break only when it is *isolated* (preceded and
-    followed by a blank line or a document boundary) and matches a break
+    Attributions wrapped across lines are re-joined first (see
+    ingest.segmenters.attribution). A line is treated as a break only when it is
+    *isolated* (blank line or document boundary on both sides) and matches a break
     pattern; this prevents an emphatic ALL-CAPS line inside a speech body from
     splitting that body. Break tokens belong to no speaker and reset the merge
     group downstream.
     """
-    lines = raw_text.splitlines()
+    lines = assemble_wrapped_attributions(raw_text.splitlines())
     n = len(lines)
 
     def is_blank(i: int) -> bool:
         return i < 0 or i >= n or not lines[i].strip()
 
-    tokens: list[tuple[str, ...]] = []
-    current_speaker: str | None = None
+    tokens: list[tuple[Any, ...]] = []
+    current: Attribution | None = None
+    current_ctx: dict[str, Any] = {}
     current_lines: list[str] = []
+    time_now: str | None = None
+    heading: str | None = None
+    heading_open = False  # True while consecutive heading lines may still extend it
 
     def flush():
-        nonlocal current_speaker, current_lines
-        if current_speaker is not None:
+        nonlocal current, current_lines
+        if current is not None:
             body = "\n".join(current_lines).strip()
             if body:
-                tokens.append(("speech", current_speaker, body))
-        current_speaker = None
+                tokens.append(("speech", current, body, current_ctx))
+        current = None
         current_lines = []
+
+    def start(att: Attribution, first_line: str | None):
+        nonlocal current, current_lines, current_ctx, heading_open
+        flush()
+        current = att
+        current_ctx = {"time_of_day": time_now, "heading": heading}
+        current_lines = [first_line] if first_line else []
+        heading_open = False
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -303,42 +414,60 @@ def _tokenize(raw_text: str) -> list[tuple[str, ...]]:
             current_lines.append("")
             continue
 
-        # Standalone attribution (NAME:\n — IA djvu.txt and HTML-parsed formats).
-        m = _ATTRIBUTION_RE.match(stripped)
-        if m:
-            flush()
-            current_speaker = m.group(1).strip()
-            current_lines = []
+        t = _parse_time_marker(stripped)
+        if t is not None:
+            time_now = t
             continue
 
+        # Standalone attribution (NAME:\n — IA djvu.txt and HTML-parsed formats).
+        cand = _QNUM_PREFIX_RE.sub("", stripped)
+        m = _ATTRIBUTION_RE.match(cand)
+        if m and not _PROCEDURAL_BREAK_RE.match(m.group(1).strip()):
+            att = _attribution_for(m.group(1))
+            if att is not None:
+                start(att, None)
+                continue
+
         # Inline attribution (NAME: text — Tika-extracted elibrary.sansad.in text).
-        # Only checked when the standalone pattern did not match, so existing
-        # IA/HTML format behaviour is unchanged.
-        m_inline = _INLINE_ATTRIBUTION_RE.match(stripped)
-        if m_inline:
-            speaker_raw = m_inline.group(1).strip()
-            # Guard: procedural headings like "STARRED QUESTION NO. 5" should
-            # not be treated as speaker attributions.
-            if not _PROCEDURAL_BREAK_RE.match(speaker_raw):
-                flush()
-                # Strip trailing constituency "(PLACE)" — e.g. "(VIRUDHUNAGAR)".
-                speaker = _TRAILING_PAREN_RE.sub("", speaker_raw).strip()
-                # Strip stray trailing ")" — artifact of wrapped multi-line
-                # minister names split across PDF pages.
-                speaker = re.sub(r"\)+\s*$", "", speaker).strip()
-                current_speaker = speaker
-                current_lines = [m_inline.group(2).strip()]
+        m_inline = _INLINE_ATTRIBUTION_RE.match(cand)
+        if m_inline and not _PROCEDURAL_BREAK_RE.match(m_inline.group(1).strip()):
+            att = _attribution_for(m_inline.group(1))
+            if att is not None:
+                start(att, m_inline.group(2).strip())
+                continue
+
+        # Title-case attribution (older debates): "Shri K. K. Das: May I know ..."
+        tc = match_title_case_attribution(stripped)
+        if tc is not None:
+            att = _attribution_for(tc[0])
+            if att is not None:
+                start(att, tc[1] or None)
                 continue
 
         if is_blank(i - 1) and is_blank(i + 1) and _is_break_line(stripped):
             flush()
             tokens.append(("break", stripped))
+            sub = _subject_heading(stripped) if not _PROCEDURAL_BREAK_RE.match(stripped) else None
+            if sub:
+                heading = f"{heading} {sub}" if heading_open and heading else sub
+                heading_open = True
             continue
 
+        heading_open = False
         current_lines.append(stripped)
 
     flush()
     return tokens
+
+
+def _attribution_for(head: str) -> Attribution | None:
+    """Parse an attribution head; unattributed voices are kept so they can break merges."""
+    head = head.strip()
+    if _is_unattributed(head):
+        return Attribution(name=head, role="unattributed")
+    if _is_presiding_officer(head) or is_presiding_compact(head):
+        return Attribution(name=head, role="presiding_officer")
+    return parse_attribution(head)
 
 
 def _merge_speech_groups(
@@ -387,6 +516,8 @@ def _build_speech_record(
     page_reference: int | None,
     volume: int | None,
     lok_sabha_number: int | None,
+    speaker_role: str | None = None,
+    constituency: str | None = None,
 ) -> dict[str, Any]:
     """
     Build one Speech unit dict from a merge group of one or more body texts.
@@ -425,8 +556,8 @@ def _build_speech_record(
         "subject": subject,
         "speaker_name": speaker_raw,          # canonicalized in Stage 2
         "speaker_party": None,                 # populated from source in Stage 2
-        "speaker_constituency_or_state": None,
-        "speaker_role": _speaker_role(speaker_raw),
+        "speaker_constituency_or_state": constituency,
+        "speaker_role": speaker_role or _speaker_role(speaker_raw),
         "full_text_en": full_text_en,
         "segments": segments,
         "lang_original": lang_original,
@@ -472,44 +603,65 @@ def segment_speeches(
     raw_text: str = raw_record.get("raw_text", "")
     tokens = _tokenize(raw_text)
 
-    # Build attributed (speaker, body) pairs and record break positions. A break
-    # token OR an excluded speaker (unattributed / presiding officer) between two
-    # speeches is a break signal for the preceding speech's merge group.
-    pairs: list[tuple[str, str]] = []
-    break_after: set[int] = set()
+    # Ministers are often attributed with their portfolio once and by name alone
+    # afterwards; carry the minister role to every speech by that person.
+    minister_keys = {
+        _person_key(tok[1].name)
+        for tok in tokens
+        if tok[0] == "speech" and tok[1].role == "minister"
+    }
+
+    doc_subject = raw_record.get("subject")
+    if doc_subject and _GENERIC_SUBJECT_RE.match(str(doc_subject)):
+        doc_subject = None
+
+    # Group consecutive same-speaker speeches (Adjacent Speech Merging). A break
+    # token or an excluded speaker (unattributed / presiding officer) between two
+    # speeches starts a new group.
+    groups: list[dict[str, Any]] = []
+    broken = True
     for tok in tokens:
         if tok[0] == "break":
-            if pairs:
-                break_after.add(len(pairs) - 1)
+            broken = True
             continue
-        _, speaker_raw, body = tok
-        if _is_unattributed(speaker_raw) or _is_presiding_officer(speaker_raw):
-            if pairs:
-                break_after.add(len(pairs) - 1)
+        _, att, body, ctx = tok
+        if att.role in ("unattributed", "presiding_officer"):
+            broken = True
             continue
-        pairs.append((speaker_raw, body))
+        key = _person_key(att.name) or att.name
+        if groups and not broken and groups[-1]["key"] == key:
+            groups[-1]["bodies"].append(body)
+        else:
+            groups.append({"key": key, "att": att, "ctx": ctx, "bodies": [body]})
+        broken = False
 
-    groups = _merge_speech_groups(pairs, break_after)
-
-    return [
-        _build_speech_record(
-            speaker_raw,
-            bodies,
-            source=source,
-            proceeding_type=raw_record.get("proceeding_type") or "debate",
-            date=raw_record.get("date"),
-            session_name=raw_record.get("session_name"),
-            session_number=raw_record.get("session_number"),
-            sitting_number=raw_record.get("sitting_number"),
-            subject=raw_record.get("subject"),
-            time_of_day=raw_record.get("time_of_day"),
-            source_url=raw_record.get("source_url"),
-            page_reference=raw_record.get("page_reference"),
-            volume=raw_record.get("volume"),
-            lok_sabha_number=raw_record.get("lok_sabha_number"),
+    records = []
+    for g in groups:
+        att: Attribution = g["att"]
+        ctx = g["ctx"]
+        role = "minister" if att.role == "minister" or g["key"] in minister_keys else "member"
+        heading = ctx.get("heading")
+        records.append(
+            _build_speech_record(
+                att.name,
+                g["bodies"],
+                source=source,
+                proceeding_type=raw_record.get("proceeding_type") or "debate",
+                date=raw_record.get("date"),
+                session_name=raw_record.get("session_name"),
+                session_number=raw_record.get("session_number"),
+                sitting_number=raw_record.get("sitting_number"),
+                subject=doc_subject or (_title_case(heading) if heading else None),
+                time_of_day=ctx.get("time_of_day") or raw_record.get("time_of_day"),
+                source_url=raw_record.get("source_url"),
+                page_reference=raw_record.get("page_reference"),
+                volume=raw_record.get("volume"),
+                lok_sabha_number=raw_record.get("lok_sabha_number"),
+                speaker_role=role,
+                constituency=_title_case(att.constituency) if att.constituency else None,
+            )
         )
-        for speaker_raw, bodies in groups
-    ]
+    return records
 
 
 def _segment_ca_speeches(

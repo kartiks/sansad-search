@@ -10,7 +10,7 @@ Provides two components:
 Provider coverage:
   InternetArchiveProvider  — IA eparlib.nic.in.* collection (1947-08-15 to Aug 2018,
                              djvu.txt pre-OCR text, highest quality).
-  ElibraryDSpace7Provider  — elibrary.sansad.in DSpace 7 "Text of Debates (English)"
+  ElibraryDSpace7Provider  — elibrary.sansad.in DSpace 7 "Lok Sabha Debates (Text)"
                              collection (2019-01-01 to present, Tika-extracted PDF text).
 
 Removed providers:
@@ -28,7 +28,7 @@ from typing import AsyncGenerator, Optional, Union
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.canonical.names import canonicalize_name
+from ingest.canonical.names import canonicalize_name, tidy_name
 from ingest.canonical.sessions import canonicalize_session
 from ingest.checkpoints.store import CheckpointStore
 from ingest.indexer import Indexer
@@ -265,6 +265,7 @@ class LSOrchestrator:
                 client,
                 corpus="LS",
                 rate_delay=rate_delay,
+                is_known=self._is_stored,
                 date_from=_df.get("date_from", _ls_scope_str),
                 date_to=_df.get("date_to"),
             ),
@@ -276,10 +277,15 @@ class LSOrchestrator:
                 date_from=max(_df.get("date_from", "2019-01-01"), "2019-01-01"),
                 date_to=_df.get("date_to"),
                 rate_delay=rate_delay,
+                is_known=self._is_stored,
             ),
         ]
         # Per-sitting sequence counter shared across all providers and record types
         self._sitting_seq: dict[str, int] = {}
+
+    def _is_stored(self, canonical_doc_id: str) -> bool:
+        """True when Stage 1 already wrote this document (raw_documents PK)."""
+        return self._indexer.check_raw_document_exists(canonical_doc_id, "LS")
 
     def _next_seq(self, sitting_key: str) -> int:
         n = self._sitting_seq.get(sitting_key, 1)
@@ -394,6 +400,11 @@ class LSOrchestrator:
                     )
                     record["speaker_name"] = canon_name
                     record["speaker_name_unresolved"] = unresolved
+                else:
+                    record["questioner_names"] = [
+                        n for n in (tidy_name(q) for q in record.get("questioner_names") or []) if n
+                    ]
+                    record["minister_name"] = tidy_name(record.get("minister_name"))
                 record["session_name"] = canonicalize_session(
                     record.get("session_name"), source="LS"
                 )

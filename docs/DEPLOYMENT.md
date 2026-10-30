@@ -586,3 +586,27 @@ rm -f app/data/ingestion_checkpoints.db
 **Known, harmless caveat.** A source document that was processed but yielded **zero** records (e.g. a text-less PDF) has no `speeches`/`qa_exchanges` rows, so it is not reconstructed into `processed_documents`. The next Stage 2 run will re-process it once — re-parsing it to zero records again. This is idempotent (no duplicates, `INF-R1` preserved) and costs only one redundant parse.
 
 **No new env vars, dependencies, or infrastructure.** This migration runs entirely against the existing Railway PostgreSQL.
+
+### 6.8 Re-processing after the 2026-10 data-quality fixes
+
+The 2026-10 changes fix data that is already stored: speaker names (wrapped attributions, portfolio words, presiding officers), roles, constituencies, `time_of_day`, subjects, the eLibrary collection, and the RS source. Run from `app/` with the virtualenv active. Use `--dry-run` first on every `clear_corpus.py` command to see the counts.
+
+1. **RS — replace entirely.** Every existing RS row is a copy of a Lok Sabha document (the old RS provider read the eparlib mirror).
+   ```bash
+   python scripts/clear_corpus.py --corpus rs --stage fetch
+   python -m ingest.main --source rs
+   ```
+2. **LS 2019+ — refetch from the current eLibrary collection.** The stored 2019+ rows came from the old collection, under different handle numbers.
+   ```bash
+   python scripts/clear_corpus.py --corpus ls --stage fetch --date-from 2019-01-01
+   ```
+3. **LS — re-segment everything else from stored text** (no refetch), then fetch what is new:
+   ```bash
+   python scripts/clear_corpus.py --corpus ls --stage process
+   python -m ingest.main --source ls
+   ```
+
+**Run time.** The IA mirrors are large: about 378k LS items (mostly individual questions) and 280k RS items, each needing a metadata request and a text download at the 1 s rate limit — several days per house for a full backfill. Scope runs with `--date-from` / `--date-to` and repeat; each run skips documents already stored. The Railway cron (`--source all`) will start this backfill on its next run.
+
+**Exit code.** A run now exits `1` if any Meilisearch push or indexing task failed; the log says to run `python -m ingest.main --source all --reindex-from-db` after fixing the cause.
+

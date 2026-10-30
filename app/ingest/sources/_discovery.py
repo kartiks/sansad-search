@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Callable
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -190,7 +190,10 @@ async def enumerate_ia_search(
     date_to: str | None = None,
 ) -> list[dict]:
     """
-    Enumerate all results from archive.org advancedsearch.php.
+    Enumerate results from archive.org advancedsearch.php.
+
+    Deprecated for large collections: advancedsearch refuses to page past
+    10,000 results. Use enumerate_ia_scrape() instead.
 
     Args:
         client:    httpx.AsyncClient.
@@ -247,3 +250,111 @@ async def enumerate_ia_search(
         page += 1
 
     return all_results
+
+
+IA_SCRAPE_URL = "https://archive.org/services/search/v1/scrape"
+
+
+def _ia_date_clause(query: str, date_from: str | None, date_to: str | None) -> str:
+    if date_from or date_to:
+        return f"{query} AND date:[{date_from or '*'} TO {date_to or '*'}]"
+    return query
+
+
+def _ia_item_matches(it: dict, prefix: str | None, date_from: str | None, date_to: str | None) -> bool:
+    ident = str(it.get("identifier", ""))
+    if prefix and not ident.startswith(prefix):
+        return False
+    d = str(it.get("date") or "")[:10]
+    if d and ((date_from and d < date_from) or (date_to and d > date_to)):
+        return False
+    return True
+
+
+def _ia_page_matches(
+    items: list[dict], prefix: str | None, date_from: str | None, date_to: str | None
+) -> bool:
+    """
+    True when the page plausibly answers our query (guards against IA's response
+    cache, see enumerate_ia_scrape). A cache mix-up returns a page where nothing
+    matches; a stray non-matching item among matching ones is tolerated and
+    dropped individually.
+    """
+    if not items:
+        return True
+    ok = sum(_ia_item_matches(it, prefix, date_from, date_to) for it in items)
+    return ok * 2 >= len(items)
+
+
+async def enumerate_ia_scrape(
+    client: httpx.AsyncClient,
+    query: str,
+    *,
+    identifier_prefix: str | None = None,
+    count: int = 5000,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    max_attempts: int = 4,
+) -> list[dict]:
+    """
+    Enumerate every archive.org item matching *query* via the Scraping API.
+
+    Unlike advancedsearch.php (which refuses to page past 10,000 results and is
+    therefore unusable for the ~390k-item eparlib collection), the Scraping API
+    pages with an opaque cursor and has no depth limit.
+
+    IA quirk (observed 2026-10): the first scrape page is cached by its ``fields``
+    and ``count`` parameters while ignoring ``q``, so a request can come back with
+    a *different query's* results. Every page is therefore checked against
+    *identifier_prefix* and the date window; on a mismatch the first page is
+    re-requested with a different ``count`` (a different cache key).
+
+    Responses in advancedsearch shape ({"response": {"docs": [...]}}) are also
+    accepted, so a single-page fixture works in tests.
+
+    Raises RuntimeError when IA returns an error payload, a page cannot be
+    fetched, or results keep failing validation — a failed listing is never
+    mistaken for "no more items".
+    """
+    q = _ia_date_clause(query, date_from, date_to)
+    base_count = max(100, min(count, 10000))   # IA bounds for the scrape API
+
+    results: list[dict] = []
+    cursor: str | None = None
+    attempt = 0
+    while True:
+        page_count = base_count - 7 * attempt if not cursor else base_count
+        params = {"q": q, "fields": "identifier,date", "count": str(max(100, page_count))}
+        if cursor:
+            params["cursor"] = cursor
+        url = f"{IA_SCRAPE_URL}?{urlencode(params)}"
+        resp = await fetch_with_retry(client, url)
+        if resp is None:
+            raise RuntimeError(f"IA scrape failed after {len(results)} items (query={q!r})")
+        try:
+            data = resp.json()
+        except Exception as exc:
+            raise RuntimeError(f"IA scrape returned non-JSON after {len(results)} items: {exc}") from exc
+        if isinstance(data, dict) and data.get("error"):
+            raise RuntimeError(f"IA scrape error after {len(results)} items: {data['error']}")
+
+        items = data.get("items")
+        if items is None:
+            items = data.get("response", {}).get("docs", [])
+
+        if not _ia_page_matches(items, identifier_prefix, date_from, date_to):
+            if cursor is None and attempt + 1 < max_attempts:
+                attempt += 1
+                logger.warning(
+                    "enumerate_ia_scrape: results do not match %r (IA cache); retrying", q
+                )
+                continue
+            raise RuntimeError(f"IA scrape returned results that do not match {q!r}")
+
+        results.extend(it for it in items if _ia_item_matches(it, identifier_prefix, date_from, date_to))
+        cursor = data.get("cursor")
+        if not cursor or not items:
+            break
+
+    logger.info("enumerate_ia_scrape: %d items for %r", len(results), q)
+    return results

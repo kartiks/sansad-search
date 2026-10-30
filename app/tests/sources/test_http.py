@@ -81,11 +81,22 @@ class TestFetchWithRetry:
         assert client.get.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_request_error_returns_none(self):
+    async def test_request_error_retried_then_returns_none(self):
         client = AsyncMock(spec=httpx.AsyncClient)
         client.get.side_effect = httpx.RequestError("connection refused")
-        result = await fetch_with_retry(client, "http://example.com/doc.html")
+        result = await fetch_with_retry(
+            client, "http://example.com/doc.html", max_retries_5xx=3, initial_backoff=0
+        )
         assert result is None
+        assert client.get.call_count == 4
+
+    async def test_timeout_then_success(self):
+        ok = MagicMock(spec=httpx.Response)
+        ok.status_code = 200
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [httpx.ReadTimeout("slow"), ok]
+        result = await fetch_with_retry(client, "http://example.com/doc.html", initial_backoff=0)
+        assert result is ok
 
     @pytest.mark.asyncio
     async def test_429_never_skipped(self):

@@ -9,16 +9,16 @@ Provides two components:
                      [InternetArchiveProvider(RS)].
 
 Provider coverage:
-  InternetArchiveProvider(RS) — IA eparlib.nic.in.* collection (1947-08-15 to
-                                Aug 2018, djvu.txt pre-OCR text).
+  InternetArchiveProvider(RS) — IA rsdebate.nic.in.* mirror (Rajya Sabha Secretariat,
+                                1952 – Dec 2009 as of 2026-10, djvu.txt OCR text plus
+                                rsdebate_* question metadata).
 
-RS coverage gap (post-Aug 2018):
+RS coverage gap (2010 onward):
   - SansadRsHtmlProvider is removed: sansad.in/rs/debates/officials was redesigned
     as a JavaScript SPA around 2019; the static HTML scraper returns zero records.
   - RsdebateDspaceProvider is removed: rsdebate.nic.in is unresponsive as of 2026-06.
   - elibrary.sansad.in has no modern Rajya Sabha debates collection.
-  RS data after August 2018 is currently unavailable from accessible sources.
-  These providers remain as classes in their modules for future reactivation.
+These providers remain as classes in their modules for future reactivation.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from typing import AsyncGenerator, Optional, Union
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.canonical.names import canonicalize_name
+from ingest.canonical.names import canonicalize_name, tidy_name
 from ingest.canonical.sessions import canonicalize_session
 from ingest.checkpoints.store import CheckpointStore
 from ingest.indexer import Indexer
@@ -266,12 +266,17 @@ class RSOrchestrator:
                 client,
                 corpus="RS",
                 rate_delay=rate_delay,
+                is_known=self._is_stored,
                 date_from=_df.get("date_from", _rs_scope_str),
                 date_to=_df.get("date_to"),
             ),
         ]
         # Per-sitting sequence counter shared across all providers and record types
         self._sitting_seq: dict[str, int] = {}
+
+    def _is_stored(self, canonical_doc_id: str) -> bool:
+        """True when Stage 1 already wrote this document (raw_documents PK)."""
+        return self._indexer.check_raw_document_exists(canonical_doc_id, "RS")
 
     def _next_seq(self, sitting_key: str) -> int:
         n = self._sitting_seq.get(sitting_key, 1)
@@ -387,6 +392,11 @@ class RSOrchestrator:
                     )
                     record["speaker_name"] = canon_name
                     record["speaker_name_unresolved"] = unresolved
+                else:
+                    record["questioner_names"] = [
+                        n for n in (tidy_name(q) for q in record.get("questioner_names") or []) if n
+                    ]
+                    record["minister_name"] = tidy_name(record.get("minister_name"))
                 record["session_name"] = canonicalize_session(
                     record.get("session_name"), source="RS"
                 )
