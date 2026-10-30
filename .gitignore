@@ -1,6 +1,5 @@
 SansadSearch.code-workspace
 app/ui/package-lock.json
-.agentic-reviews/
 .claude/
 app/.env
 app/.venv/
