@@ -31,7 +31,13 @@ from typing import AsyncGenerator, Optional, Union
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.canonical.names import canonicalize_name, split_joined_names, tidy_name
+from ingest.canonical.names import (
+    canonicalize_name,
+    drop_answering_minister,
+    split_joined_names,
+    tidy_name,
+    unique_names,
+)
 from ingest.canonical.sessions import canonicalize_session
 from ingest.checkpoints.store import CheckpointStore
 from ingest.indexer import Indexer
@@ -401,6 +407,9 @@ class RSOrchestrator:
                         ) if n
                     ]
                     record["minister_name"] = tidy_name(record.get("minister_name"))
+                    record["questioner_names"] = drop_answering_minister(
+                        unique_names(record["questioner_names"]), record["minister_name"]
+                    )
                 record["session_name"] = canonicalize_session(
                     record.get("session_name"), source="RS"
                 )

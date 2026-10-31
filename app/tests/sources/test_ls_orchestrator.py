@@ -516,6 +516,53 @@ class TestLSOrchestratorProviderChain:
         finally:
             checkpoint.close()
 
+    async def test_answering_minister_not_listed_as_questioner(self):
+        """eparlib_members names the answering minister too; it must not stay a questioner."""
+        handle_n = "18433"
+        identifier = f"eparlib.nic.in.{handle_n}"
+        text = (
+            "UNSTARRED QUESTION NO. 12\n\n"
+            "SHRI LAXMINARAYAN PANDEY:\n"
+            "Will the Minister of HUMAN RESOURCE DEVELOPMENT be pleased to state "
+            "the number of schools opened this year?\n\n"
+            "THE MINISTER OF HUMAN RESOURCE DEVELOPMENT (SHRI ARJUN SINGH):\n"
+            "Two hundred new schools were opened during the year.\n"
+        )
+        ref = DocumentRef(
+            corpus="LS",
+            provider="internet_archive",
+            format="ia_text",
+            fetch_url=f"https://archive.org/download/{identifier}/{identifier}_djvu.txt",
+            canonical_doc_id=handle_n,
+            citation_url=f"https://archive.org/details/{identifier}",
+            metadata={
+                "identifier": identifier,
+                "eparlib_document_url": f"https://eparlib.sansad.in/handle/123456789/{handle_n}",
+                "eparlib_date": "1996-07-15",
+                "eparlib_lok_sabha_number": "11",
+                "eparlib_session_number": "1",
+                "eparlib_title": "Lok Sabha Unstarred Questions",
+                "eparlib_members": ["Laxminarayan PandeyArjun Singh"],
+            },
+        )
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        orchestrator = LSOrchestrator(
+            client=AsyncMock(spec=httpx.AsyncClient),
+            checkpoint=checkpoint,
+            indexer=indexer,
+            providers=[StubProvider([ref], {handle_n: text}, name="ia")],
+        )
+        await orchestrator.run()
+
+        try:
+            qa = [r for r in indexer.indexed_records if r.get("record_type") == "qa"]
+            assert len(qa) == 1
+            assert qa[0]["minister_name"] == "Arjun Singh"
+            assert qa[0]["questioner_names"] == ["Laxminarayan Pandey"]
+        finally:
+            checkpoint.close()
+
     async def test_dspace_fallback_when_ia_fetch_fails(self):
         """IA discovers N but fetch→None (error, not checkpointed); DSpace must still process N."""
         handle_n = "77777"
