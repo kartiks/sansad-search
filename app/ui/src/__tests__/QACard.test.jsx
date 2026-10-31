@@ -275,3 +275,10 @@ describe('QACard — body badge and left border', () => {
     expect(container.querySelector('[data-testid="qa-card"]').className).toContain('result-card--RS')
   })
 })
+
+describe('QACard — source link safety', () => {
+  it('omits View source for a non-http(s) source_url', () => {
+    renderCard(makeQAResult({ source_url: 'javascript:alert(1)' }))
+    expect(screen.queryByText('View source ↗')).toBeNull()
+  })
+})

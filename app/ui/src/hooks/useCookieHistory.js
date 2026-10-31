@@ -1,61 +1,70 @@
+// Recent searches (F08). Stored in localStorage (lib/searchStorage.js); the
+// hook keeps its old name to avoid churn across pages and tests.
+
 import { useState, useCallback } from 'react'
 import {
-  areCookiesEnabled,
-  readCookie,
-  writeCookie,
-  deleteCookie,
-  trimRecentToFit,
-  RECENT_COOKIE,
-  SAVED_COOKIE,
-} from '../lib/cookie.js'
+  isStorageAvailable,
+  readList,
+  writeList,
+  RECENT_KEY,
+} from '../lib/searchStorage.js'
 
-const RECENT_MAX = 10
-const RECENT_EXPIRY_DAYS = 30
+export const RECENT_MAX = 10
+export const RECENT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+function isValidEntry(e) {
+  return e && typeof e.query === 'string' && e.query && typeof e.timestamp === 'number'
+}
+
+// Drops malformed entries and entries older than 30 days.
+function freshEntries(list, now = Date.now()) {
+  return list
+    .filter(isValidEntry)
+    .filter((e) => now - e.timestamp <= RECENT_MAX_AGE_MS)
+    .slice(0, RECENT_MAX)
+}
 
 export function useCookieHistory() {
-  const [cookiesEnabled] = useState(() => areCookiesEnabled())
+  const [storageEnabled] = useState(() => isStorageAvailable())
 
   const [entries, setEntries] = useState(() => {
-    if (!cookiesEnabled) return []
-    const data = readCookie(RECENT_COOKIE)
-    return Array.isArray(data) ? data : []
+    if (!storageEnabled) return []
+    return freshEntries(readList(RECENT_KEY))
   })
 
   const recordSearch = useCallback(
     (query) => {
-      if (!cookiesEnabled || !query) return
+      if (!storageEnabled || !query) return
       setEntries((prev) => {
         const now = Date.now()
         const filtered = prev.filter((e) => e.query !== query)
-        const next = [{ query, timestamp: now }, ...filtered].slice(0, RECENT_MAX)
-        const savedData = readCookie(SAVED_COOKIE) || []
-        const trimmed = trimRecentToFit(next, savedData)
-        writeCookie(RECENT_COOKIE, trimmed, { expires: RECENT_EXPIRY_DAYS })
-        return trimmed
+        const next = freshEntries([{ query, timestamp: now }, ...filtered], now)
+        writeList(RECENT_KEY, next)
+        return next
       })
     },
-    [cookiesEnabled]
+    [storageEnabled]
   )
 
   const deleteEntry = useCallback(
     (query) => {
-      if (!cookiesEnabled) return
+      if (!storageEnabled) return
       setEntries((prev) => {
         const next = prev.filter((e) => e.query !== query)
-        const savedData = readCookie(SAVED_COOKIE) || []
-        const trimmed = trimRecentToFit(next, savedData)
-        writeCookie(RECENT_COOKIE, trimmed, { expires: RECENT_EXPIRY_DAYS })
-        return trimmed
+        writeList(RECENT_KEY, next)
+        return next
       })
     },
-    [cookiesEnabled]
+    [storageEnabled]
   )
 
   const clearAll = useCallback(() => {
-    if (!cookiesEnabled) return
-    deleteCookie(RECENT_COOKIE)
+    if (!storageEnabled) return
+    // Write [] rather than removing the key, so the one-time cookie
+    // migration never runs again.
+    writeList(RECENT_KEY, [])
     setEntries([])
-  }, [cookiesEnabled])
+  }, [storageEnabled])
 
-  return { entries, cookiesEnabled, recordSearch, deleteEntry, clearAll }
+  return { entries, storageEnabled, recordSearch, deleteEntry, clearAll }
 }

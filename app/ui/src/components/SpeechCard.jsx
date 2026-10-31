@@ -6,6 +6,7 @@ import {
   UNTRANSLATED_SPEECH_MESSAGE,
 } from '../lib/constants.js'
 import { sanitizeSnippet } from '../lib/sanitizeSnippet.js'
+import { safeHttpUrl } from '../lib/safeUrl.js'
 
 function LangBadge({ lang_original }) {
   if (lang_original === 'hi') {
@@ -76,7 +77,7 @@ export default function SpeechCard({ result, detailTo, detailState }) {
   const fullTextNull =
     result.snippet == null || result.snippet === undefined
   const isTranslated = result.is_translated === true
-  const sourceUrl = result.source_url
+  const sourceUrl = safeHttpUrl(result.source_url)
 
   const meta = []
   if (party) meta.push(party)

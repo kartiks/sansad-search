@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useSearch, buildSearchRequestBody, SEARCH_ENDPOINT } from '../hooks/useSearch.js'
 import { useCookieHistory } from '../hooks/useCookieHistory.js'
-import { useSavedSearches, sanitizeStoredFilters } from '../hooks/useSavedSearches.js'
+import { useSavedSearches } from '../hooks/useSavedSearches.js'
 import {
   ALL_SOURCES,
   ALL_PROCEEDING_TYPES,
@@ -19,10 +19,8 @@ import {
   NO_RESULTS_BODY,
   DEBUG_BADGE_LABEL,
 } from '../lib/constants.js'
-import {
-  defaultFilterState,
-  isDefaultFilterState,
-} from '../lib/filterState.js'
+import { defaultFilterState, sanitizeStoredFilters } from '../lib/filterState.js'
+import { filtersFromSearchParams, setFilterSearchParams } from '../lib/filterParams.js'
 import { formatExpansionNotice, hasExpansion } from '../lib/expansionNotice.js'
 import ResultCard from '../components/ResultCard.jsx'
 import SearchDebugPanel from '../components/SearchDebugPanel.jsx'
@@ -102,25 +100,22 @@ function buildActiveChips(filters) {
 
 export default function Results() {
   const navigate = useNavigate()
-  const location = useLocation()
   const [params, setParams] = useSearchParams()
   const { q: urlQuery, sort: urlSort, page: urlPage } = readUrl(params)
+  // Filters live in the URL (see lib/filterParams.js), so a results link is
+  // shareable and Back undoes a filter change.
+  const filters = useMemo(() => filtersFromSearchParams(params), [params])
 
   const [inputValue, setInputValue] = useState(urlQuery)
   const [validation, setValidation] = useState('')
   const [dropdownVisible, setDropdownVisible] = useState(false)
   const [savedPanelOpen, setSavedPanelOpen] = useState(false)
   const [toast, setToast] = useState('')
-
-  const [filters, setFilters] = useState(() => {
-    const stateFilters = location.state?.filters
-    if (stateFilters && !isDefaultFilterState(stateFilters)) return stateFilters
-    return defaultFilterState()
-  })
+  const bookmarkWrapRef = useRef(null)
 
   const [modalOpen, setModalOpen] = useState(false)
 
-  const { entries: recentEntries, cookiesEnabled, recordSearch, deleteEntry: deleteRecent, clearAll: clearRecent } = useCookieHistory()
+  const { entries: recentEntries, storageEnabled, recordSearch, deleteEntry: deleteRecent, clearAll: clearRecent } = useCookieHistory()
   const { entries: savedEntries, atLimit, saveSearch, deleteEntry: deleteSaved, renameEntry } = useSavedSearches()
 
   useEffect(() => {
@@ -146,6 +141,23 @@ export default function Results() {
     if (!enabled) navigate('/', { replace: true })
   }, [enabled, navigate])
 
+  // Pushes a new results URL. Unless `fresh`, other params (e.g. debug) are kept.
+  const goTo = ({
+    q = urlQuery,
+    nextFilters = filters,
+    sort = urlSort,
+    page = 1,
+    fresh = false,
+  }) => {
+    const next = fresh ? new URLSearchParams() : new URLSearchParams(params)
+    next.set('q', q)
+    next.set('page', String(page))
+    if (sort && sort !== 'relevance') next.set('sort', sort)
+    else next.delete('sort')
+    setFilterSearchParams(next, nextFilters)
+    setParams(next)
+  }
+
   const onSubmit = (e) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault()
     const cleaned = (inputValue || '').slice(0, MAX_QUERY_LEN)
@@ -157,59 +169,34 @@ export default function Results() {
     setValidation('')
     setDropdownVisible(false)
     recordSearch(cleaned.trim())
-    const next = new URLSearchParams()
-    next.set('q', cleaned.trim())
-    next.set('page', '1')
-    if (urlSort && urlSort !== 'relevance') next.set('sort', urlSort)
-    setParams(next, { state: { filters } })
+    goTo({ q: cleaned.trim(), fresh: true })
   }
 
   const onInputChange = (e) => {
     setInputValue(e.target.value)
     if (validation) setValidation('')
     if (e.target.value.length > 0) setDropdownVisible(false)
-    else if (cookiesEnabled) setDropdownVisible(true)
+    else if (storageEnabled) setDropdownVisible(true)
   }
 
   const onInputFocus = () => {
-    if (cookiesEnabled && inputValue.length === 0) setDropdownVisible(true)
+    if (storageEnabled && inputValue.length === 0) setDropdownVisible(true)
   }
 
   const onSortChange = (e) => {
-    const nextSort = e.target.value
-    const next = new URLSearchParams(params)
-    next.set('q', urlQuery)
-    next.set('page', '1')
-    if (nextSort === 'relevance') {
-      next.delete('sort')
-    } else {
-      next.set('sort', nextSort)
-    }
-    setParams(next, { state: { filters } })
+    goTo({ sort: e.target.value })
   }
 
   const onPageChange = (nextPage) => {
-    const next = new URLSearchParams(params)
-    next.set('q', urlQuery)
-    next.set('page', String(nextPage))
-    if (urlSort && urlSort !== 'relevance') {
-      next.set('sort', urlSort)
-    }
-    setParams(next, { state: { filters } })
+    goTo({ page: nextPage })
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
   }
 
   const onModalApply = (newFilters) => {
-    setFilters(newFilters)
     setModalOpen(false)
-    const next = new URLSearchParams(params)
-    next.set('q', inputValue.trim() || urlQuery)
-    next.set('page', '1')
-    if (urlSort && urlSort !== 'relevance') next.set('sort', urlSort)
-    else next.delete('sort')
-    setParams(next, { state: { filters: newFilters } })
+    goTo({ q: inputValue.trim() || urlQuery, nextFilters: newFilters })
   }
 
   const removeFilter = (dimension) => {
@@ -236,48 +223,27 @@ export default function Results() {
       default:
         newFilters = filters
     }
-    setFilters(newFilters)
-    const next = new URLSearchParams(params)
-    next.set('q', urlQuery)
-    next.set('page', '1')
-    if (urlSort && urlSort !== 'relevance') next.set('sort', urlSort)
-    else next.delete('sort')
-    setParams(next, { state: { filters: newFilters } })
+    goTo({ nextFilters: newFilters })
   }
 
   const clearAllFilters = () => {
     const newFilters = defaultFilterState()
-    setFilters(newFilters)
-    const next = new URLSearchParams(params)
-    next.set('q', urlQuery)
-    next.set('page', '1')
-    if (urlSort && urlSort !== 'relevance') next.set('sort', urlSort)
-    else next.delete('sort')
-    setParams(next, { state: { filters: newFilters } })
+    goTo({ nextFilters: newFilters })
   }
 
   const handleRecentSelect = (query) => {
     setDropdownVisible(false)
     setInputValue(query)
     recordSearch(query)
-    const next = new URLSearchParams()
-    next.set('q', query)
-    next.set('page', '1')
-    const newFilters = defaultFilterState()
-    setFilters(newFilters)
-    setParams(next, { state: { filters: newFilters } })
+    goTo({ q: query, nextFilters: defaultFilterState(), sort: 'relevance', fresh: true })
   }
 
   const handleSavedRun = (entry) => {
     setSavedPanelOpen(false)
     const sanitized = sanitizeStoredFilters(entry.filters)
     recordSearch(entry.query)
-    setFilters(sanitized)
     setInputValue(entry.query)
-    const next = new URLSearchParams()
-    next.set('q', entry.query)
-    next.set('page', '1')
-    setParams(next, { state: { filters: sanitized } })
+    goTo({ q: entry.query, nextFilters: sanitized, sort: 'relevance', fresh: true })
   }
 
   const handleSaveCurrentSearch = () => {
@@ -371,7 +337,7 @@ export default function Results() {
             >
               Advanced Search
             </button>
-            <div className="bookmark-wrap">
+            <div className="bookmark-wrap" ref={bookmarkWrapRef}>
               <button
                 type="button"
                 className="bookmark-btn"
@@ -406,6 +372,7 @@ export default function Results() {
                 onRename={(id, name) => renameEntry(id, name)}
                 onToast={setToast}
                 onDismiss={() => setSavedPanelOpen(false)}
+                anchorRef={bookmarkWrapRef}
               />
             </div>
             {debugMode && (
@@ -443,7 +410,7 @@ export default function Results() {
           </div>
         )}
 
-        {data && hasExpansion(data.expansion_notice) && (
+        {!loading && !error && data && hasExpansion(data.expansion_notice) && (
           <p className="expansion-notice" data-testid="expansion-notice">
             {formatExpansionNotice(data.expansion_notice)}
           </p>
@@ -519,7 +486,7 @@ export default function Results() {
               <>
                 <div data-testid="results-list">
                   {data.results.map((r) => (
-                    <ResultCard key={r.id} result={r} filters={filters} debug={debugMode} />
+                    <ResultCard key={r.id} result={r} debug={debugMode} />
                   ))}
                 </div>
                 <Pagination

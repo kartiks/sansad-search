@@ -1,22 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('../lib/cookie.js', () => ({
-  areCookiesEnabled: vi.fn().mockReturnValue(true),
-  readCookie: vi.fn().mockReturnValue(null),
-  writeCookie: vi.fn(),
-  deleteCookie: vi.fn(),
-  trimRecentToFit: vi.fn((entries) => entries),
-  RECENT_COOKIE: 'ss_recent',
-  SAVED_COOKIE: 'ss_saved',
-  MAX_COMBINED_BYTES: 4096,
-}))
-
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 
 import Home from '../pages/Home.jsx'
 import { makeStatusResponse } from './fixtures.js'
-import * as cookieModule from '../lib/cookie.js'
 
 function renderHome(initialEntries = ['/']) {
   const navigateSpy = { current: null }
@@ -45,19 +33,15 @@ function useSearchString() {
   return window.location.search
 }
 
-function NavStateCapture() {
+function NavSearchCapture() {
   const location = useLocation()
-  return (
-    <div data-testid="nav-state">{JSON.stringify(location.state)}</div>
-  )
+  return <div data-testid="nav-search">{location.search}</div>
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   global.fetch = vi.fn()
-  cookieModule.areCookiesEnabled.mockReturnValue(true)
-  cookieModule.readCookie.mockReturnValue(null)
-  cookieModule.trimRecentToFit.mockImplementation((entries) => entries)
+  window.localStorage.clear()
 })
 
 afterEach(() => {
@@ -373,7 +357,7 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
       <MemoryRouter>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/search" element={<NavStateCapture />} />
+          <Route path="/search" element={<NavSearchCapture />} />
         </Routes>
       </MemoryRouter>
     )
@@ -387,18 +371,16 @@ describe('Home — Advanced Search modal (F03 UI)', () => {
       expect(screen.queryByTestId('advanced-search-modal')).toBeNull()
     })
 
-    // Submit a valid query; navigation must carry the applied filter state.
+    // Submit a valid query; the results URL must carry the applied filters.
     fireEvent.change(screen.getByTestId('home-search-input'), {
       target: { value: 'fundamental rights' },
     })
     fireEvent.click(screen.getByTestId('home-search-submit'))
 
-    const captured = await screen.findByTestId('nav-state')
-    const navState = JSON.parse(captured.textContent || 'null')
-    expect(navState).not.toBeNull()
-    expect(navState.filters).toBeDefined()
-    expect([...navState.filters.sources].sort()).toEqual(['LS', 'RS'])
-    expect(navState.filters.sources).not.toContain('CA')
+    const captured = await screen.findByTestId('nav-search')
+    const params = new URLSearchParams(captured.textContent)
+    expect(params.get('q')).toBe('fundamental rights')
+    expect(params.get('source').split(',').sort()).toEqual(['LS', 'RS'])
   })
 })
 
@@ -454,7 +436,7 @@ describe('Home — suggested queries', () => {
 })
 
 describe('Home — F08 Search History wiring', () => {
-  it('submitting a valid query auto-records it to recent history with 30-day cookie expiry', async () => {
+  it('submitting a valid query auto-records it to recent history', async () => {
     global.fetch.mockResolvedValue({
       ok: true,
       json: async () => ({ status: 'unavailable' }),
@@ -471,16 +453,10 @@ describe('Home — F08 Search History wiring', () => {
       target: { value: 'fundamental rights' },
     })
     fireEvent.click(screen.getByTestId('home-search-submit'))
-    // recordSearch is wired into onSubmit; writeCookie must be called for ss_recent
-    // with the submitted query and the 30-day expiry option (F08 cookie lifetime contract)
+    // recordSearch is wired into onSubmit; the query is persisted to ss_recent.
     await waitFor(() => {
-      expect(cookieModule.writeCookie).toHaveBeenCalledWith(
-        'ss_recent',
-        expect.arrayContaining([
-          expect.objectContaining({ query: 'fundamental rights' }),
-        ]),
-        { expires: 30 }
-      )
+      const recent = JSON.parse(window.localStorage.getItem('ss_recent'))
+      expect(recent[0].query).toBe('fundamental rights')
     })
   })
 })
