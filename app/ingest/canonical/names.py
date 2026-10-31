@@ -113,6 +113,44 @@ def split_joined_names(name: Optional[str]) -> list[str]:
     return [p.strip(" ,;") for p in parts if p.strip(" ,;")]
 
 
+def _letters_key(name: str) -> str:
+    """Lowercase letters only, so "Kalp Nath Rai" and "Kalpnath Rai" compare equal."""
+    return re.sub(r"[^a-z]", "", name.lower())
+
+
+def unique_names(names: list[str]) -> list[str]:
+    """Drop repeats of a name, compared on letters only; first spelling wins."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in names:
+        key = _letters_key(n) or n
+        if key not in seen:
+            seen.add(key)
+            out.append(n)
+    return out
+
+
+def drop_answering_minister(
+    questioners: list[str], minister: Optional[str]
+) -> list[str]:
+    """
+    Remove the answering minister from a Q&A questioner list.
+
+    eParlib member lists name the minister who answered alongside the members
+    who asked ("Laxminarayan Pandey" + "Arjun Singh", answered by Arjun Singh).
+    Names are compared on letters only, which absorbs OCR spacing and hyphens.
+    A lone questioner is kept: in a minister's statement correcting an earlier
+    reply the minister is both.
+    """
+    if not minister or len(questioners) < 2:
+        return questioners
+    key = _letters_key(minister)
+    if not key:
+        return questioners
+    kept = [q for q in questioners if _letters_key(q) != key]
+    return kept or questioners
+
+
 def _normalize_for_lookup(name: str) -> str:
     """Lowercase and collapse internal whitespace for dictionary lookup."""
     return re.sub(r"\s+", " ", name.strip().lower())

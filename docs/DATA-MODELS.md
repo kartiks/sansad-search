@@ -73,7 +73,7 @@ Primary canonical store for starred and unstarred question records.
 | `sitting_number` | INTEGER | NULL | Sitting number within session |
 | `question_number` | INTEGER | NULL | Official question number |
 | `subject` | TEXT | NULL | Question subject/title |
-| `questioner_names` | TEXT[] | NOT NULL | Primary questioner + co-signatories; always an array, one element per person. IA `eparlib_members` often runs names together ("Nitish KumarRamji Lal Suman"); ingestion splits them (`split_joined_names`) |
+| `questioner_names` | TEXT[] | NOT NULL | Primary questioner + co-signatories; always an array, one element per person. IA `eparlib_members` often runs names together ("Nitish KumarRamji Lal Suman"); ingestion splits them (`split_joined_names`), drops repeats (`unique_names`) and removes the answering minister, whom eParlib lists alongside the members (`drop_answering_minister`; a lone questioner is kept, since a minister correcting their own reply is both) |
 | `questioner_party` | VARCHAR(200) | NULL | Party affiliation of primary questioner |
 | `minister_name` | VARCHAR(300) | NULL | Name of the minister who answered the question, extracted from the minister's response section (PRD v3.0 rule). **Never** set to question-preamble text (e.g. "Will the minister of [Ministry] be pleased to state…"). The minister's own name is taken from the answer attribution ("THE MINISTER OF STATE IN THE MINISTRY OF X (SHRI Y)" → "SHRI Y"), including attributions that wrap over several lines or put the name on the line after the designation. When the name is not identifiable from the response section, set to `"Minister of [Ministry]"` using the `ministry` value |
 | `ministry` | VARCHAR(300) | NULL | Ministry responsible |
