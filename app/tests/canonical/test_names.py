@@ -7,10 +7,12 @@ from pathlib import Path
 
 from ingest.canonical.names import (
     canonicalize_name,
+    drop_answering_minister,
     load_names_dict,
     normalize_for_dedup,
     split_joined_names,
     strip_honorifics,
+    unique_names,
 )
 
 
@@ -186,3 +188,40 @@ class TestSplitJoinedNames:
     ])
     def test_split(self, raw, expected):
         assert split_joined_names(raw) == expected
+
+
+class TestDropAnsweringMinister:
+    def test_removes_minister_listed_with_questioners(self):
+        assert drop_answering_minister(
+            ["Laxminarayan Pandey", "Arjun Singh"], "Arjun Singh"
+        ) == ["Laxminarayan Pandey"]
+
+    @pytest.mark.parametrize("member,minister", [
+        ("Kalpnath Rai", "Kalp Nath Rai"),
+        ("Mallikarjun", "Mal- Likarjun"),
+        ("M. M Jacob", "M. M. Jacob"),
+        ("G. Venkatswamy", "G. Venkat Swamy"),
+    ])
+    def test_matches_despite_spacing_and_punctuation(self, member, minister):
+        assert drop_answering_minister(["Hari Kewal Prasad", member], minister) == [
+            "Hari Kewal Prasad"
+        ]
+
+    def test_keeps_lone_questioner(self):
+        # A minister's statement correcting an earlier reply names them as both.
+        assert drop_answering_minister(["Praful Patel"], "Praful Patel") == ["Praful Patel"]
+
+    @pytest.mark.parametrize("minister", [None, "", "Minister of FINANCE", "( )"])
+    def test_leaves_list_alone_without_a_matching_minister(self, minister):
+        names = ["Sheela Gautam", "Shivraj Singh Chouhan"]
+        assert drop_answering_minister(names, minister) == names
+
+
+class TestUniqueNames:
+    def test_drops_repeats_ignoring_case_and_spacing(self):
+        assert unique_names(
+            ["Shobha Karandlaje", "Prathap Simha", "SHOBHA KARANDLAJE", "Prathap  Simha"]
+        ) == ["Shobha Karandlaje", "Prathap Simha"]
+
+    def test_keeps_distinct_names_in_order(self):
+        assert unique_names(["B", "A"]) == ["B", "A"]
