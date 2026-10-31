@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from api.lib.db import get_pool
+from api.lib.db import DB_ERRORS, DB_UNAVAILABLE_BODY, get_pool, is_valid_uuid
 from api.services.debug import fetch_processed_record, fetch_raw_document
 
 router = APIRouter()
@@ -36,10 +36,18 @@ async def get_debug_processed(
 
     Returns {"table": "speeches"|"qa_exchanges", "row": {...}} with every
     column including segments (JSONB) and canonical_doc_id. 404 when the
-    id is not found in either table.
+    id is not a UUID or not found in either table; 503 when the database is
+    unavailable.
     """
-    async with pool.acquire() as conn:
-        result = await fetch_processed_record(conn, record_id)
+    if not is_valid_uuid(record_id):
+        return JSONResponse(status_code=404, content=_NOT_FOUND_RECORD)
+
+    try:
+        async with pool.acquire() as conn:
+            result = await fetch_processed_record(conn, record_id)
+    except DB_ERRORS:
+        logger.exception("Debug processed fetch failed for id=%s", record_id)
+        return JSONResponse(status_code=503, content=DB_UNAVAILABLE_BODY)
 
     if result is None:
         return JSONResponse(status_code=404, content=_NOT_FOUND_RECORD)
@@ -57,10 +65,18 @@ async def get_debug_raw(
 
     Returns {"row": {...}} with the full raw_documents row resolved via the
     processed record's canonical_doc_id + source. 404 when no processed
-    record exists, canonical_doc_id is NULL, or no matching raw row exists.
+    record exists, canonical_doc_id is NULL, or no matching raw row exists
+    (and when the id is not a UUID). 503 when the database is unavailable.
     """
-    async with pool.acquire() as conn:
-        result = await fetch_raw_document(conn, record_id)
+    if not is_valid_uuid(record_id):
+        return JSONResponse(status_code=404, content=_NOT_FOUND_RAW)
+
+    try:
+        async with pool.acquire() as conn:
+            result = await fetch_raw_document(conn, record_id)
+    except DB_ERRORS:
+        logger.exception("Debug raw fetch failed for id=%s", record_id)
+        return JSONResponse(status_code=503, content=DB_UNAVAILABLE_BODY)
 
     if result is None:
         return JSONResponse(status_code=404, content=_NOT_FOUND_RAW)
