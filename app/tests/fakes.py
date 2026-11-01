@@ -79,6 +79,10 @@ class FakeCheckpointStore:
             "fetch_url": fetch_url,
         }
 
+    def processed_ids(self, corpus: str) -> set[str]:
+        self._require_open()
+        return {doc_id for doc_id, c in self._state["processed"] if c == corpus}
+
     def processed_document_count(self) -> int:
         self._require_open()
         return len(self._state["processed"])

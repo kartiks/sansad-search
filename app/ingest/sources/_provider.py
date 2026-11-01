@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 
 @dataclass
@@ -54,9 +54,11 @@ class Provider(ABC):
     Subclasses implement discovery (listing/browse crawl to produce a set of
     DocumentRefs) and fetching (HTTP retrieval of one document).
 
-    The corpus orchestrator calls discover() once per run to get the full set
-    of DocumentRefs, then calls fetch() for each DocumentRef whose
-    canonical_doc_id is absent from the checkpoint store.
+    The corpus orchestrator iterates iter_discover() and calls fetch() for each
+    DocumentRef as it arrives, so a long discovery (one metadata request per
+    item) stores documents as it goes and an interrupted run keeps them.
+    Providers that can stream override iter_discover(); the default wraps
+    discover().
     """
 
     @abstractmethod
@@ -66,6 +68,11 @@ class Provider(ABC):
         Returns a list of DocumentRef objects. May be empty if the provider
         has no documents in scope (e.g. after the date filter is applied).
         """
+
+    async def iter_discover(self) -> AsyncIterator[DocumentRef]:
+        """Yield DocumentRefs one at a time (default: everything discover() returns)."""
+        for doc_ref in await self.discover():
+            yield doc_ref
 
     @abstractmethod
     async def fetch(self, doc_ref: DocumentRef) -> bytes | str | None:

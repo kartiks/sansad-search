@@ -113,6 +113,103 @@ def split_joined_names(name: Optional[str]) -> list[str]:
     return [p.strip(" ,;") for p in parts if p.strip(" ,;")]
 
 
+def _lookup_key(name: str) -> str:
+    return _normalize_for_lookup(normalize_name_form(strip_honorifics(name)))
+
+
+# Visible boundaries inside capitals-joined lists: initials starting straight after
+# a word ("GOPALSAMYT.R. BAALU"), or a word after a closing bracket
+# ("KHAN (DURRU)ASHOK"). A nickname in quotes is handled by _CAPS_NICKNAME_RE.
+_CAPS_VISIBLE_BOUNDARY_RE = re.compile(r"(?<=[A-Z]{2})(?=[A-Z]\.)|(?<=\))(?=[A-Z])")
+# "RAJIV RANJAN SINGH 'LALAN'KAPIL SIBAL": the name ends after the closing quote.
+_CAPS_NICKNAME_RE = re.compile(r"( '[A-Z][A-Z .]*')(?=[A-Z])")
+
+
+def split_capitals_joined(name: Optional[str], names_dict: dict[str, str]) -> list[str]:
+    """
+    Split names run together in capitals, using the names dictionary.
+
+    Rajya Sabha member lists write co-questioners in capitals with no delimiter
+    ("KALRAJ MISHRASANTOSH BAGRODIA"), so the case change split_joined_names
+    relies on isn't there. A boundary may fall between any two letters (or after
+    an initial's full stop); a split is accepted only when every piece is a known
+    name, preferring the fewest pieces. Otherwise the name is returned unchanged.
+    """
+    if not name or not name.strip():
+        return []
+    s = name.strip()
+    letters = [c for c in s if c.isalpha() and c.isascii()]
+    if not letters or not all(c.isupper() for c in letters):
+        return [s]
+    if _lookup_key(s) in names_dict:
+        return [s]
+    marked = _CAPS_VISIBLE_BOUNDARY_RE.sub("|", _CAPS_NICKNAME_RE.sub(r"\1|", s))
+    pieces = [p.strip(" ,;") for p in marked.split("|") if p.strip(" ,;")]
+    return [part for piece in pieces for part in _split_by_dictionary(piece, names_dict)]
+
+
+def _segment(
+    s: str, points: list[int], piece_ok, max_unknown: int
+) -> Optional[list[str]]:
+    """Fewest-piece split of *s* at *points*; piece_ok(piece) → 0 known, 1 unknown, None no."""
+    best: dict[int, tuple[tuple[int, int], int]] = {0: ((0, 0), -1)}
+    last = len(points) - 1
+    for j in range(1, len(points)):
+        for i in range(j - 1, -1, -1):
+            if i not in best or (i == 0 and j == last):
+                continue
+            piece = s[points[i]:points[j]].strip(" ,;")
+            kind = piece_ok(piece) if len(piece) >= 3 else None
+            if kind is None:
+                continue
+            (u, k), _ = best[i]
+            cand = ((u + kind, k + 1), i)
+            if cand[0][0] > max_unknown:
+                continue
+            if j not in best or cand[0] < best[j][0]:
+                best[j] = cand
+    if last not in best:
+        return None
+    pieces: list[str] = []
+    j = last
+    while j > 0:
+        i = best[j][1]
+        pieces.append(s[points[i]:points[j]].strip(" ,;"))
+        j = i
+    return list(reversed(pieces))
+
+
+def _split_by_dictionary(s: str, names_dict: dict[str, str]) -> list[str]:
+    """
+    Split *s* where names were run together, at points inside words.
+
+    First try pieces that are all known names. Failing that, allow one unknown
+    piece (a member the dictionary lacks) when every other piece is a known name
+    of two or more words, and the unknown piece has two or more words too; the
+    two-word rule stops a short known name ("RAMA") splitting a single unknown
+    one ("RAMACHANDRA KHUNTIA"). Returns [s] when neither works.
+    """
+    if not names_dict or _lookup_key(s) in names_dict:
+        return [s]
+    n = len(s)
+    cuts = [i for i in range(1, n) if s[i].isalpha() and s[i - 1] not in " -'(."]
+    points = [0] + cuts + [n]
+
+    def all_known(piece: str) -> Optional[int]:
+        return 0 if _lookup_key(piece) in names_dict else None
+
+    def one_unknown(piece: str) -> Optional[int]:
+        if len(piece.split()) < 2:
+            return None
+        return 0 if _lookup_key(piece) in names_dict else 1
+
+    return (
+        _segment(s, points, all_known, max_unknown=0)
+        or _segment(s, points, one_unknown, max_unknown=1)
+        or [s]
+    )
+
+
 def _letters_key(name: str) -> str:
     """Lowercase letters only, so "Kalp Nath Rai" and "Kalpnath Rai" compare equal."""
     return re.sub(r"[^a-z]", "", name.lower())

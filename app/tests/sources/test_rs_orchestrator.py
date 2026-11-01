@@ -62,6 +62,18 @@ class MockIndexer:
         self.indexed_records.append(record)
         return True
 
+    def index_document(self, records, checkpoint, *, corpus, canonical_doc_id,
+                       provider=None, fetch_url=None) -> int:
+        for record in records:
+            self.index_record(record, checkpoint)
+        checkpoint.mark_document_processed(
+            canonical_doc_id, corpus=corpus, provider=provider, fetch_url=fetch_url
+        )
+        return len(records)
+
+    def next_sequence(self, source, date_val, sitting_number) -> int:
+        return 1
+
     def check_raw_document_exists(self, canonical_doc_id: str, corpus: str) -> bool:
         return (canonical_doc_id, corpus) in self._raw_docs
 
@@ -79,9 +91,11 @@ class MockIndexer:
             "metadata_json": meta, "fetch_url": fetch_url, "citation_url": citation_url,
         }
 
-    def read_raw_documents_for_scope(self, corpus, date_from=None, date_to=None):
-        for row in self._raw_docs.values():
+    def read_raw_documents_for_scope(self, corpus, date_from=None, date_to=None, skip_ids=None):
+        for row in list(self._raw_docs.values()):
             if row["corpus"] != corpus:
+                continue
+            if skip_ids and row["canonical_doc_id"] in skip_ids:
                 continue
             if date_from and row["date"] and str(row["date"]) < date_from:
                 continue

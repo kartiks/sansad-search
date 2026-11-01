@@ -45,7 +45,7 @@ _RS_IDENTIFIER_RE = re.compile(r"rsdebate\.nic\.in\.(\d+)$", re.IGNORECASE)
 # Each house has its own IA mirror. eparlib.nic.in.* is published by the Lok Sabha
 # Secretariat (every item, checked 2026-10) and also holds ~9k committee reports,
 # which are not proceedings. rsdebate.nic.in.* is the Rajya Sabha Secretariat's
-# mirror (1952 – Dec 2009 as of 2026-10).
+# mirror (Jul 1984 – Dec 2009 as of 2026-11; ~280k items).
 _LS_QUERY = (
     'identifier:eparlib.nic.in* '
     'AND NOT eparlib_appears_in_collections:"Parliamentary Committee Reports"'
@@ -152,8 +152,16 @@ class InternetArchiveProvider(Provider):
         self._is_known = is_known
 
     async def discover(self) -> list[DocumentRef]:
+        """Every in-scope document as a list (see iter_discover)."""
+        return [doc_ref async for doc_ref in self.iter_discover()]
+
+    async def iter_discover(self):
         """
-        Enumerate all eparlib.nic.in.{N} identifiers and build DocumentRefs.
+        Enumerate all eparlib.nic.in.{N} identifiers and yield DocumentRefs.
+
+        One metadata request per item not yet stored (each followed by the rate
+        delay, in _fetch_ia_metadata); refs are yielded as they are built, so the
+        orchestrator fetches and stores each document before the next request.
 
         For each identifier: fetches the IA metadata JSON to get eparlib_* fields,
         extracts the DSpace handle number N as canonical_doc_id, sets citation_url
@@ -168,7 +176,7 @@ class InternetArchiveProvider(Provider):
             date_to=self._date_to,
         )
 
-        doc_refs: list[DocumentRef] = []
+        found = 0
         known = 0
         for item in ia_results:
             identifier = item.get("identifier")
@@ -186,7 +194,7 @@ class InternetArchiveProvider(Provider):
                 known += 1
                 continue
 
-            full_data = await self._fetch_ia_metadata(str(identifier))
+            full_data = await self._fetch_ia_metadata(str(identifier))  # rate-limited
             if full_data is None:
                 continue
 
@@ -221,7 +229,8 @@ class InternetArchiveProvider(Provider):
                 else None
             )
 
-            doc_refs.append(
+            found += 1
+            yield (
                 DocumentRef(
                     corpus=self._corpus,
                     provider="internet_archive",
@@ -250,9 +259,8 @@ class InternetArchiveProvider(Provider):
 
         logger.info(
             "internet_archive: discovered %d new %s documents (%d already stored)",
-            len(doc_refs), self._corpus, known,
+            found, self._corpus, known,
         )
-        return doc_refs
 
     def _build_citation_url(self, identifier: str | None) -> str | None:
         """

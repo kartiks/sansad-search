@@ -7,8 +7,15 @@ Public interface:
   build_meili_document(record)     → Meilisearch document dict (fields excluded per spec)
   Indexer                          → main class; wraps pg_conn and meili_client
 
+Indexer.index_document(records, checkpoint, corpus=…, canonical_doc_id=…)
+  → writes all of one document's records, their dedup keys and its
+    processed_documents row in a single statement, then enqueues the Meili push
+
 Indexer.index_record(record, checkpoint)
-  → checks checkpoint store for duplicate, inserts into PG, enqueues for Meili push
+  → single-record insert (used as the fallback when a batch insert fails)
+
+Indexer.next_sequence(source, date, sitting_number)
+  → next free sequence_within_sitting for a sitting, from what is stored
 
 Indexer.flush()
   → pushes buffered Meilisearch documents in one batch
@@ -23,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Iterator, Optional
@@ -30,7 +38,7 @@ from typing import Any, Iterator, Optional
 import psycopg2
 
 from ingest.canonical.names import normalize_for_dedup
-from ingest.checkpoints.store import CheckpointStore
+from ingest.checkpoints.store import CheckpointStore, connect_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +46,11 @@ logger = logging.getLogger(__name__)
 
 MEILI_INDEX_NAME = "parliamentary_records"
 MEILI_BATCH_SIZE = 100
+
+# Waits between retries of a failed Meilisearch push.
+MEILI_RETRY_DELAYS = (5, 30, 120)
+# raw_documents rows fetched per query in Stage 2 (keeps memory flat on big corpora).
+RAW_DOC_CHUNK = 50
 
 # Fields stored in PostgreSQL only; excluded from Meilisearch documents
 _MEILI_EXCLUDED = frozenset({
@@ -200,7 +213,7 @@ class Indexer:
             self._pg.close()
         except Exception:
             pass
-        self._pg = psycopg2.connect(self._pg_dsn)
+        self._pg = connect_with_retry(self._pg_dsn)
         logger.info("Reconnected to PostgreSQL after connection loss")
 
     def _execute_read(self, sql: str, params: tuple) -> Any:
@@ -300,26 +313,172 @@ class Indexer:
             return False
 
         # Mirror the dedup key into the pre-filter surface (corpus = record source).
-        source = record.get("source", "")
-        checkpoint.add_dedup_key(dedup_key, source)
+        checkpoint.add_dedup_key(dedup_key, record.get("source", ""))
+        if "id" in record:
+            record_with_key["id"] = record["id"]
+        self._after_insert(record_with_key)
+        return True
 
-        # Track counts and date ranges for index_status
+    def next_sequence(self, source: str, date_val: Any, sitting_number: Any) -> int:
+        """
+        First free sequence_within_sitting for a sitting, given what is stored.
+
+        Numbering continues from the records already written for the sitting, so
+        a resumed or date-split run never reuses a position (which would also
+        reuse a speech dedup key and silently drop the new record).
+        """
+        if not date_val:
+            return 1
+        cond = "sitting_number = %s" if sitting_number is not None else "sitting_number IS NULL"
+        params: tuple = (source, date_val) + ((sitting_number,) if sitting_number is not None else ())
+        sql = (
+            "SELECT GREATEST("
+            f"(SELECT max(sequence_within_sitting) FROM speeches WHERE source = %s AND date = %s AND {cond}), "
+            f"(SELECT max(sequence_within_sitting) FROM qa_exchanges WHERE source = %s AND date = %s AND {cond}))"
+        )
+        row = self._execute_read(sql, params + params).fetchone()
+        return int(row[0] or 0) + 1
+
+    def index_document(
+        self,
+        records: list[dict[str, Any]],
+        checkpoint: CheckpointStore,
+        *,
+        corpus: str,
+        canonical_doc_id: str,
+        provider: Optional[str] = None,
+        fetch_url: Optional[str] = None,
+    ) -> int:
+        """
+        Index every record of one document and mark the document processed.
+
+        Records, their ingestion_dedup_keys mirror rows and the processed_documents
+        row are written by one statement, so a crash leaves the document either
+        fully stored or not at all (no half-written document to duplicate on
+        resume), at two database round trips per document instead of about four
+        per record. Returns the number of records inserted.
+
+        A dead connection is reconnected and the statement retried. Any other
+        error (one bad value, say) falls back to inserting record by record, so
+        one record can't sink the whole document.
+        """
+        ready: list[dict[str, Any]] = []
+        for record in records:
+            if not record.get("date"):
+                logger.error(
+                    "Record missing date (source=%s, url=%s); skipping",
+                    record.get("source"), record.get("source_url"),
+                )
+                continue
+            ready.append(dict(record, dedup_key=build_dedup_key(record)))
+
+        try:
+            rows = self._insert_document(ready, corpus, canonical_doc_id, provider, fetch_url)
+        except Exception as exc:
+            try:
+                self._pg.rollback()
+            except Exception:
+                pass
+            if _is_dead_connection(exc) and self._pg_dsn:
+                logger.warning(
+                    "Dead PG connection while indexing %s; reconnecting and retrying",
+                    canonical_doc_id,
+                )
+                self._reconnect()
+                rows = self._insert_document(ready, corpus, canonical_doc_id, provider, fetch_url)
+            else:
+                logger.warning(
+                    "Batch insert failed for %s (%s); inserting records one by one",
+                    canonical_doc_id, exc,
+                )
+                inserted = sum(1 for r in records if self.index_record(r, checkpoint))
+                checkpoint.mark_document_processed(
+                    canonical_doc_id, corpus=corpus, provider=provider, fetch_url=fetch_url
+                )
+                return inserted
+
+        ids = {key: rid for rid, key in rows}
+        inserted = 0
+        for record in ready:
+            rid = ids.pop(record["dedup_key"], None)
+            if rid is None:
+                continue  # duplicate of a stored record (or of an earlier one here)
+            record["id"] = str(rid)
+            inserted += 1
+            self._after_insert(record)
+        return inserted
+
+    def _insert_document(
+        self,
+        records: list[dict[str, Any]],
+        corpus: str,
+        canonical_doc_id: str,
+        provider: Optional[str],
+        fetch_url: Optional[str],
+    ) -> list[tuple]:
+        """Run the single INSERT statement for index_document; returns (id, dedup_key) rows."""
+        cur = self._pg.cursor()
+
+        def values(cols: tuple[str, ...], recs: list[dict]) -> str:
+            row = "(" + ", ".join(["%s"] * len(cols)) + ")"
+            return ", ".join(
+                cur.mogrify(row, _insert_values(r, cols)).decode() for r in recs
+            )
+
+        parts: list[str] = []
+        selects: list[str] = []
+        for name, table, cols, kind in (
+            ("s", "speeches", _SPEECH_COLUMNS, "speech"),
+            ("q", "qa_exchanges", _QA_COLUMNS, "qa"),
+        ):
+            recs = [
+                r for r in records
+                if (r.get("record_type") == "qa") == (kind == "qa")
+            ]
+            if not recs:
+                continue
+            parts.append(
+                f"{name} AS (INSERT INTO {table} ({', '.join(cols)}) VALUES {values(cols, recs)} "
+                f"ON CONFLICT (dedup_key) DO NOTHING RETURNING id, dedup_key)"
+            )
+            selects.append(f"SELECT id, dedup_key FROM {name}")
+        done = cur.mogrify(
+            "INSERT INTO processed_documents (canonical_doc_id, corpus, provider, fetch_url) "
+            "VALUES (%s, %s, %s, %s) ON CONFLICT (canonical_doc_id, corpus) DO NOTHING",
+            (canonical_doc_id, corpus, provider, fetch_url),
+        ).decode()
+        if selects:
+            corpus_lit = cur.mogrify("%s", (corpus,)).decode()
+            parts.append(
+                f"k AS (INSERT INTO ingestion_dedup_keys (dedup_key, corpus) "
+                f"SELECT dedup_key, {corpus_lit} FROM ({' UNION ALL '.join(selects)}) n "
+                f"ON CONFLICT (dedup_key, corpus) DO NOTHING)"
+            )
+            parts.append(f"p AS ({done})")
+            sql = "WITH " + ", ".join(parts) + " " + " UNION ALL ".join(selects)
+        else:
+            sql = done
+        # No parameters are passed: every value is already mogrified, so a "%"
+        # inside speech text is not read as a placeholder.
+        cur.execute(sql)
+        rows = cur.fetchall() if selects else []
+        self._pg.commit()
+        return rows
+
+    def _after_insert(self, record: dict[str, Any]) -> None:
+        """Update run counters and queue the Meilisearch document for a stored record."""
+        source = record.get("source", "")
         if source in self.counts:
             self.counts[source] += 1
             date_val = record.get("date")
             if date_val:
                 self.date_ranges[source].append(str(date_val))
-
-        # Enqueue Meilisearch document
-        doc = build_meili_document(record_with_key)
+        doc = build_meili_document(record)
         if "id" in record:
             doc["id"] = record["id"]
         self._meili_batch.append(doc)
-
         if len(self._meili_batch) >= MEILI_BATCH_SIZE:
             self.flush()
-
-        return True
 
     def _insert_record(self, record: dict[str, Any]) -> bool:
         """Insert record into the correct PostgreSQL table. Returns True on success."""
@@ -439,12 +598,16 @@ class Indexer:
         corpus: str,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        skip_ids: Optional[set[str]] = None,
     ) -> Iterator[dict]:
         """
         Yield raw_documents rows for *corpus*, optionally filtered by date range.
 
-        Used by Stage 2 orchestrators to iterate over documents to process.
-        metadata_json is returned as a Python dict (psycopg2 decodes JSONB).
+        Used by Stage 2 orchestrators to iterate over documents to process. Rows
+        come in date order, then by handle number, so every run numbers a sitting's
+        records the same way, and are read in chunks, so a corpus of hundreds of thousands of
+        documents never sits in memory at once. Documents in *skip_ids* (already
+        processed) are not read at all. metadata_json is returned as a dict.
         """
         params: list[Any] = [corpus]
         clauses = ["corpus = %s"]
@@ -455,21 +618,37 @@ class Indexer:
             clauses.append("date <= %s")
             params.append(date_to)
         where = " AND ".join(clauses)
-        cursor = self._execute_read(
-            f"SELECT canonical_doc_id, corpus, date, provider, format, "
-            f"extracted_text, metadata_json, fetch_url, citation_url "
-            f"FROM raw_documents WHERE {where}",
-            tuple(params),
-        )
-        columns = [desc[0] for desc in cursor.description]
-        for row in cursor.fetchall():
-            d = dict(zip(columns, row))
-            # psycopg2 returns JSONB as a Python dict; normalise to dict if str
-            if isinstance(d.get("metadata_json"), str):
-                d["metadata_json"] = json.loads(d["metadata_json"])
-            if d["metadata_json"] is None:
-                d["metadata_json"] = {}
-            yield d
+        ids = [
+            r[0] for r in self._execute_read(
+                f"SELECT canonical_doc_id FROM raw_documents WHERE {where} "
+                f"ORDER BY date NULLS LAST, length(canonical_doc_id), canonical_doc_id",
+                tuple(params),
+            ).fetchall()
+        ]
+        if skip_ids:
+            ids = [i for i in ids if i not in skip_ids]
+        logger.info("%s: %d raw_documents rows to process", corpus.lower(), len(ids))
+        for start in range(0, len(ids), RAW_DOC_CHUNK):
+            chunk = ids[start:start + RAW_DOC_CHUNK]
+            cursor = self._execute_read(
+                "SELECT canonical_doc_id, corpus, date, provider, format, "
+                "extracted_text, metadata_json, fetch_url, citation_url "
+                "FROM raw_documents WHERE corpus = %s AND canonical_doc_id = ANY(%s)",
+                (corpus, chunk),
+            )
+            columns = [desc[0] for desc in cursor.description]
+            by_id = {}
+            for row in cursor.fetchall():
+                d = dict(zip(columns, row))
+                # psycopg2 returns JSONB as a Python dict; normalise to dict if str
+                if isinstance(d.get("metadata_json"), str):
+                    d["metadata_json"] = json.loads(d["metadata_json"])
+                if d["metadata_json"] is None:
+                    d["metadata_json"] = {}
+                by_id[d["canonical_doc_id"]] = d
+            for doc_id in chunk:
+                if doc_id in by_id:
+                    yield by_id[doc_id]
 
     # ── Meilisearch flush ─────────────────────────────────────────────────────
 
@@ -479,16 +658,27 @@ class Indexer:
             return 0
         batch = list(self._meili_batch)
         self._meili_batch.clear()
-        try:
-            index = self._meili.index(MEILI_INDEX_NAME)
-            task = index.add_documents(batch)
+        for attempt, delay in enumerate((0,) + MEILI_RETRY_DELAYS):
+            if delay:
+                time.sleep(delay)
+            try:
+                index = self._meili.index(MEILI_INDEX_NAME)
+                task = index.add_documents(batch)
+            except Exception as exc:
+                if attempt < len(MEILI_RETRY_DELAYS):
+                    logger.warning(
+                        "Meilisearch push failed for %d documents (%s); retrying in %d s",
+                        len(batch), exc, MEILI_RETRY_DELAYS[attempt],
+                    )
+                    continue
+                self.meili_failed_docs += len(batch)
+                logger.error("Meilisearch push failed for %d documents: %s", len(batch), exc)
+                return len(batch)
             task_id = getattr(task, "task_uid", None)
             if isinstance(task_id, int):
                 self._meili_task_ids.append(task_id)
             logger.debug("Pushed %d documents to Meilisearch", len(batch))
-        except Exception as exc:
-            self.meili_failed_docs += len(batch)
-            logger.error("Meilisearch push failed for %d documents: %s", len(batch), exc)
+            break
         return len(batch)
 
     def verify_meili_tasks(self, timeout_in_ms: int | None = 600_000) -> list[str]:

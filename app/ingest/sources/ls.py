@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup
 from ingest.canonical.names import (
     canonicalize_name,
     drop_answering_minister,
+    split_capitals_joined,
     split_joined_names,
     tidy_name,
     unique_names,
@@ -48,6 +49,7 @@ from ingest.sources._http import (
     RobotsChecker,
     fetch_with_retry,
 )
+from ingest.sources._sequence import SittingSequencer
 from ingest.sources._provider import Provider, extract_stage1_fields
 from ingest.sources.providers.elibrary_dspace7 import ElibraryDSpace7Provider
 from ingest.sources.providers.internet_archive import InternetArchiveProvider
@@ -286,20 +288,13 @@ class LSOrchestrator:
                 is_known=self._is_stored,
             ),
         ]
-        # Per-sitting sequence counter shared across all providers and record types
-        self._sitting_seq: dict[str, int] = {}
+        # Per-sitting sequence counter shared across all providers and record types;
+        # continues from the records already stored for each sitting.
+        self._sequencer = SittingSequencer(indexer, "LS")
 
     def _is_stored(self, canonical_doc_id: str) -> bool:
         """True when Stage 1 already wrote this document (raw_documents PK)."""
         return self._indexer.check_raw_document_exists(canonical_doc_id, "LS")
-
-    def _next_seq(self, sitting_key: str) -> int:
-        n = self._sitting_seq.get(sitting_key, 1)
-        self._sitting_seq[sitting_key] = n + 1
-        return n
-
-    def _sitting_key(self, record: dict) -> str:
-        return f"LS_{record.get('date', '')}_{record.get('sitting_number')}"
 
     async def run_stage1(
         self,
@@ -319,13 +314,10 @@ class LSOrchestrator:
         stats: dict[str, int] = {"fetched": 0, "skipped": 0, "errors": 0}
 
         for provider in self._providers:
-            doc_refs = await provider.discover()
-            logger.info(
-                "ls_stage1: provider=%s discovered %d documents",
-                provider.__class__.__name__, len(doc_refs),
-            )
-
-            for doc_ref in doc_refs:
+            logger.info("ls_stage1: provider=%s", provider.__class__.__name__)
+            # Streamed: each document is fetched and stored as soon as it is
+            # discovered, so an interrupted run keeps everything stored so far.
+            async for doc_ref in provider.iter_discover():
                 if self._indexer.check_raw_document_exists(doc_ref.canonical_doc_id, "LS"):
                     logger.debug("ls_stage1: already fetched %s; skipping", doc_ref.canonical_doc_id)
                     stats["skipped"] += 1
@@ -384,14 +376,15 @@ class LSOrchestrator:
         """
         stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
 
-        rows = list(self._indexer.read_raw_documents_for_scope("LS", date_from, date_to))
-        logger.info("ls_stage2: %d raw_documents rows to process", len(rows))
+        done = self._checkpoint.processed_ids("LS")
+        stats["skipped"] = len(done)
+        rows = self._indexer.read_raw_documents_for_scope(
+            "LS", date_from, date_to, skip_ids=done
+        )
 
         for row in rows:
             canonical_doc_id = row["canonical_doc_id"]
-            if self._checkpoint.is_document_processed(canonical_doc_id, corpus="LS"):
-                logger.debug("ls_stage2: already processed %s; skipping", canonical_doc_id)
-                stats["skipped"] += 1
+            if canonical_doc_id in done:
                 continue
 
             raw_record = dict(row["metadata_json"])
@@ -409,9 +402,10 @@ class LSOrchestrator:
                 else:
                     record["questioner_names"] = [
                         n for n in (
-                            tidy_name(part)
+                            tidy_name(piece)
                             for q in record.get("questioner_names") or []
                             for part in split_joined_names(q)
+                            for piece in split_capitals_joined(part, self._names_dict)
                         ) if n
                     ]
                     record["minister_name"] = tidy_name(record.get("minister_name"))
@@ -421,18 +415,15 @@ class LSOrchestrator:
                 record["session_name"] = canonicalize_session(
                     record.get("session_name"), source="LS"
                 )
-                record["sequence_within_sitting"] = self._next_seq(
-                    self._sitting_key(record)
-                )
+                record["sequence_within_sitting"] = self._sequencer.next(record)
                 # PRD v3.0: link each record to its raw_documents row (F10 debug-raw).
                 record["canonical_doc_id"] = canonical_doc_id
 
-                if self._indexer.index_record(record, self._checkpoint):
-                    stats["indexed"] += 1
-
-            self._checkpoint.mark_document_processed(
-                canonical_doc_id,
+            stats["indexed"] += self._indexer.index_document(
+                records,
+                self._checkpoint,
                 corpus="LS",
+                canonical_doc_id=canonical_doc_id,
                 provider=row["provider"],
                 fetch_url=row["fetch_url"],
             )

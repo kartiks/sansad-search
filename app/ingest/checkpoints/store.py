@@ -56,11 +56,36 @@ Usage:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 
 import psycopg2
 
 logger = logging.getLogger(__name__)
+
+# Waits between reconnect attempts after a lost PostgreSQL connection (~16 min in
+# all), so a network outage or DNS failure pauses a long run instead of ending it.
+RECONNECT_DELAYS = (5, 15, 30, 60, 120, 300, 300, 300)
+
+
+def connect_with_retry(dsn: str, delays: Optional[tuple[int, ...]] = None) -> Any:
+    """psycopg2.connect, retried with waits while the server can't be reached."""
+    if delays is None:
+        delays = RECONNECT_DELAYS
+    last: Optional[Exception] = None
+    for attempt, delay in enumerate((0,) + tuple(delays)):
+        if delay:
+            logger.warning(
+                "PostgreSQL unreachable (%s); retrying in %d s (attempt %d/%d)",
+                last, delay, attempt + 1, len(delays) + 1,
+            )
+            time.sleep(delay)
+        try:
+            return psycopg2.connect(dsn)
+        except psycopg2.OperationalError as exc:
+            last = exc
+    assert last is not None
+    raise last
 
 
 def _is_dead_connection(exc: Exception) -> bool:
@@ -128,7 +153,7 @@ class CheckpointStore:
                 self._conn.close()
         except Exception:
             pass
-        self._conn = psycopg2.connect(self.dsn)
+        self._conn = connect_with_retry(self.dsn)
         logger.info("Reconnected to PostgreSQL (checkpoint store) after connection loss")
 
     def _execute(
@@ -209,6 +234,26 @@ class CheckpointStore:
             (canonical_doc_id, corpus, provider, fetch_url),
             commit=True,
         )
+
+    def processed_ids(self, corpus: str) -> set[str]:
+        """Every canonical_doc_id already processed for *corpus*, in one query."""
+        conn = self._require_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT canonical_doc_id FROM processed_documents WHERE corpus = %s", (corpus,)
+            )
+        except Exception as exc:
+            if not _is_dead_connection(exc):
+                raise
+            self._reconnect()
+            cur = self._require_conn().cursor()
+            cur.execute(
+                "SELECT canonical_doc_id FROM processed_documents WHERE corpus = %s", (corpus,)
+            )
+        ids = {r[0] for r in cur.fetchall()}
+        cur.close()
+        return ids
 
     def processed_document_count(self) -> int:
         row = self._execute(

@@ -47,6 +47,18 @@ class MockIndexer:
         self.indexed_records.append(record)
         return True
 
+    def index_document(self, records, checkpoint, *, corpus, canonical_doc_id,
+                       provider=None, fetch_url=None) -> int:
+        for record in records:
+            self.index_record(record, checkpoint)
+        checkpoint.mark_document_processed(
+            canonical_doc_id, corpus=corpus, provider=provider, fetch_url=fetch_url
+        )
+        return len(records)
+
+    def next_sequence(self, source, date_val, sitting_number) -> int:
+        return 1
+
     def check_raw_document_exists(self, canonical_doc_id: str, corpus: str) -> bool:
         return (canonical_doc_id, corpus) in self._raw_docs
 
@@ -64,9 +76,11 @@ class MockIndexer:
             "metadata_json": meta, "fetch_url": fetch_url, "citation_url": citation_url,
         }
 
-    def read_raw_documents_for_scope(self, corpus, date_from=None, date_to=None):
-        for row in self._raw_docs.values():
+    def read_raw_documents_for_scope(self, corpus, date_from=None, date_to=None, skip_ids=None):
+        for row in list(self._raw_docs.values()):
             if row["corpus"] != corpus:
+                continue
+            if skip_ids and row["canonical_doc_id"] in skip_ids:
                 continue
             if date_from and row["date"] and str(row["date"]) < date_from:
                 continue
@@ -560,6 +574,61 @@ class TestLSOrchestratorProviderChain:
             assert len(qa) == 1
             assert qa[0]["minister_name"] == "Arjun Singh"
             assert qa[0]["questioner_names"] == ["Laxminarayan Pandey"]
+        finally:
+            checkpoint.close()
+
+    async def test_capitals_joined_questioners_are_split_with_dictionary(self):
+        handle_n = "18434"
+        identifier = f"eparlib.nic.in.{handle_n}"
+        text = (
+            "UNSTARRED QUESTION NO. 13\n\n"
+            "Will the Minister of RAILWAYS be pleased to state the new lines sanctioned?\n\n"
+            "THE MINISTER OF RAILWAYS (SHRI NITISH KUMAR):\n"
+            "Twelve new lines were sanctioned.\n"
+        )
+        ref = DocumentRef(
+            corpus="LS", provider="internet_archive", format="ia_text",
+            fetch_url=f"https://archive.org/download/{identifier}/{identifier}_djvu.txt",
+            canonical_doc_id=handle_n, citation_url=f"https://archive.org/details/{identifier}",
+            metadata={
+                "identifier": identifier, "eparlib_date": "1999-03-01",
+                "eparlib_title": "Lok Sabha Unstarred Questions",
+                "eparlib_members": ["KALRAJ MISHRASANTOSH BAGRODIA"],
+            },
+        )
+        names = {"kalraj mishra": "Kalraj Mishra", "santosh bagrodia": "Santosh Bagrodia"}
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        orchestrator = LSOrchestrator(
+            client=AsyncMock(spec=httpx.AsyncClient), checkpoint=checkpoint, indexer=indexer,
+            names_dict=names, providers=[StubProvider([ref], {handle_n: text}, name="ia")],
+        )
+        await orchestrator.run()
+        try:
+            qa = [r for r in indexer.indexed_records if r.get("record_type") == "qa"]
+            assert qa and qa[0]["questioner_names"] == ["Kalraj Mishra", "Santosh Bagrodia"]
+        finally:
+            checkpoint.close()
+
+    async def test_stage1_stores_documents_as_they_are_discovered(self):
+        """A discovery that fails part-way keeps the documents already stored."""
+        refs = [_make_ia_doc_ref(n) for n in ("901", "902")]
+
+        class FailingAfterFirst(StubProvider):
+            async def iter_discover(self):
+                yield refs[0]
+                raise RuntimeError("network gone")
+
+        checkpoint = _make_checkpoint()
+        indexer = MockIndexer()
+        orchestrator = LSOrchestrator(
+            client=AsyncMock(spec=httpx.AsyncClient), checkpoint=checkpoint, indexer=indexer,
+            providers=[FailingAfterFirst(refs, {"901": IA_DJVU_TEXT, "902": IA_DJVU_TEXT}, name="ia")],
+        )
+        try:
+            with pytest.raises(RuntimeError):
+                await orchestrator.run_stage1()
+            assert indexer.check_raw_document_exists("901", "LS")
         finally:
             checkpoint.close()
 

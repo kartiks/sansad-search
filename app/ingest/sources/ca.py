@@ -35,6 +35,7 @@ from ingest.sources._http import (
     RobotsChecker,
     fetch_with_retry,
 )
+from ingest.sources._sequence import SittingSequencer
 from ingest.sources._provider import DocumentRef, Provider, extract_stage1_fields
 from ingest.sources.providers.coi_html import CoidHtmlProvider
 
@@ -192,13 +193,8 @@ class CAOrchestrator:
         self._provider: Provider = provider or CoidHtmlProvider(
             client, rate_delay=rate_delay, date_from=date_from, date_to=date_to
         )
-        # Per-sitting sequence counter: sitting_key → next sequence number
-        self._sitting_seq: dict[str, int] = {}
-
-    def _next_seq(self, sitting_key: str) -> int:
-        n = self._sitting_seq.get(sitting_key, 1)
-        self._sitting_seq[sitting_key] = n + 1
-        return n
+        # Per-sitting sequence counter; continues from what is already stored.
+        self._sequencer = SittingSequencer(indexer, "CA")
 
     async def run_stage1(
         self,
@@ -216,10 +212,8 @@ class CAOrchestrator:
         """
         stats: dict[str, int] = {"fetched": 0, "skipped": 0, "errors": 0}
 
-        doc_refs = await self._provider.discover()
-        logger.info("ca_stage1: discovered %d CA documents", len(doc_refs))
-
-        for doc_ref in doc_refs:
+        # Streamed: each document is stored as soon as it is discovered.
+        async for doc_ref in self._provider.iter_discover():
             if self._indexer.check_raw_document_exists(doc_ref.canonical_doc_id, "CA"):
                 logger.debug("ca_stage1: already fetched %s; skipping", doc_ref.canonical_doc_id)
                 stats["skipped"] += 1
@@ -293,14 +287,15 @@ class CAOrchestrator:
         """
         stats: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
 
-        rows = list(self._indexer.read_raw_documents_for_scope("CA", date_from, date_to))
-        logger.info("ca_stage2: %d raw_documents rows to process", len(rows))
+        done = self._checkpoint.processed_ids("CA")
+        stats["skipped"] = len(done)
+        rows = self._indexer.read_raw_documents_for_scope(
+            "CA", date_from, date_to, skip_ids=done
+        )
 
         for row in rows:
             canonical_doc_id = row["canonical_doc_id"]
-            if self._checkpoint.is_document_processed(canonical_doc_id, corpus="CA"):
-                logger.debug("ca_stage2: already processed %s; skipping", canonical_doc_id)
-                stats["skipped"] += 1
+            if canonical_doc_id in done:
                 continue
 
             raw_record = dict(row["metadata_json"])
@@ -317,8 +312,6 @@ class CAOrchestrator:
                     canonical_doc_id,
                 )
 
-            sitting_key = f"CA_{raw_record.get('date', '')}"
-
             for speech in speeches:
                 speech["volume"] = row["metadata_json"].get("volume")
                 canon_name, unresolved = canonicalize_name(
@@ -329,16 +322,15 @@ class CAOrchestrator:
                 speech["session_name"] = None
                 speech["session_number"] = None
                 speech["record_type"] = "speech"
-                speech["sequence_within_sitting"] = self._next_seq(sitting_key)
+                speech["sequence_within_sitting"] = self._sequencer.next(speech)
                 # PRD v3.0: link each record to its raw_documents row (F10 debug-raw).
                 speech["canonical_doc_id"] = canonical_doc_id
 
-                if self._indexer.index_record(speech, self._checkpoint):
-                    stats["indexed"] += 1
-
-            self._checkpoint.mark_document_processed(
-                canonical_doc_id,
+            stats["indexed"] += self._indexer.index_document(
+                speeches,
+                self._checkpoint,
                 corpus="CA",
+                canonical_doc_id=canonical_doc_id,
                 provider=row["provider"],
                 fetch_url=row["fetch_url"],
             )

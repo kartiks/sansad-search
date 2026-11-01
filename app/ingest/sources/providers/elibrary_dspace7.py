@@ -23,7 +23,7 @@ Fetch:
 
 RS note:
   No Rajya Sabha debates collection is available on elibrary.sansad.in as of
-  June 2026.  RS coverage remains IA-only (1947–Aug 2018).
+  June 2026.  RS coverage remains IA-only (rsdebate mirror, Jul 1984 – Dec 2009).
 """
 from __future__ import annotations
 
