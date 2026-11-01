@@ -493,7 +493,7 @@ class TestInternetArchiveProviderFetch:
 
 class TestStreamingDiscovery:
     """iter_discover yields each document as soon as its metadata arrives, and
-    waits the rate delay after every metadata request."""
+    every request it makes waits on the provider's rate limiter first."""
 
     def _client(self):
         ids = ["eparlib.nic.in.1", "eparlib.nic.in.2"]
@@ -507,8 +507,7 @@ class TestStreamingDiscovery:
 
     async def test_first_document_arrives_before_second_metadata_request(self):
         client = self._client()
-        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock), \
-             patch("ingest.sources.providers.internet_archive.asyncio.sleep", new_callable=AsyncMock):
+        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
             provider = InternetArchiveProvider(client, corpus="LS", rate_delay=0.0)
             stream = provider.iter_discover()
             first = await stream.__anext__()
@@ -517,16 +516,17 @@ class TestStreamingDiscovery:
             rest = [ref async for ref in stream]
         assert [r.canonical_doc_id for r in rest] == ["2"]
 
-    async def test_rate_delay_after_each_metadata_request(self):
-        async def sleeps_with(rate_delay):
-            client = self._client()
-            # asyncio.sleep is one shared function, so search paging sleeps count too;
-            # compare against a run with no rate delay.
-            with patch("ingest.sources.providers.internet_archive.asyncio.sleep",
-                       new_callable=AsyncMock) as sleep:
-                provider = InternetArchiveProvider(client, corpus="LS", rate_delay=rate_delay)
-                assert len(await provider.discover()) == 2
-            return [c.args[0] for c in sleep.await_args_list]
+    async def test_every_request_waits_on_the_limiter(self):
+        client = self._client()
+        waits = []
+        provider = InternetArchiveProvider(client, corpus="LS", rate_delay=2.5)
 
-        with_delay, without = await sleeps_with(2.5), await sleeps_with(0.0)
-        assert with_delay.count(2.5) - without.count(2.5) == 2  # one per metadata request
+        async def record_wait():
+            waits.append(client.get.await_count)  # requests made before this wait
+
+        provider._limiter.wait = record_wait
+        refs = await provider.discover()
+        assert len(refs) == 2
+        # listing page + two metadata requests, each preceded by its own wait
+        assert waits == [0, 1, 2]
+        assert provider._limiter.interval == 2.5

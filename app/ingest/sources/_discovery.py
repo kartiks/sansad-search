@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ingest.sources._http import fetch_with_retry
+from ingest.sources._http import RateLimiter, fetch_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +295,7 @@ async def enumerate_ia_scrape(
     date_from: str | None = None,
     date_to: str | None = None,
     max_attempts: int = 4,
+    limiter: RateLimiter | None = None,
 ) -> list[dict]:
     """
     Enumerate every archive.org item matching *query* via the Scraping API.
@@ -328,7 +329,7 @@ async def enumerate_ia_scrape(
         if cursor:
             params["cursor"] = cursor
         url = f"{IA_SCRAPE_URL}?{urlencode(params)}"
-        resp = await fetch_with_retry(client, url)
+        resp = await fetch_with_retry(client, url, limiter=limiter)
         if resp is None:
             raise RuntimeError(f"IA scrape failed after {len(results)} items (query={q!r})")
         try:

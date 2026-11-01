@@ -24,7 +24,6 @@ DocumentRef metadata as the integer `lok_sabha_number`.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import Any, Callable
@@ -32,7 +31,7 @@ from typing import Any, Callable
 import httpx
 
 from ingest.sources._discovery import enumerate_ia_scrape
-from ingest.sources._http import DEFAULT_RATE_DELAY, fetch_with_retry
+from ingest.sources._http import DEFAULT_RATE_DELAY, RateLimiter, fetch_with_retry
 from ingest.sources._provider import DocumentRef, Provider
 
 logger = logging.getLogger(__name__)
@@ -145,6 +144,7 @@ class InternetArchiveProvider(Provider):
         self._date_from = date_from
         self._date_to = date_to
         self._rate_delay = rate_delay
+        self._limiter = RateLimiter(rate_delay)
         self._query = ia_query or cfg["query"]
         self._prefix = cfg["prefix"]
         self._id_re = cfg["id_re"]
@@ -159,9 +159,11 @@ class InternetArchiveProvider(Provider):
         """
         Enumerate all eparlib.nic.in.{N} identifiers and yield DocumentRefs.
 
-        One metadata request per item not yet stored (each followed by the rate
-        delay, in _fetch_ia_metadata); refs are yielded as they are built, so the
-        orchestrator fetches and stores each document before the next request.
+        One metadata request per item not yet stored; every request this
+        provider makes (listing, metadata, text) waits on one RateLimiter, so
+        request starts are at least rate_delay apart. Refs are yielded as they
+        are built, so the orchestrator fetches and stores each document before
+        the next metadata request.
 
         For each identifier: fetches the IA metadata JSON to get eparlib_* fields,
         extracts the DSpace handle number N as canonical_doc_id, sets citation_url
@@ -174,6 +176,7 @@ class InternetArchiveProvider(Provider):
             identifier_prefix=self._prefix,
             date_from=self._date_from,
             date_to=self._date_to,
+            limiter=self._limiter,
         )
 
         found = 0
@@ -194,7 +197,7 @@ class InternetArchiveProvider(Provider):
                 known += 1
                 continue
 
-            full_data = await self._fetch_ia_metadata(str(identifier))  # rate-limited
+            full_data = await self._fetch_ia_metadata(str(identifier))  # waits on the shared limiter
             if full_data is None:
                 continue
 
@@ -296,13 +299,10 @@ class InternetArchiveProvider(Provider):
     async def _fetch_ia_metadata(self, identifier: str) -> dict[str, Any] | None:
         """Fetch IA metadata JSON for one identifier. Returns the full top-level JSON dict."""
         meta_url = f"{_IA_METADATA_BASE}/{identifier}"
-        resp = await fetch_with_retry(self._client, meta_url)
+        resp = await fetch_with_retry(self._client, meta_url, limiter=self._limiter)
         if resp is None:
             logger.warning("IA metadata fetch failed for %s; skipping", identifier)
             return None
-
-        if self._rate_delay > 0:
-            await asyncio.sleep(self._rate_delay)
 
         try:
             data = resp.json()
@@ -314,14 +314,11 @@ class InternetArchiveProvider(Provider):
 
     async def fetch(self, doc_ref: DocumentRef) -> str | None:
         """Fetch the _djvu.txt content for a single IA document."""
-        resp = await fetch_with_retry(self._client, doc_ref.fetch_url)
+        resp = await fetch_with_retry(self._client, doc_ref.fetch_url, limiter=self._limiter)
         if resp is None:
             logger.warning(
                 "IA _djvu.txt fetch failed for %s; skipping", doc_ref.fetch_url
             )
             return None
-
-        if self._rate_delay > 0:
-            await asyncio.sleep(self._rate_delay)
 
         return resp.text

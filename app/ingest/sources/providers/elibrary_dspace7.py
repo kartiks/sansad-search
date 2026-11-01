@@ -27,14 +27,13 @@ RS note:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import Any, Callable
 
 import httpx
 
-from ingest.sources._http import DEFAULT_RATE_DELAY, fetch_with_retry
+from ingest.sources._http import DEFAULT_RATE_DELAY, RateLimiter, fetch_with_retry
 from ingest.sources._provider import DocumentRef, Provider
 
 logger = logging.getLogger(__name__)
@@ -130,6 +129,7 @@ class ElibraryDSpace7Provider(Provider):
         self._date_from = date_from
         self._date_to = date_to
         self._rate_delay = rate_delay
+        self._limiter = RateLimiter(rate_delay)
         self._collection_uuid = collection_uuid
         # Skips the two bitstream-lookup requests for items already stored.
         self._is_known = is_known
@@ -161,7 +161,7 @@ class ElibraryDSpace7Provider(Provider):
                 f"&page={page}"
             )
 
-            resp = await fetch_with_retry(self._client, search_url)
+            resp = await fetch_with_retry(self._client, search_url, limiter=self._limiter)
             if resp is None:
                 logger.error(
                     "elibrary_dspace7: search fetch failed at page=%d; discovery is "
@@ -263,16 +263,13 @@ class ElibraryDSpace7Provider(Provider):
 
     async def fetch(self, doc_ref: DocumentRef) -> str | None:
         """Download the pre-extracted plain-text content for one debate."""
-        resp = await fetch_with_retry(self._client, doc_ref.fetch_url)
+        resp = await fetch_with_retry(self._client, doc_ref.fetch_url, limiter=self._limiter)
         if resp is None:
             logger.warning(
                 "elibrary_dspace7: text fetch failed for %s; skipping",
                 doc_ref.fetch_url,
             )
             return None
-
-        if self._rate_delay > 0:
-            await asyncio.sleep(self._rate_delay)
 
         return resp.text
 
@@ -290,12 +287,9 @@ class ElibraryDSpace7Provider(Provider):
         """
         # Step 1: bundles
         bundles_url = f"{ELIBRARY_API_BASE}/core/items/{item_uuid}/bundles"
-        resp = await fetch_with_retry(self._client, bundles_url)
+        resp = await fetch_with_retry(self._client, bundles_url, limiter=self._limiter)
         if resp is None:
             return None
-
-        if self._rate_delay > 0:
-            await asyncio.sleep(self._rate_delay)
 
         try:
             bundles_data = resp.json()
@@ -315,12 +309,9 @@ class ElibraryDSpace7Provider(Provider):
 
         # Step 2: bitstreams in TEXT bundle
         bs_url = f"{ELIBRARY_API_BASE}/core/bundles/{text_bundle_uuid}/bitstreams"
-        resp = await fetch_with_retry(self._client, bs_url)
+        resp = await fetch_with_retry(self._client, bs_url, limiter=self._limiter)
         if resp is None:
             return None
-
-        if self._rate_delay > 0:
-            await asyncio.sleep(self._rate_delay)
 
         try:
             bs_data = resp.json()
