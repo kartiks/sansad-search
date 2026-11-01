@@ -18,7 +18,6 @@ citation_url: the same per-sitting page URL (appears as source_url in records).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from datetime import date
@@ -27,7 +26,7 @@ from typing import Callable
 import httpx
 
 from ingest.sources._discovery import crawl_html_listing
-from ingest.sources._http import DEFAULT_RATE_DELAY, RobotsChecker, fetch_with_retry
+from ingest.sources._http import DEFAULT_RATE_DELAY, RateLimiter, RobotsChecker, fetch_with_retry
 from ingest.sources._provider import DocumentRef, Provider
 
 logger = logging.getLogger(__name__)
@@ -83,6 +82,7 @@ class SansadRsHtmlProvider(Provider):
     ) -> None:
         self._client = client
         self._rate_delay = rate_delay
+        self._limiter = RateLimiter(rate_delay)
         self._robots = robots_checker or RobotsChecker()
         self._listing_url = listing_url
         self._date_from = date.fromisoformat(date_from)
@@ -149,14 +149,11 @@ class SansadRsHtmlProvider(Provider):
             )
             return None
 
-        resp = await fetch_with_retry(self._client, doc_ref.fetch_url)
+        resp = await fetch_with_retry(self._client, doc_ref.fetch_url, limiter=self._limiter)
         if resp is None:
             logger.warning(
                 "sansad_rs_html: could not fetch %s; skipping", doc_ref.fetch_url
             )
             return None
-
-        if self._rate_delay > 0:
-            await asyncio.sleep(self._rate_delay)
 
         return resp.text

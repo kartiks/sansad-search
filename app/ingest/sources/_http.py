@@ -7,13 +7,16 @@ Handles per-F01 spec:
   - 429 → exponential backoff, retry indefinitely (never skip)
   - Network error / timeout → retried like 5xx, then log error and return None
 
-Rate limiting (inter-request delay) is the caller's responsibility; this
-module handles only retries and robots.txt compliance.
+Rate limiting: a caller passes a RateLimiter to fetch_with_retry, which waits
+on it before every request attempt (retries included). The limiter spaces
+request *starts*, so a 1 s delay means at most one request per second however
+long each response takes.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
@@ -26,6 +29,31 @@ USER_AGENT = "SansadSearch-Ingest/1.0"
 DEFAULT_RATE_DELAY: float = 1.0   # seconds between successive document fetches
 MAX_RETRIES_5XX: int = 3
 INITIAL_BACKOFF: float = 2.0      # seconds; doubles on each retry
+
+
+class RateLimiter:
+    """
+    Spaces request starts at least *interval* seconds apart.
+
+    The wait is measured from the previous request's start, not its end, so the
+    time a response takes counts towards the interval. One limiter per source
+    host: every request a provider makes, of any kind, shares it.
+    """
+
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+        self._next_start = 0.0
+
+    async def wait(self) -> None:
+        if self.interval <= 0:
+            return
+        now = time.monotonic()
+        start = max(now, self._next_start)
+        # Reserve the slot before sleeping, so concurrent callers queue up
+        # behind each other instead of taking the same slot.
+        self._next_start = start + self.interval
+        if start > now:
+            await asyncio.sleep(start - now)
 
 
 class RobotsChecker:
@@ -61,6 +89,7 @@ async def fetch_with_retry(
     *,
     max_retries_5xx: int = MAX_RETRIES_5XX,
     initial_backoff: float = INITIAL_BACKOFF,
+    limiter: Optional[RateLimiter] = None,
 ) -> Optional[httpx.Response]:
     """
     GET *url* with error handling per F01 spec.
@@ -68,13 +97,14 @@ async def fetch_with_retry(
     Returns the httpx.Response on HTTP 200, None when the document should be
     skipped (4xx other than 429 or exhausted 5xx retries).
 
-    The caller is responsible for applying inter-request rate delay *before*
-    calling this function (or after a successful return).
+    With *limiter*, every attempt (retries included) first waits for its slot.
     """
     backoff = initial_backoff
     retries_5xx = 0
 
     while True:
+        if limiter is not None:
+            await limiter.wait()
         try:
             resp = await client.get(url, follow_redirects=True)
         except httpx.RequestError as exc:

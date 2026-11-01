@@ -46,7 +46,7 @@ The same env vars apply whether the pipeline runs locally or as a Railway Cron J
 | `DATABASE_URL` | Required | PostgreSQL connection string. On the Railway Cron Job service this is **the same Railway PostgreSQL** the API uses — reference the shared Postgres so checkpoints, `raw_documents`, and the record tables are one database. Locally, the Railway connection string with SSL |
 | `MEILISEARCH_URL` | Required | Meilisearch Cloud instance URL |
 | `MEILISEARCH_MASTER_KEY` | Required | Meilisearch master API key; used only during ingestion and Meilisearch setup. **Set on the Cron Job service, never on the API service** (see the warning below) — the API runs with the search-only key |
-| `INGESTION_RATE_LIMIT_DELAY_MS` | Optional | Inter-request delay in ms for source fetching; default 2000 |
+| `INGESTION_RATE_LIMIT_DELAY_MS` | Not used | Not read by the code. Request starts to each source are spaced 1 s apart (`DEFAULT_RATE_DELAY` in `ingest/sources/_http.py`) |
 | `COI_BASE_URL` | Optional | constitutionofindia.net base (CA provider); default in code. Override only if the host changes |
 | `IA_BASE_URL` | Optional | Internet Archive base (`https://archive.org`); LS/RS preferred bulk path; default in code |
 | `EPARLIB_BASE_URL` | Optional | eparlib.sansad.in base (LS DSpace fallback); default in code. Item IDs preserved from the legacy `eparlib.nic.in` host |
@@ -618,7 +618,7 @@ The 2026-10 changes fix data that is already stored: speaker names (wrapped attr
    python -m ingest.main --source ls
    ```
 
-**Run time.** The IA mirrors are large: about 378k LS items (mostly individual questions) and 280k RS items, each needing a metadata request and a text download at the 1 s rate limit — several days per house for a full backfill. Scope runs with `--date-from` / `--date-to` and repeat; each run skips documents already stored. The Railway cron (`--source all`) will start this backfill on its next run.
+**Run time.** The IA mirrors are large: about 378k LS items (mostly individual questions) and 280k RS items, each needing a metadata request and a text download, with request starts 1 s apart — expected about 2–2.5 s per item, so roughly 7 days for RS and 10 days for LS (§6.10). Scope runs with `--date-from` / `--date-to` and repeat; each run skips documents already stored. The Railway cron (`--source all`) will start this backfill on its next run.
 
 **Exit code.** A run now exits `1` if any Meilisearch push or indexing task failed; the log says to run `python -m ingest.main --source all --reindex-from-db` after fixing the cause.
 
@@ -634,6 +634,7 @@ These change how long runs behave; nothing needs migrating.
 - **Fetching saves as it goes.** Discovery is streamed: each document is fetched and written to `raw_documents` as soon as its metadata arrives. An interrupted run keeps everything stored so far, and the next run skips it.
 - **One write per document.** Stage 2 writes a document's records, their dedup-key mirror rows and its `processed_documents` row in one statement. A crash leaves a document fully stored or not at all. Stage 2 also reads `raw_documents` in chunks, so memory stays flat on a full corpus.
 - **Outages pause the run instead of ending it.** A lost PostgreSQL connection is retried for about 16 minutes (waits of 5 s up to 5 min). A failed Meilisearch push is retried three times. A run still stops if the database stays unreachable; rerun it and it resumes.
+- **Request starts are spaced, not followed by a pause.** Each provider shares one `RateLimiter` (`ingest/sources/_http.py`) across all its requests, retries included. It keeps request starts at least 1 s apart, so the time a response takes counts towards the second. Before, each request was followed by a full 1 s sleep, which with Internet Archive's ~1 s responses made an item take about 5 s (measured on the 2026-11 RS pilot); spacing the starts is expected to bring that to about 2–2.5 s. Still at most one request per second per source.
 - **Sitting positions continue across runs.** `sequence_within_sitting` starts after the highest position already stored for a sitting.
 
 **Repairing stored Lok Sabha positions.** The run on 2026-10-31 was resumed after a network drop, which restarted numbering mid-corpus: about 4,200 LS records share a position with another record in the same sitting. Re-segment LS from stored text to renumber them (minutes with the batched writes):

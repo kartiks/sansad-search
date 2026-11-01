@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from ingest.sources._http import RobotsChecker, fetch_with_retry
+from ingest.sources._http import RateLimiter, RobotsChecker, fetch_with_retry
 
 
 # ── fetch_with_retry ──────────────────────────────────────────────────────────
@@ -173,3 +173,54 @@ class TestRobotsChecker:
         checker = RobotsChecker()
         allowed = await checker.is_allowed(client, "http://example.com/doc.html")
         assert allowed is True
+
+
+# ── RateLimiter ───────────────────────────────────────────────────────────────
+
+
+class TestRateLimiter:
+    """Request starts are spaced by the interval; response time counts towards it."""
+
+    async def _run(self, clock_steps, interval=1.0):
+        clock = iter(clock_steps)
+        sleeps = []
+        limiter = RateLimiter(interval)
+        with patch("ingest.sources._http.time.monotonic", side_effect=lambda: next(clock)), \
+             patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            for _ in clock_steps:
+                await limiter.wait()
+            sleeps = [round(c.args[0], 3) for c in sleep.await_args_list]
+        return sleeps
+
+    @pytest.mark.asyncio
+    async def test_first_request_does_not_wait(self):
+        assert await self._run([100.0]) == []
+
+    @pytest.mark.asyncio
+    async def test_slow_responses_need_no_extra_wait(self):
+        # each response took longer than the interval: no sleeping at all
+        assert await self._run([100.0, 101.2, 102.5]) == []
+
+    @pytest.mark.asyncio
+    async def test_fast_responses_wait_out_the_rest_of_the_interval(self):
+        # second call 0.3 s after the first start → sleep 0.7 s
+        assert await self._run([100.0, 100.3]) == [0.7]
+
+    @pytest.mark.asyncio
+    async def test_back_to_back_callers_queue_behind_each_other(self):
+        # three calls at the same instant get slots 0, +1 s, +2 s
+        assert await self._run([100.0, 100.0, 100.0]) == [1.0, 2.0]
+
+    @pytest.mark.asyncio
+    async def test_zero_interval_never_waits(self):
+        assert await self._run([1.0, 1.0], interval=0.0) == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_with_retry_waits_before_every_attempt(self):
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get.side_effect = [MagicMock(status_code=503), MagicMock(status_code=200)]
+        limiter = AsyncMock(spec=RateLimiter)
+        with patch("ingest.sources._http.asyncio.sleep", new_callable=AsyncMock):
+            result = await fetch_with_retry(client, "http://example.com/doc.html", limiter=limiter)
+        assert result.status_code == 200
+        assert limiter.wait.await_count == 2
