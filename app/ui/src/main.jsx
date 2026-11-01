@@ -6,6 +6,7 @@ import {
   Routes,
   Navigate,
 } from 'react-router-dom'
+import { Analytics } from '@vercel/analytics/react'
 
 import Home from './pages/Home.jsx'
 import Results from './pages/Results.jsx'
@@ -24,5 +25,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
+    <Analytics />
   </React.StrictMode>
 )
