@@ -259,6 +259,10 @@ class TestUuidValidation:
         "/api/debug/processed/not-a-uuid",
         "/api/debug/raw/not-a-uuid",
         "/api/record/3f2a1b00-0000-0000-0000-00000000000z",
+        # uuid.UUID() accepts these, but asyncpg rejects them (was a 503)
+        "/api/record/{3f2a1b00-0000-0000-0000-000000000001}",
+        "/api/record/urn:uuid:3f2a1b00-0000-0000-0000-000000000001",
+        "/api/debug/raw/3f2a1b0000000000000000000000000001",
     ])
     def test_invalid_uuid_returns_404_without_querying(self, path):
         pool = make_mock_pool()
@@ -273,6 +277,10 @@ class TestUuidValidation:
         assert is_valid_uuid(VALID_ID.upper())
         assert not is_valid_uuid("")
         assert not is_valid_uuid("qa2b1b00-0000-0000-0000-000000000001")
+        assert not is_valid_uuid("{" + VALID_ID + "}")
+        assert not is_valid_uuid("urn:uuid:" + VALID_ID)
+        assert not is_valid_uuid(VALID_ID.replace("-", ""))
+        assert not is_valid_uuid(VALID_ID + "\n")
 
 
 # ── 5. Meilisearch client timeout and close ───────────────────────────────────

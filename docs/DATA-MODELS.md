@@ -332,13 +332,13 @@ Fields excluded from Meilisearch (stored in PostgreSQL only, served by the F09 d
 ["date", "sequence_within_sitting"]
 ```
 
-**rankingRules:**
+**rankingRules** (default order; no custom overrides):
 ```json
-["words", "sort", "typo", "proximity", "attribute", "exactness"]
+["sort", "words", "typo", "proximity", "attribute", "exactness"]
 ```
 
-`words` — records matching more original query terms rank higher. First, so that a chronological sort never ranks a record matching one query term above one matching all of them.
-`sort` — immediately after `words`: chronological/reverse_chronological sort orders results by date within each words-matched group. Skipped entirely when no sort parameter is provided (relevance mode), so relevance ordering is unaffected.
+`sort` — first position so that chronological/reverse_chronological sort takes full effect; skipped entirely when no sort parameter is provided (relevance mode), so relevance ordering is unaffected.
+`words` — records matching more original query terms rank higher.
 `typo` — fewer typo corrections needed = higher rank (handles spell-correction weight).
 `attribute` — matches in earlier searchableAttributes (speaker, minister, subject) rank above full_text matches.
 `exactness` — exact-token matches rank above synonym-expanded matches.

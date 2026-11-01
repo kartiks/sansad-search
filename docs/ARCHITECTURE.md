@@ -291,7 +291,6 @@ The Coding Agent updates this table after any change to API routes or core lib f
 - `exactness` rule — exact-token matches rank above synonym-expanded matches
 - `typos` rule — typo-corrected matches rank below exact and synonym matches
 - `words` rule — records matching more original query terms outrank records matching only expansions
-- `sort` sits directly after `words`, so a chronological sort orders results by date within each words-matched group rather than ranking partial matches first
 
 No custom scoring functions are implemented. This approximation is acceptable for v1.
 

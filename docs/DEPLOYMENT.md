@@ -26,7 +26,7 @@
 | `DATABASE_URL` | Required | Railway PostgreSQL connection string (auto-injected by Railway when Postgres is provisioned in the same project) |
 | `MEILISEARCH_URL` | Required | Meilisearch Cloud instance URL (e.g. `https://xxx.meilisearch.io`) |
 | `MEILISEARCH_SEARCH_KEY` | Required | Meilisearch search-only API key; used by the API at runtime; never grants write or admin access |
-| `ALLOWED_ORIGINS` | Required | Comma-separated list of allowed CORS origins (e.g. `https://sansadsearch.vercel.app,http://localhost:5173`). **Fails closed:** when unset or empty, no cross-origin requests are allowed and the API logs a warning at startup. Same-origin traffic (the Vercel `/api` rewrite, the Vite dev proxy) does not need it. |
+| `ALLOWED_ORIGINS` | Optional | Comma-separated list of allowed CORS origins (e.g. `https://sansadsearch.vercel.app,http://localhost:5173`). **Fails closed:** when unset or empty, no cross-origin requests are allowed and the API logs a warning at startup. Same-origin traffic (the Vercel `/api` rewrite, the Vite dev proxy) does not need it. |
 | `MEILISEARCH_TIMEOUT_SECONDS` | Optional | Timeout in seconds for each Meilisearch request from the API; default **5**. A search that exceeds it returns `503 search_unavailable` instead of hanging. Invalid or non-positive values fall back to the default. |
 | `PORT` | Optional | HTTP port; Railway injects this automatically; defaults to 8000 |
 | `SNIPPET_DEFAULT_WORDS` | Optional | Default result-snippet size in words (F02/F05), used when a request omits `snippet_size` or sends a non-integer/non-numeric value. Integer; defaults to **100** when unset or itself invalid. Per-request `snippet_size` overrides this within the bounded range 20–1000 (NFR PERF-4); the per-request resolution also clamps the effective value into 20–1000 even if this default is set out of range, so PERF-1 holds at the maximum. |
@@ -624,11 +624,5 @@ The 2026-10 changes fix data that is already stored: speaker names (wrapped attr
 
 ### 6.9 Upgrading to the 2026-10 API fixes
 
-1. **Re-apply Meilisearch settings.** The ranking rules now put `words` before `sort` (DATA-MODELS §2.3), so chronological sorts no longer rank partial matches above full matches. The change only takes effect once the settings are pushed:
-   ```bash
-   cd app
-   python -m ingest.setup_meilisearch
-   ```
-   No reindex is needed.
-2. **Set `ALLOWED_ORIGINS` on the API service** if any client calls the API cross-origin. It used to default to `*`; it now defaults to no origins (§2.1).
-3. **Optional:** set `MEILISEARCH_TIMEOUT_SECONDS` (default 5).
+1. **Set `ALLOWED_ORIGINS` on the API service** if any client calls the API cross-origin. It used to default to `*`; it now defaults to no origins (§2.1).
+2. **Optional:** set `MEILISEARCH_TIMEOUT_SECONDS` (default 5).
