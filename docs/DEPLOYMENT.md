@@ -107,6 +107,8 @@ Output directory:  dist
 
 No Vercel environment variables are required. Vercel rebuilds and deploys on each push to the connected branch.
 
+**Web Analytics:** the app renders `<Analytics />` from `@vercel/analytics/react` in `src/main.jsx`, which records page views (including client-side route changes). Analytics must also be enabled in the Vercel project's **Analytics** tab; data only appears for production deployments, and nothing is sent in local `npm run dev`.
+
 ### 3.3 Database schema init (one-time)
 
 Run once against the Railway PostgreSQL instance before the first ingestion:
