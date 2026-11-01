@@ -48,6 +48,27 @@ def _make_mock_meili():
 
 # ── Schema: raw_documents table ──────────────────────────────────────────────
 
+
+
+def _batch_via_index_record(indexer):
+    """Route Indexer.index_document through the (mocked) index_record, as the
+    per-record fallback does, so these tests can keep asserting on index_record."""
+    def index_document(records, checkpoint, *, corpus, canonical_doc_id,
+                       provider=None, fetch_url=None):
+        n = sum(1 for r in records if indexer.index_record(r, checkpoint))
+        checkpoint.mark_document_processed(
+            canonical_doc_id, corpus=corpus, provider=provider, fetch_url=fetch_url
+        )
+        return n
+    indexer.index_document = index_document
+    indexer.next_sequence = MagicMock(return_value=1)
+
+
+async def _aiter(items):
+    """Async iterator over *items* (stands in for Provider.iter_discover)."""
+    for item in items:
+        yield item
+
 class TestSchemaRawDocuments:
     SCHEMA_PATH = Path(__file__).parent.parent / "db" / "schema.sql"
 
@@ -430,6 +451,7 @@ class TestCAOrchestratorStage1:
 
         provider = MagicMock()
         provider.discover = AsyncMock(return_value=doc_refs)
+        provider.iter_discover = lambda: _aiter(doc_refs)
         provider.fetch = AsyncMock(return_value=content)
 
         client = MagicMock()
@@ -660,6 +682,8 @@ class TestCAOrchestratorStage2:
 
         indexer.index_record = MagicMock(side_effect=fake_index)
 
+        _batch_via_index_record(indexer)
+
         client = MagicMock()
         with CheckpointStore(tmp_path / "cp.db") as cp:
             orch = CAOrchestrator(client, cp, indexer, {})
@@ -693,6 +717,7 @@ class TestCAOrchestratorStage2:
         indexer = Indexer(pg, meili)
         indexer.read_raw_documents_for_scope = MagicMock(return_value=[raw_row])
         indexer.index_record = MagicMock(return_value=True)
+        _batch_via_index_record(indexer)
 
         client = MagicMock()
         with CheckpointStore(tmp_path / "cp.db") as cp:
@@ -717,6 +742,7 @@ class TestCAOrchestratorStage2:
         indexer = Indexer(pg, meili)
         indexer.read_raw_documents_for_scope = MagicMock(return_value=[raw_row])
         indexer.index_record = MagicMock(return_value=True)
+        _batch_via_index_record(indexer)
 
         client = MagicMock()
         with CheckpointStore(tmp_path / "cp.db") as cp:
@@ -744,7 +770,7 @@ class TestCAOrchestratorStage2:
             asyncio.run(orch.run_stage2(date_from="2024-01-01", date_to="2024-12-31"))
 
         indexer.read_raw_documents_for_scope.assert_called_once_with(
-            "CA", "2024-01-01", "2024-12-31"
+            "CA", "2024-01-01", "2024-12-31", skip_ids=set()
         )
 
     def test_run_stage2_reconstructs_raw_record_from_metadata_and_text(self, tmp_path):
@@ -765,6 +791,7 @@ class TestCAOrchestratorStage2:
         indexer = Indexer(pg, meili)
         indexer.read_raw_documents_for_scope = MagicMock(return_value=[raw_row])
         indexer.index_record = MagicMock(return_value=True)
+        _batch_via_index_record(indexer)
 
         segmenter_inputs = []
         client = MagicMock()
@@ -814,6 +841,7 @@ class TestStage2Resumability:
         indexer = Indexer(pg, meili)
         indexer.read_raw_documents_for_scope = MagicMock(return_value=rows)
         indexer.index_record = MagicMock(return_value=True)
+        _batch_via_index_record(indexer)
 
         client = MagicMock()
 
@@ -1143,6 +1171,7 @@ class TestLSRSOrchestratorStageMethods:
         )
         provider = MagicMock()
         provider.discover = AsyncMock(return_value=[doc_ref])
+        provider.iter_discover = lambda: _aiter([doc_ref])
         provider.fetch = AsyncMock(return_value="IA text content")
 
         pg = _make_mock_pg_conn()
@@ -1178,6 +1207,7 @@ class TestLSRSOrchestratorStageMethods:
         )
         provider = MagicMock()
         provider.discover = AsyncMock(return_value=[doc_ref])
+        provider.iter_discover = lambda: _aiter([doc_ref])
         provider.fetch = AsyncMock(return_value="RS IA text")
 
         write_kwargs = {}

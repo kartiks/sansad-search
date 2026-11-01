@@ -626,3 +626,22 @@ The 2026-10 changes fix data that is already stored: speaker names (wrapped attr
 
 1. **Set `ALLOWED_ORIGINS` on the API service** if any client calls the API cross-origin. It used to default to `*`; it now defaults to no origins (§2.1).
 2. **Optional:** set `MEILISEARCH_TIMEOUT_SECONDS` (default 5).
+
+### 6.10 Ingestion changes for the full backfill (2026-11)
+
+These change how long runs behave; nothing needs migrating.
+
+- **Fetching saves as it goes.** Discovery is streamed: each document is fetched and written to `raw_documents` as soon as its metadata arrives. An interrupted run keeps everything stored so far, and the next run skips it.
+- **One write per document.** Stage 2 writes a document's records, their dedup-key mirror rows and its `processed_documents` row in one statement. A crash leaves a document fully stored or not at all. Stage 2 also reads `raw_documents` in chunks, so memory stays flat on a full corpus.
+- **Outages pause the run instead of ending it.** A lost PostgreSQL connection is retried for about 16 minutes (waits of 5 s up to 5 min). A failed Meilisearch push is retried three times. A run still stops if the database stays unreachable; rerun it and it resumes.
+- **Sitting positions continue across runs.** `sequence_within_sitting` starts after the highest position already stored for a sitting.
+
+**Repairing stored Lok Sabha positions.** The run on 2026-10-31 was resumed after a network drop, which restarted numbering mid-corpus: about 4,200 LS records share a position with another record in the same sitting. Re-segment LS from stored text to renumber them (minutes with the batched writes):
+
+```bash
+python scripts/clear_corpus.py --corpus ls --stage process --dry-run
+python scripts/clear_corpus.py --corpus ls --stage process
+python -m ingest.main --source ls --stage process
+```
+
+**Live-database tests.** `tests/test_indexer_pg.py` and `tests/test_checkpoint_store.py` run against a real PostgreSQL when `TEST_DATABASE_URL` points at a throwaway database (they truncate the ingestion tables).

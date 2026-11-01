@@ -1218,3 +1218,82 @@ class TestMeiliTaskVerification:
         ix._meili_batch.append({"id": "x"})
         ix.flush()
         assert ix.verify_meili_tasks() == []
+
+
+# ── Resilience: reconnect waits, Meilisearch push retry, sequence numbering ───
+
+class TestConnectWithRetry:
+    def test_waits_and_retries_until_reachable(self, monkeypatch):
+        import psycopg2
+        import ingest.checkpoints.store as store
+
+        attempts = []
+
+        def connect(dsn):
+            attempts.append(dsn)
+            if len(attempts) < 3:
+                raise psycopg2.OperationalError("could not translate host name")
+            return "conn"
+
+        sleeps = []
+        monkeypatch.setattr(store.psycopg2, "connect", connect)
+        monkeypatch.setattr(store.time, "sleep", sleeps.append)
+        assert store.connect_with_retry("dsn", delays=(5, 15, 30)) == "conn"
+        assert sleeps == [5, 15]
+
+    def test_gives_up_after_last_wait(self, monkeypatch):
+        import psycopg2
+        import pytest
+        import ingest.checkpoints.store as store
+
+        def connect(dsn):
+            raise psycopg2.OperationalError("down")
+
+        monkeypatch.setattr(store.psycopg2, "connect", connect)
+        monkeypatch.setattr(store.time, "sleep", lambda s: None)
+        with pytest.raises(psycopg2.OperationalError):
+            store.connect_with_retry("dsn", delays=(1, 1))
+
+
+class TestMeiliPushRetry:
+    def test_failed_push_is_retried(self, monkeypatch):
+        import ingest.indexer as mod
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr(mod, "MEILI_RETRY_DELAYS", (0,))
+        meili = MagicMock()
+        add = meili.index.return_value.add_documents
+        add.side_effect = [ConnectionError("reset"), MagicMock(task_uid=7)]
+        indexer = mod.Indexer(MagicMock(), meili)
+        indexer._meili_batch.append({"id": "x"})
+        assert indexer.flush() == 1
+        assert add.call_count == 2
+        assert indexer.meili_failed_docs == 0
+        assert indexer._meili_task_ids == [7]
+
+    def test_push_counted_as_failed_after_retries(self, monkeypatch):
+        import ingest.indexer as mod
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr(mod, "MEILI_RETRY_DELAYS", (0, 0))
+        meili = MagicMock()
+        meili.index.return_value.add_documents.side_effect = ConnectionError("reset")
+        indexer = mod.Indexer(MagicMock(), meili)
+        indexer._meili_batch.extend([{"id": "x"}, {"id": "y"}])
+        indexer.flush()
+        assert meili.index.return_value.add_documents.call_count == 3
+        assert indexer.meili_failed_docs == 2
+
+
+class TestSittingSequencer:
+    def test_continues_from_stored_position_per_sitting(self):
+        from unittest.mock import MagicMock
+        from ingest.sources._sequence import SittingSequencer
+
+        indexer = MagicMock()
+        indexer.next_sequence.side_effect = lambda source, d, s: 41 if s == 3 else 1
+        seq = SittingSequencer(indexer, "LS")
+        a = {"date": "1996-07-15", "sitting_number": 3}
+        b = {"date": "1996-07-15", "sitting_number": 4}
+        assert [seq.next(a), seq.next(a), seq.next(b), seq.next(a)] == [41, 42, 1, 43]
+        assert indexer.next_sequence.call_count == 2  # once per sitting

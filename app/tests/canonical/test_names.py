@@ -9,6 +9,7 @@ from ingest.canonical.names import (
     canonicalize_name,
     drop_answering_minister,
     load_names_dict,
+    split_capitals_joined,
     normalize_for_dedup,
     split_joined_names,
     strip_honorifics,
@@ -225,3 +226,42 @@ class TestUniqueNames:
 
     def test_keeps_distinct_names_in_order(self):
         assert unique_names(["B", "A"]) == ["B", "A"]
+
+
+class TestSplitCapitalsJoined:
+    """Rajya Sabha member lists run co-questioners together in capitals."""
+
+    NAMES = {k: k.title() for k in (
+        "kalraj mishra", "santosh bagrodia", "anant ram jaiswal", "ashok nath verma",
+        "joseph leon d'souza", "sultan maimoona", "kapil sibal", "v. gopalsamy",
+        "t. r. baalu", "ish dutt yadav", "rama", "kapil verma", "veena verma",
+        "sheo kumar mishra",
+    )}
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("KALRAJ MISHRASANTOSH BAGRODIA", ["KALRAJ MISHRA", "SANTOSH BAGRODIA"]),
+        ("ANANT RAM JAISWALASHOK NATH VERMA", ["ANANT RAM JAISWAL", "ASHOK NATH VERMA"]),
+        ("JOSEPH LEON D'SOUZASULTAN MAIMOONA", ["JOSEPH LEON D'SOUZA", "SULTAN MAIMOONA"]),
+        ("KAPIL VERMAVEENA VERMASHEO KUMAR MISHRA",
+         ["KAPIL VERMA", "VEENA VERMA", "SHEO KUMAR MISHRA"]),
+        # visible boundaries: initials straight after a word, a closing nickname quote
+        ("V. GOPALSAMYT.R. BAALU", ["V. GOPALSAMY", "T.R. BAALU"]),
+        ("RAJIV RANJAN SINGH 'LALAN'KAPIL SIBAL", ["RAJIV RANJAN SINGH 'LALAN'", "KAPIL SIBAL"]),
+        # one member missing from the dictionary, next to a known one
+        ("HARMOHAN SINGHISH DUTT YADAV", ["HARMOHAN SINGH", "ISH DUTT YADAV"]),
+    ])
+    def test_splits(self, raw, expected):
+        assert split_capitals_joined(raw, self.NAMES) == expected
+
+    @pytest.mark.parametrize("raw", [
+        "SANTOSH BAGRODIA",          # one known name
+        "RAMACHANDRA KHUNTIA",       # unknown; "RAMA" is known but one word
+        "SUSHIL KUMAR SHINDE",       # unknown single name
+        "Kalraj MishraSantosh Bagrodia",  # mixed case: split_joined_names handles it
+    ])
+    def test_leaves_alone(self, raw):
+        assert split_capitals_joined(raw, self.NAMES) == [raw]
+
+    def test_empty(self):
+        assert split_capitals_joined("", self.NAMES) == []
+        assert split_capitals_joined(None, self.NAMES) == []
