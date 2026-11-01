@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-import uuid
+import re
 from typing import Optional
 
 import asyncpg
@@ -31,13 +31,14 @@ DB_UNAVAILABLE_BODY = {
 }
 
 
+# Canonical hyphenated form only. uuid.UUID() also accepts "{...}", "urn:uuid:..."
+# and unhyphenated ids, which asyncpg then rejects with a driver error (a 503).
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
+
+
 def is_valid_uuid(value: str) -> bool:
-    """True when *value* parses as a UUID (record ids are UUID primary keys)."""
-    try:
-        uuid.UUID(value)
-    except (ValueError, TypeError, AttributeError):
-        return False
-    return True
+    """True when *value* is a UUID in canonical form (record ids are UUID primary keys)."""
+    return isinstance(value, str) and _UUID_RE.fullmatch(value) is not None
 
 
 async def init_pool() -> None:

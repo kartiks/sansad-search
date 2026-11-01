@@ -44,11 +44,7 @@ FILTERABLE_ATTRIBUTES = [
 
 SORTABLE_ATTRIBUTES = ["date", "sequence_within_sitting"]
 
-# "sort" comes after "words" (Meilisearch's recommended order): a chronological
-# sort orders results within each words-matched bucket, so records matching all
-# query terms still come before partial matches. Changing this list only takes
-# effect after re-running `python -m ingest.setup_meilisearch`.
-RANKING_RULES = ["words", "sort", "typo", "proximity", "attribute", "exactness"]
+RANKING_RULES = ["sort", "words", "typo", "proximity", "attribute", "exactness"]
 
 TYPO_TOLERANCE = {
     "enabled": True,
