@@ -29,6 +29,7 @@ from ingest.segmenters.speech import (
     _detect_language_handling,
     _is_presiding_officer,
     _is_unattributed,
+    _latin_share,
 )
 
 # ── Q+A structural markers ────────────────────────────────────────────────────
@@ -180,6 +181,27 @@ def segment_qa(
     return exchanges
 
 
+# English words a mostly-Hindi exchange needs before its English lines are kept
+_MIN_ENGLISH_WORDS = 20
+
+
+def _english_lines(text: str) -> str | None:
+    """The English lines of a mostly-Hindi exchange, or None if there are few.
+
+    An exchange mixes speakers: a Hindi answer can be followed by English
+    supplementaries. The language rules drop a text that is mostly Hindi as a
+    whole; keep its English lines instead (PRD F01: full_text_en must include
+    the English segments available). A handful of Latin words is OCR noise or a
+    page header, not English text.
+    """
+    kept = [
+        line for line in text.splitlines()
+        if line.strip() and not _HINDI_SCRIPT_RE.search(line) and _latin_share(line) >= 0.9
+    ]
+    english = "\n".join(kept).strip()
+    return english if _count_words(english) >= _MIN_ENGLISH_WORDS else None
+
+
 def _split_blocks(text: str) -> list[str]:
     """Split text on double newlines into non-empty blocks."""
     return [b.strip() for b in re.split(r"\n{2,}", text) if b.strip()]
@@ -201,6 +223,28 @@ def _own_question_text(text: str, question_number: int) -> str:
             end = next((p for m, p in starts[i + 1:] if m != n), len(text))
             return text[pos:end]
     return text
+
+
+def _own_opening_check(blocks: list[str], question_number: int | None):
+    """A test for blocks that open this record's own printed question.
+
+    A block opening with another number is a neighbouring question on the same
+    scanned page. When OCR has damaged the item's own number so it can't be
+    found, the opening still counts if it is the only one on the page.
+    """
+    printed = {int(m.group(1)) for m in _PRINTED_QUESTION_RE.finditer("\n\n".join(blocks))}
+
+    def opens(block: str) -> bool:
+        m = _PRINTED_QUESTION_RE.match(block)
+        if not m:
+            return False
+        n = int(m.group(1))
+        return (
+            question_number is None or n == question_number
+            or (question_number not in printed and len(printed) == 1)
+        )
+
+    return opens
 
 
 def _attribution_first(lines: list[str]) -> list[str]:
@@ -325,6 +369,11 @@ def _parse_single_qa(
     text_parts: list[str] = []
     current_attribution: str | None = None
     in_answer = False
+    # Set once the question itself has begun ("73. SHRI X: Will the Minister…").
+    # Questioners from source metadata otherwise leave nothing to start the text
+    # until a separate "SHRI X:" line, which printed Written Answers don't have.
+    question_started = False
+    opens_question = _own_opening_check(blocks, question_number)
 
     for block in blocks:
         lines = _attribution_first(block.splitlines())
@@ -342,6 +391,13 @@ def _parse_single_qa(
                 text_parts.append(rest_content)
             continue
 
+        # Printed opening: "1130. SHRI K.M. KHAN: Will the Minister…". The block
+        # is question text, whether or not OCR kept the colon after the name.
+        if not in_answer and not question_started and opens_question(block):
+            question_started = True
+            text_parts.append(block)
+            continue
+
         # Question number (always in first line)
         qnum = _extract_question_number(first_line)
         if qnum is not None and question_number is None:
@@ -357,6 +413,9 @@ def _parse_single_qa(
         # detection for it.
         if _WILL_THE_MINISTER_RE.search(first_line):
             text_parts.append(block)
+            # …unless it opens a neighbouring question on the page
+            if not _PRINTED_QUESTION_RE.match(block) or opens_question(block):
+                question_started = True
             continue
 
         # Minister detection on first line
@@ -397,7 +456,7 @@ def _parse_single_qa(
             continue
 
         # Accumulate text
-        if current_attribution or in_answer or not questioner_names:
+        if current_attribution or in_answer or question_started or not questioner_names:
             text_parts.append(block)
 
         # For unstarred: stop after written answer block
@@ -407,6 +466,8 @@ def _parse_single_qa(
     # Build full_text_en
     combined_text = "\n\n".join(text_parts)
     full_text_en, is_translated, has_untranslated = _detect_language_handling(combined_text)
+    if full_text_en is None and has_untranslated:
+        full_text_en = _english_lines(combined_text)
     lang_original = _compute_lang_original(combined_text)
     word_count = _count_words(full_text_en)
 
