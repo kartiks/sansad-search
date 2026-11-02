@@ -819,3 +819,98 @@ class TestPrintedWrittenAnswersPages:
         record = _raw_record(text, proceeding_type="unstarred_question", question_number=5)
         rec = segment_qa(record, "LS", "unstarred_question")[0]
         assert "Fig." not in (rec["minister_name"] or "")
+
+
+class TestQuestionTextWithMetadataQuestioners:
+    """Internet Archive items name the questioners in metadata. The question text
+    must still be kept when the printed opening carries number, member and
+    question on one line (1990s Written Answers scans)."""
+
+    _ITEM = (
+        "99 Written Answers\n\n"
+        "1130. SHRI K.M. KHAN: Will the\nMinister of CIVIL AVIATION be\npleased to state:\n\n"
+        "(a) whether Indian Airlines propose to\noffer extra seats to passengers;\n\n"
+        "(b) if so, details thereof;\n\n"
+        # OCR misreads the answer heading, so it is not recognised as one
+        "THE MINSITER OF CIPVIL\nAVIATION (SHRI C.M. IBRAHIM):\n(a) Yes, Sir.\n\n"
+        "(b) Details are enclosed.\n"
+    )
+
+    def _segment(self, text, **kw):
+        kw.setdefault("question_number", 1130)
+        record = _raw_record(
+            text, source="RS", proceeding_type="unstarred_question",
+            questioner_names=["K.M. KHAN"], minister_name="C.M. Ibrahim", **kw,
+        )
+        return segment_qa(record, "RS", "unstarred_question")[0]
+
+    def test_question_and_answer_are_kept(self):
+        rec = self._segment(self._ITEM)
+        text = rec["full_text_en"]
+        assert "pleased to state" in text
+        assert "offer extra seats" in text
+        assert "Details are enclosed" in text
+        assert rec["questioner_names"] == ["K.M. KHAN"]
+        assert rec["minister_name"] == "C.M. Ibrahim"
+
+    def test_opening_without_colon_still_starts_the_question(self):
+        text = (
+            "Excise Collection\n\n93. SHRI RAHASBIHARI\n\nWill the Minister\npleased to state:\n\n"
+            "(a) whether Government have reviewed excise collection; and\n\n"
+            "(b) the achievement during 1994-95?\n"
+        )
+        rec = self._segment(text, question_number=93)
+        assert "reviewed excise collection" in rec["full_text_en"]
+        assert "achievement during 1994-95" in rec["full_text_en"]
+
+    def test_neighbouring_question_does_not_start_the_text(self):
+        # The item's own number (222) was lost to OCR and two other questions
+        # open on the page: neither is taken as the start of this question.
+        text = (
+            "*229. SHRI MOHINDER SINGH KALYAN: Will the Minister of RAILWAYS be\n"
+            "pleased to state:\n\n"
+            "(a) the steps taken to improve railway stations;\n\n"
+            "*230. SHRI X. Y. ZED: Will the Minister of COAL be pleased to state:\n\n"
+            "(a) coal output;\n"
+        )
+        rec = self._segment(text, question_number=222)
+        assert "railway stations" not in (rec["full_text_en"] or "")
+
+    def test_damaged_own_number_with_one_opening_on_the_page(self):
+        # Metadata says 3212, OCR printed "322": the only question on the page.
+        text = self._ITEM.replace("1130.", "322.")
+        rec = self._segment(text, question_number=3212)
+        assert "offer extra seats" in rec["full_text_en"]
+
+
+class TestMostlyHindiExchange:
+    """A Hindi answer followed by English supplementaries keeps the English."""
+
+    _ENGLISH = (
+        "SHRI GURUDAS DAS GUPTA: Sir, it is well known that the telecommunication\n"
+        "systems in rural areas have not reached half the villages of the country and\n"
+        "the Government has been able to provide telephones to very few of them.\n"
+    )
+    _HINDI = (
+        "संचार मंत्री (श्री बेनी प्रसाद वर्मा): (क) जी हां, राष्ट्रीय दूरसंचार नीति में यह परिकल्पना की गई है\n"
+        "कि देश के सभी गांवों को टेलीफोन सुविधा उपलब्ध कराई जाएगी और इसके लिए कार्यक्रम बनाया गया है\n"
+        "(ख) पिछले दो वर्षों में अनेक ग्रामीण सार्वजनिक टेलीफोन लगाए गए हैं और शेष गांवों के लिए योजना है\n"
+    ) * 3
+
+    def _segment(self, text):
+        record = _raw_record(text, source="RS", question_number=201, questioner_names=["GURUDAS DAS GUPTA"])
+        return segment_qa(record, "RS", "starred_question")[0]
+
+    def test_english_supplementary_is_kept(self):
+        rec = self._segment(
+            "*201. SHRI GURUDAS DAS GUPTA:\n\nWill the Minister of COMMUNICATIONS\nbe pleased to state:\n\n"
+            + self._HINDI + "\n" + self._ENGLISH
+        )
+        assert "telecommunication" in rec["full_text_en"]
+        assert "संचार" not in rec["full_text_en"]
+        assert rec["has_untranslated_content"] is True
+
+    def test_a_few_latin_words_are_not_english_text(self):
+        rec = self._segment("*201. SHRI GURUDAS DAS GUPTA:\n\n" + self._HINDI + "\n11 Oral Answers\n[24 JULY 1996]\n")
+        assert rec["full_text_en"] is None
+        assert rec["has_untranslated_content"] is True

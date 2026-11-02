@@ -637,6 +637,17 @@ These change how long runs behave; nothing needs migrating.
 - **Request starts are spaced, not followed by a pause.** Each provider shares one `RateLimiter` (`ingest/sources/_http.py`) across all its requests, retries included. It keeps request starts at least 1 s apart, so the time a response takes counts towards the second. Before, each request was followed by a full 1 s sleep, which with Internet Archive's ~1 s responses made an item take about 5 s (measured on the 2026-11 RS pilot); spacing the starts is expected to bring that to about 2–2.5 s. Still at most one request per second per source.
 - **Sitting positions continue across runs.** `sequence_within_sitting` starts after the highest position already stored for a sitting.
 
+**Q&A question text (2026-11).** Questions from the Internet Archive name their questioners in metadata, and the segmenter used to keep text only after a separate "SHRI X:" line. 1990s scans print the number, member and question on one line, so the question was dropped and only the answer kept (64% of RS 1996 English Q&A, 7% of stored LS Q&A). The printed opening now starts the question text. Mostly-Hindi exchanges keep their English lines. Re-segment both houses from stored text to apply it (no refetch):
+
+```bash
+python scripts/clear_corpus.py --corpus rs --stage process --dry-run
+python scripts/clear_corpus.py --corpus rs --stage process
+python -m ingest.main --source rs --stage process
+python scripts/clear_corpus.py --corpus ls --stage process --dry-run
+python scripts/clear_corpus.py --corpus ls --stage process
+python -m ingest.main --source ls --stage process
+```
+
 **Repairing stored Lok Sabha positions.** The run on 2026-10-31 was resumed after a network drop, which restarted numbering mid-corpus: about 4,200 LS records share a position with another record in the same sitting. Re-segment LS from stored text to renumber them (minutes with the batched writes):
 
 ```bash
